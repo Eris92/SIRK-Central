@@ -10,6 +10,15 @@
   const oldSettingsNav = settingsView.querySelector(".settings-tabs");
   const oldAccessNav = accessView.querySelector(".settings-tabs");
   const permissionsSummary = settingsView.querySelector(".permissions-summary");
+  const microsoftLoginLink = document.querySelector(".login-provider");
+
+  if (microsoftLoginLink) {
+    microsoftLoginLink.setAttribute("target", "_self");
+    microsoftLoginLink.addEventListener("click", (event) => {
+      event.preventDefault();
+      window.location.assign(microsoftLoginLink.href);
+    });
+  }
 
   const labels = {
     pl: {permissions:"Uprawnienia",my:"Twoje uprawnienia",users:"Użytkownicy",add:"Dodaj konto",roles:"Zakres ról",teams:"Zespoły",policy:"Polityka Portalu",simulate:"Symulacja dostępu",settings:"Ustawienia"},
