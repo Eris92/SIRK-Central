@@ -3,8 +3,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { hashSecret, verifySecret } = require("./security");
-
-const VALID_ROLES = new Set(["Admin", "SecAdmin"]);
+const { normalizeRole, canAssignRole } = require("./rbac");
 
 function normalizeUsername(value) {
     const username = String(value || "").trim().toLowerCase();
@@ -14,10 +13,12 @@ function normalizeUsername(value) {
     return username;
 }
 
-function normalizeRole(value) {
-    const role = String(value || "").trim();
-    if (!VALID_ROLES.has(role)) throw new Error("Role must be Admin or SecAdmin.");
-    return role;
+function normalizeIdentityKey(value) {
+    const key = String(value || "").trim().toLowerCase();
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(key)) {
+        throw new Error("Invalid Entra identity key.");
+    }
+    return key;
 }
 
 function create(options) {
@@ -25,20 +26,24 @@ function create(options) {
     const storePath = path.join(dataDir, "users.json");
     fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
 
+    function emptyRegistry() {
+        return { schema: 2, localUsers: [], entraRoles: {}, breakGlassPasswordHash: "", accessKeyHash: "" };
+    }
+
     function read() {
-        if (!fs.existsSync(storePath)) {
-            return { schema: 1, localUsers: [], entraRoles: {}, breakGlassPasswordHash: "", accessKeyHash: "" };
-        }
+        if (!fs.existsSync(storePath)) return emptyRegistry();
         const value = JSON.parse(fs.readFileSync(storePath, "utf8"));
-        if (!value || value.schema !== 1 || !Array.isArray(value.localUsers) || typeof value.entraRoles !== "object") {
+        if (!value || ![1, 2].includes(value.schema) || !Array.isArray(value.localUsers) || typeof value.entraRoles !== "object") {
             throw new Error("User registry has an unsupported format.");
         }
+        value.schema = 2;
         value.breakGlassPasswordHash ||= "";
         value.accessKeyHash ||= "";
         return value;
     }
 
     function write(value) {
+        value.schema = 2;
         const temporary = storePath + ".tmp-" + process.pid + "-" + Date.now();
         fs.writeFileSync(temporary, JSON.stringify(value, null, 2) + "\n", { mode: 0o600 });
         fs.renameSync(temporary, storePath);
@@ -49,7 +54,7 @@ function create(options) {
         try { normalized = normalizeUsername(username); } catch (_) { return null; }
         const user = read().localUsers.find((item) => item.username === normalized && item.enabled !== false);
         return user && verifySecret(String(password || ""), user.passwordHash)
-            ? { username: user.username, displayName: user.displayName || user.username, role: user.role, builtIn: false }
+            ? { username: user.username, displayName: user.displayName || user.username, role: normalizeRole(user.role), builtIn: false, source: "local" }
             : null;
     }
 
@@ -62,14 +67,9 @@ function create(options) {
                 displayName: item.displayName || item.username || identityKey,
                 role: item.role,
                 source: "entra",
-                enabled: item.enabled !== false
+                enabled: item.enabled !== false,
+                createdAtUtc: item.createdAtUtc
             })));
-    }
-
-    function ensureRoleGrantAllowed(role, actor) {
-        if (role === "SecAdmin" && !actor.canGrantSecAdmin) {
-            throw new Error("Only SecAdmin or Break-Glass can grant SecAdmin.");
-        }
     }
 
     function createLocalUser(input, actor) {
@@ -77,7 +77,7 @@ function create(options) {
         const password = String(input.password || "");
         if (password.length < 14) throw new Error("Password must contain at least 14 characters.");
         const role = normalizeRole(input.role);
-        ensureRoleGrantAllowed(role, actor);
+        if (!canAssignRole(actor, role, "")) throw new Error("You are not allowed to assign this role.");
         const registry = read();
         if (registry.localUsers.some((item) => item.username === username)) throw new Error("Username already exists.");
         registry.localUsers.push({
@@ -89,47 +89,47 @@ function create(options) {
             createdAtUtc: new Date().toISOString()
         });
         write(registry);
-        return { username, role };
+        return { username, role, source: "local" };
     }
 
     function updateRole(identity, role, actor) {
         const normalizedRole = normalizeRole(role);
-        ensureRoleGrantAllowed(normalizedRole, actor);
         const registry = read();
         if (identity.source === "local") {
             const username = normalizeUsername(identity.key);
             const user = registry.localUsers.find((item) => item.username === username);
             if (!user) throw new Error("Local user not found.");
-            if (user.role === "SecAdmin" && !actor.canGrantSecAdmin) {
-                throw new Error("Only SecAdmin or Break-Glass can change SecAdmin membership.");
-            }
+            if (!canAssignRole(actor, normalizedRole, user.role)) throw new Error("You are not allowed to change this role.");
             user.role = normalizedRole;
         } else {
-            const key = String(identity.key || "").toLowerCase();
-            if (!/^[0-9a-f-]{36}:[0-9a-f-]{36}$/.test(key)) throw new Error("Invalid Entra identity key.");
+            const key = normalizeIdentityKey(identity.key);
             const current = registry.entraRoles[key];
-            if (current && current.role === "SecAdmin" && !actor.canGrantSecAdmin) {
-                throw new Error("Only SecAdmin or Break-Glass can change SecAdmin membership.");
-            }
+            if (!canAssignRole(actor, normalizedRole, current && current.role)) throw new Error("You are not allowed to change this role.");
             registry.entraRoles[key] = Object.assign({}, current || {}, { role: normalizedRole, enabled: true });
         }
         write(registry);
+        return { source: identity.source, key: identity.key, role: normalizedRole };
     }
 
     function roleForEntra(identityKey, profile) {
         const registry = read();
-        const key = String(identityKey || "").toLowerCase();
+        const key = normalizeIdentityKey(identityKey);
         const existing = registry.entraRoles[key];
-        if (existing) return existing.role;
+        if (existing) {
+            if (existing.enabled === false) throw new Error("This Entra account is disabled in SIRK Central.");
+            return normalizeRole(existing.role);
+        }
+        const hasAnyUser = registry.localUsers.length > 0 || Object.keys(registry.entraRoles).length > 0;
+        const role = hasAnyUser ? "Auditor" : "SecAdmin";
         registry.entraRoles[key] = {
             username: profile.username || "",
             displayName: profile.displayName || "",
-            role: "Admin",
+            role,
             enabled: true,
             createdAtUtc: new Date().toISOString()
         };
         write(registry);
-        return "Admin";
+        return role;
     }
 
     function setBreakGlassPassword(password) {
@@ -147,10 +147,7 @@ function create(options) {
 
     function securityOverrides() {
         const registry = read();
-        return {
-            breakGlassPasswordHash: registry.breakGlassPasswordHash,
-            accessKeyHash: registry.accessKeyHash
-        };
+        return { breakGlassPasswordHash: registry.breakGlassPasswordHash, accessKeyHash: registry.accessKeyHash };
     }
 
     return {
@@ -165,4 +162,4 @@ function create(options) {
     };
 }
 
-module.exports = { create, normalizeUsername, normalizeRole };
+module.exports = { create, normalizeUsername, normalizeIdentityKey };
