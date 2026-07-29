@@ -3,146 +3,64 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="description" content="SIRK Central łączy lokalne instalacje SIRK Portal w bezpieczną, centralnie zarządzaną platformę IT.">
+  <meta name="description" content="SIRK to bezpieczna platforma złożona z SIRK Central, SIRK Portal i SIRK Agent do zarządzania rozproszonymi środowiskami IT.">
   <meta name="theme-color" content="#07111f">
-  <title>SIRK Central — bezpieczne zarządzanie środowiskami IT</title>
+  <title>SIRK — Central, Portal i Agent</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="/" aria-label="SIRK Central — strona główna">
-      <span class="brand-mark" aria-hidden="true">S</span>
-      <span><strong>SIRK</strong> Central</span>
-    </a>
+    <a class="brand" href="/" aria-label="SIRK — strona główna"><span class="brand-mark" aria-hidden="true">S</span><span><strong>SIRK</strong> Platform</span></a>
     <nav class="topnav" aria-label="Nawigacja główna">
-      <a href="#platforma">Platforma</a>
-      <a href="#bezpieczenstwo">Bezpieczeństwo</a>
-      <a href="#architektura">Architektura</a>
+      <a href="#produkty" data-pl="Produkty" data-en="Products">Produkty</a>
+      <a href="#bezpieczenstwo" data-pl="Bezpieczeństwo" data-en="Security">Bezpieczeństwo</a>
+      <a href="#architektura" data-pl="Architektura" data-en="Architecture">Architektura</a>
     </nav>
-    <a class="login-button" href="https://auth.sirkportal.com">Zaloguj się</a>
+    <div class="top-actions"><div class="language-switch" aria-label="Language"><button type="button" data-lang="pl" class="active">PL</button><span>|</span><button type="button" data-lang="en">EN</button></div><a class="login-button" href="https://central.sirkportal.com" data-pl="Zaloguj się" data-en="Sign in">Zaloguj się</a></div>
   </header>
 
   <main>
-    <section class="hero" id="platforma">
+    <section class="hero" id="produkty">
       <div class="hero-copy">
-        <p class="eyebrow">Central management plane dla SIRK Portal</p>
-        <h1>Zarządzaj środowiskami klientów bez wystawiania ich infrastruktury do Internetu.</h1>
-        <p class="lead">SIRK Central łączy lokalne Portale przez szyfrowany tunel wychodzący. Operator otrzymuje jeden punkt dostępu, a klient zachowuje lokalną kontrolę, własne dane recovery i możliwość pracy podczas awarii Centrali.</p>
-        <div class="hero-actions">
-          <a class="primary-button" href="https://auth.sirkportal.com">Przejdź do logowania</a>
-          <a class="secondary-button" href="#architektura">Zobacz architekturę</a>
-        </div>
-        <div class="trust-row" aria-label="Najważniejsze właściwości">
-          <span>Outbound-only tunnel</span>
-          <span>Host-only sessions</span>
-          <span>Local break-glass</span>
-        </div>
+        <p class="eyebrow" data-pl="Bezpieczna platforma zarządzania IT" data-en="Secure IT management platform">Bezpieczna platforma zarządzania IT</p>
+        <h1 data-pl="Centralne zarządzanie. Lokalna kontrola. Agent na każdym chronionym urządzeniu." data-en="Central management. Local control. An agent on every protected device.">Centralne zarządzanie. Lokalna kontrola. Agent na każdym chronionym urządzeniu.</h1>
+        <p class="lead" data-pl="SIRK łączy trzy warstwy: SIRK Central dla operatorów, SIRK Portal instalowany w środowisku organizacji oraz SIRK Agent działający na urządzeniach. Każda warstwa ma osobną odpowiedzialność i własną granicę zaufania." data-en="SIRK combines three layers: SIRK Central for operators, SIRK Portal deployed in the organisation, and SIRK Agent running on protected devices. Each layer has a distinct responsibility and trust boundary.">SIRK łączy trzy warstwy: SIRK Central dla operatorów, SIRK Portal instalowany w środowisku organizacji oraz SIRK Agent działający na urządzeniach. Każda warstwa ma osobną odpowiedzialność i własną granicę zaufania.</p>
+        <div class="hero-actions"><a class="primary-button" href="https://central.sirkportal.com" data-pl="Przejdź do SIRK Central" data-en="Open SIRK Central">Przejdź do SIRK Central</a><a class="secondary-button" href="#architektura" data-pl="Zobacz jak to działa" data-en="See how it works">Zobacz jak to działa</a></div>
+        <div class="trust-row"><span>Outbound-only</span><span>Tenant isolation</span><span>Break-Glass</span><span>Signed policies</span></div>
       </div>
+      <div class="product-stack" aria-label="SIRK product stack">
+        <article class="stack-card central"><span class="stack-number">01</span><div><strong>SIRK Central</strong><small data-pl="Zarządzanie, tożsamość, role i połączone Portale" data-en="Management, identity, roles and connected Portals">Zarządzanie, tożsamość, role i połączone Portale</small></div></article>
+        <div class="stack-link">↕</div>
+        <article class="stack-card portal"><span class="stack-number">02</span><div><strong>SIRK Portal</strong><small data-pl="Lokalna brama administracyjna i punkt kontroli organizacji" data-en="Local administration gateway and organisation control point">Lokalna brama administracyjna i punkt kontroli organizacji</small></div></article>
+        <div class="stack-link">↕</div>
+        <article class="stack-card agent"><span class="stack-number">03</span><div><strong>SIRK Agent</strong><small data-pl="Tożsamość urządzenia, polityki, zadania i potwierdzenia wykonania" data-en="Device identity, policies, tasks and execution acknowledgements">Tożsamość urządzenia, polityki, zadania i potwierdzenia wykonania</small></div></article>
+      </div>
+    </section>
 
-      <div class="console-card" aria-label="Przykładowy, anonimowy schemat połączeń SIRK Central">
-        <div class="console-header">
-          <span></span><span></span><span></span>
-          <strong>SIRK Central</strong>
-        </div>
-        <div class="console-body">
-          <div class="metric"><span>Połączone Portale</span><strong>3</strong></div>
-          <article class="portal online">
-            <div><span class="status-dot"></span><strong>Portal 01</strong></div>
-            <small>tenant-01 · online</small>
-            <span class="connection">mTLS / WSS</span>
-          </article>
-          <article class="portal online">
-            <div><span class="status-dot"></span><strong>Portal 02</strong></div>
-            <small>tenant-02 · online</small>
-            <span class="connection">mTLS / WSS</span>
-          </article>
-          <article class="portal offline">
-            <div><span class="status-dot"></span><strong>Portal 03</strong></div>
-            <small>tenant-03 · offline</small>
-            <span class="connection">local recovery</span>
-          </article>
-        </div>
+    <section class="section product-section">
+      <div class="section-heading"><p class="eyebrow" data-pl="Trzy produkty, jedna platforma" data-en="Three products, one platform">Trzy produkty, jedna platforma</p><h2 data-pl="Każdy komponent robi dokładnie to, co powinien." data-en="Each component does exactly what it should.">Każdy komponent robi dokładnie to, co powinien.</h2></div>
+      <div class="product-grid">
+        <article><span class="product-badge">Central</span><h3>SIRK Central</h3><p data-pl="Publiczny punkt zarządzania dla operatorów. Obsługuje logowanie Entra, role, audyt, listę organizacji, lokalizacji i Portali oraz inicjowanie kontrolowanych sesji." data-en="The public management plane for operators. It handles Entra sign-in, roles, audit, organisations, sites, Portals and controlled session initiation.">Publiczny punkt zarządzania dla operatorów. Obsługuje logowanie Entra, role, audyt, listę organizacji, lokalizacji i Portali oraz inicjowanie kontrolowanych sesji.</p><ul><li data-pl="RBAC i rozdział obowiązków" data-en="RBAC and separation of duties">RBAC i rozdział obowiązków</li><li data-pl="Centralny broker tożsamości" data-en="Central identity broker">Centralny broker tożsamości</li><li data-pl="Widoczność wielu Portalów" data-en="Multi-Portal visibility">Widoczność wielu Portalów</li></ul></article>
+        <article><span class="product-badge">Portal</span><h3>SIRK Portal</h3><p data-pl="Instalowany lokalnie w środowisku organizacji. Utrzymuje połączenie wychodzące do Centrali, pośredniczy w sesjach i pozostaje lokalnym punktem administracyjnym podczas awarii łączności." data-en="Deployed inside the organisation. It maintains an outbound connection to Central, brokers sessions and remains the local administration point during connectivity failures.">Instalowany lokalnie w środowisku organizacji. Utrzymuje połączenie wychodzące do Centrali, pośredniczy w sesjach i pozostaje lokalnym punktem administracyjnym podczas awarii łączności.</p><ul><li data-pl="Brak publicznych portów inbound" data-en="No public inbound ports">Brak publicznych portów inbound</li><li data-pl="Lokalny Break-Glass" data-en="Local Break-Glass">Lokalny Break-Glass</li><li data-pl="Izolacja per organizacja" data-en="Per-organisation isolation">Izolacja per organizacja</li></ul></article>
+        <article><span class="product-badge">Agent</span><h3>SIRK Agent</h3><p data-pl="Lekki agent urządzenia z własną tożsamością. Odbiera podpisane polityki i polecenia, wykonuje dozwolone operacje oraz odsyła podpisane potwierdzenia i stan urządzenia." data-en="A lightweight device agent with its own identity. It receives signed policies and commands, performs authorised operations and returns signed acknowledgements and device status.">Lekki agent urządzenia z własną tożsamością. Odbiera podpisane polityki i polecenia, wykonuje dozwolone operacje oraz odsyła podpisane potwierdzenia i stan urządzenia.</p><ul><li data-pl="Osobne poświadczenie urządzenia" data-en="Per-device credential">Osobne poświadczenie urządzenia</li><li data-pl="Podpisane polityki i aktualizacje" data-en="Signed policies and updates">Podpisane polityki i aktualizacje</li><li data-pl="Kontrolowane operacje endpoint" data-en="Controlled endpoint operations">Kontrolowane operacje endpoint</li></ul></article>
       </div>
     </section>
 
     <section class="section" id="bezpieczenstwo">
-      <div class="section-heading">
-        <p class="eyebrow">Security by architecture</p>
-        <h2>Centralizacja bez centralnego punktu pełnego zaufania.</h2>
-        <p>SIRK Central zarządza relacjami trust i sesjami operatorskimi. Lokalne poświadczenia recovery, klucze prywatne oraz dane Portalu pozostają odseparowane per klient i per instalacja.</p>
-      </div>
-      <div class="feature-grid">
-        <article>
-          <span class="feature-number">01</span>
-          <h3>Brak inbound exposure</h3>
-          <p>SIRK Portal inicjuje połączenie wychodzące. Nie wymaga publicznego adresu, NAT ani przekierowania portów do sieci klienta.</p>
-        </article>
-        <article>
-          <span class="feature-number">02</span>
-          <h3>Izolacja tenantów</h3>
-          <p>Każdy Portal posiada własną tożsamość, lokalne sesje i oddzielny mechanizm recovery. Przejęcie jednej instalacji nie daje dostępu do pozostałych.</p>
-        </article>
-        <article>
-          <span class="feature-number">03</span>
-          <h3>Kontrolowany dostęp</h3>
-          <p>Centralny broker weryfikuje operatora, zakres Customer/Site/Portal oraz stan połączenia przed utworzeniem sesji do Portalu.</p>
-        </article>
-        <article>
-          <span class="feature-number">04</span>
-          <h3>Odporność operacyjna</h3>
-          <p>Lokalny break-glass pozwala wykonać ograniczone działania administracyjne również przy niedostępności SIRK Central lub zewnętrznego IdP.</p>
-        </article>
-      </div>
+      <div class="section-heading"><p class="eyebrow">Security by architecture</p><h2 data-pl="Bezpieczeństwo wynika z architektury, nie tylko z ekranu logowania." data-en="Security comes from the architecture, not only from the sign-in screen.">Bezpieczeństwo wynika z architektury, nie tylko z ekranu logowania.</h2><p data-pl="Central nie przechowuje lokalnych sekretów recovery. Portal nie otwiera publicznego dostępu do sieci. Agent ufa wyłącznie zweryfikowanym politykom i poleceniom." data-en="Central does not store local recovery secrets. Portal does not expose the local network publicly. Agent trusts only verified policies and commands.">Central nie przechowuje lokalnych sekretów recovery. Portal nie otwiera publicznego dostępu do sieci. Agent ufa wyłącznie zweryfikowanym politykom i poleceniom.</p></div>
+      <div class="feature-grid"><article><span class="feature-number">01</span><h3 data-pl="Połączenia wychodzące" data-en="Outbound connections">Połączenia wychodzące</h3><p data-pl="Portal i Agent inicjują komunikację. Nie wymagają wystawiania usług administracyjnych do Internetu." data-en="Portal and Agent initiate communication. Administrative services do not need to be exposed to the Internet.">Portal i Agent inicjują komunikację. Nie wymagają wystawiania usług administracyjnych do Internetu.</p></article><article><span class="feature-number">02</span><h3 data-pl="Tożsamość każdego elementu" data-en="Identity for every component">Tożsamość każdego elementu</h3><p data-pl="Operator, Portal i Agent są rozpoznawani niezależnie. Uprawnienie w jednej warstwie nie daje automatycznie dostępu w pozostałych." data-en="Operator, Portal and Agent are identified independently. Permission in one layer does not automatically grant access to the others.">Operator, Portal i Agent są rozpoznawani niezależnie. Uprawnienie w jednej warstwie nie daje automatycznie dostępu w pozostałych.</p></article><article><span class="feature-number">03</span><h3 data-pl="Podpisane decyzje" data-en="Signed decisions">Podpisane decyzje</h3><p data-pl="Polityki, polecenia, aktualizacje i potwierdzenia mogą być kryptograficznie weryfikowane przed użyciem." data-en="Policies, commands, updates and acknowledgements can be cryptographically verified before use.">Polityki, polecenia, aktualizacje i potwierdzenia mogą być kryptograficznie weryfikowane przed użyciem.</p></article><article><span class="feature-number">04</span><h3 data-pl="Kontrolowane odzyskiwanie" data-en="Controlled recovery">Kontrolowane odzyskiwanie</h3><p data-pl="Break-Glass pozostaje osobną ścieżką awaryjną, a operacje uprzywilejowane są odseparowane od standardowej administracji." data-en="Break-Glass remains a separate emergency path, while privileged operations are separated from standard administration.">Break-Glass pozostaje osobną ścieżką awaryjną, a operacje uprzywilejowane są odseparowane od standardowej administracji.</p></article></div>
     </section>
 
     <section class="architecture section" id="architektura">
-      <div class="section-heading compact">
-        <p class="eyebrow">Rozdzielone odpowiedzialności</p>
-        <h2>Jedna platforma, trzy jasno określone warstwy.</h2>
-      </div>
-      <div class="architecture-flow">
-        <article>
-          <span class="domain">sirkportal.com</span>
-          <h3>Strona produktu</h3>
-          <p>Publiczna prezentacja platformy bez dostępu do API zarządzającego i tuneli.</p>
-        </article>
-        <div class="flow-arrow" aria-hidden="true">→</div>
-        <article class="highlight">
-          <span class="domain">auth.sirkportal.com</span>
-          <h3>SIRK Auth Broker</h3>
-          <p>Centralna sesja tożsamości i bezpieczne przekazywanie dostępu do właściwego Portalu.</p>
-        </article>
-        <div class="flow-arrow" aria-hidden="true">→</div>
-        <article>
-          <span class="domain">central.sirkportal.com</span>
-          <h3>SIRK Central</h3>
-          <p>Lista Portali, relacje Customer/Site, status połączeń i operacje operatorskie.</p>
-        </article>
-      </div>
-      <div class="local-portals">
-        <span>↓ szyfrowane połączenia wychodzące ↓</span>
-        <div>
-          <code>Portal 01</code>
-          <code>Portal 02</code>
-          <code>Portal 03</code>
-        </div>
-      </div>
+      <div class="section-heading compact"><p class="eyebrow" data-pl="Przepływ zaufania" data-en="Trust flow">Przepływ zaufania</p><h2 data-pl="Central koordynuje, Portal kontroluje lokalnie, Agent wykonuje na urządzeniu." data-en="Central coordinates, Portal controls locally, Agent executes on the device.">Central koordynuje, Portal kontroluje lokalnie, Agent wykonuje na urządzeniu.</h2></div>
+      <div class="architecture-flow product-flow"><article class="highlight"><span class="domain">central.sirkportal.com</span><h3>SIRK Central</h3><p data-pl="Tożsamość operatora, role, audyt i wybór docelowego Portalu." data-en="Operator identity, roles, audit and target Portal selection.">Tożsamość operatora, role, audyt i wybór docelowego Portalu.</p></article><div class="flow-arrow">→</div><article><span class="domain" data-pl="środowisko organizacji" data-en="organisation environment">środowisko organizacji</span><h3>SIRK Portal</h3><p data-pl="Lokalna autoryzacja sesji, tunel wychodzący i kontrola dostępu do Agentów." data-en="Local session authorisation, outbound tunnel and access control to Agents.">Lokalna autoryzacja sesji, tunel wychodzący i kontrola dostępu do Agentów.</p></article><div class="flow-arrow">→</div><article><span class="domain" data-pl="chronione urządzenia" data-en="protected devices">chronione urządzenia</span><h3>SIRK Agent</h3><p data-pl="Wykonanie dozwolonej operacji i zwrot podpisanego wyniku." data-en="Execution of an authorised operation and return of a signed result.">Wykonanie dozwolonej operacji i zwrot podpisanego wyniku.</p></article></div>
     </section>
 
-    <section class="cta-section">
-      <div>
-        <p class="eyebrow">SIRK Central</p>
-        <h2>Jeden punkt zarządzania. Lokalne bezpieczeństwo pozostaje lokalne.</h2>
-      </div>
-      <a class="primary-button" href="https://auth.sirkportal.com">Zaloguj się do platformy</a>
-    </section>
+    <section class="cta-section"><div><p class="eyebrow">SIRK Platform</p><h2 data-pl="Jedna platforma do bezpiecznego zarządzania rozproszonym IT." data-en="One platform for secure management of distributed IT.">Jedna platforma do bezpiecznego zarządzania rozproszonym IT.</h2></div><a class="primary-button" href="https://central.sirkportal.com" data-pl="Zaloguj się do SIRK Central" data-en="Sign in to SIRK Central">Zaloguj się do SIRK Central</a></section>
   </main>
 
-  <footer>
-    <a class="brand" href="/"><span class="brand-mark" aria-hidden="true">S</span><span><strong>SIRK</strong> Central</span></a>
-    <p>Bezpieczne zarządzanie rozproszonymi środowiskami IT.</p>
-    <span>© 2026 SIRK</span>
-  </footer>
+  <footer><a class="brand" href="/"><span class="brand-mark">S</span><span><strong>SIRK</strong> Platform</span></a><p data-pl="SIRK Central · SIRK Portal · SIRK Agent" data-en="SIRK Central · SIRK Portal · SIRK Agent">SIRK Central · SIRK Portal · SIRK Agent</p><span>© 2026 SIRK</span></footer>
+  <script src="/app.js" defer></script>
 </body>
 </html>
