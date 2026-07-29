@@ -9,7 +9,7 @@
       if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
       event.preventDefault();
       window.location.assign(loginLink.href);
-    });
+    }, { capture: true });
   }
 
   const accessButton = document.getElementById("accessButton");
@@ -52,6 +52,7 @@
   navigation.className = "settings-tabs permissions-tabs";
   navigation.setAttribute("aria-label", "Permissions sections");
   let activeTab = "users";
+  let openingPermissions = false;
 
   function showTab(name) {
     activeTab = panels[name] ? name : "users";
@@ -78,17 +79,27 @@
     if (!settingsView.hidden && pageTitle) pageTitle.textContent = selected.settings;
   }
 
-  accessButton.addEventListener("click", function () {
-    // Existing Settings loader fills roles and users. Start it first, then keep
-    // the user in the unified Permissions view.
-    settingsButton.click();
-    window.setTimeout(function () {
+  accessButton.addEventListener("click", async function (event) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (openingPermissions) return;
+    openingPermissions = true;
+    accessButton.disabled = true;
+
+    try {
+      if (typeof window.loadSettings === "function") await window.loadSettings();
+      if (typeof window.loadAccess === "function") await window.loadAccess();
       settingsView.hidden = true;
       accessView.hidden = false;
       showTab(activeTab);
       updateLabels();
-    }, 350);
-  }, true);
+    } catch (error) {
+      console.error("Unable to open permissions view", error);
+    } finally {
+      accessButton.disabled = false;
+      openingPermissions = false;
+    }
+  }, { capture: true });
 
   settingsButton.addEventListener("click", function () {
     window.setTimeout(function () {
@@ -97,7 +108,7 @@
       settingsView.hidden = false;
       accessView.hidden = true;
       updateLabels();
-    }, 400);
+    }, 0);
   });
 
   for (const button of document.querySelectorAll("[data-lang]")) button.addEventListener("click", function(){window.setTimeout(updateLabels,0);});
