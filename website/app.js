@@ -16,6 +16,12 @@ function applyLanguage(language) {
   document.documentElement.lang = lang;
   document.cookie = `sirk_lang=${lang}; Path=/; Domain=.sirkportal.com; Max-Age=31536000; SameSite=Lax; Secure`;
 
+  const heroTitle = document.querySelector(".hero h1");
+  if (heroTitle) {
+    heroTitle.dataset.pl = "Centralne zarządzanie każdą infrastrukturą.";
+    heroTitle.dataset.en = "Central management for every infrastructure.";
+  }
+
   for (const element of document.querySelectorAll("[data-pl][data-en]")) {
     const translated = element.getAttribute(`data-${lang}`);
     if (translated !== null) element.textContent = translated;
