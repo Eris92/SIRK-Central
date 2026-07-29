@@ -25,8 +25,13 @@ chmod 0600 "$backup_path"
 
 log "Fetching origin/${REPO_REF}"
 git fetch --prune origin
-git checkout "$REPO_REF"
-git pull --ff-only origin "$REPO_REF"
+
+# Deployment hosts must run exactly the selected remote revision. Previous
+# versions used git pull only, which could leave edited or stale frontend files
+# in place and made Caddy continue serving an old configuration.
+git checkout -B "$REPO_REF" "origin/$REPO_REF"
+git reset --hard "origin/$REPO_REF"
+log "Checked out $(git rev-parse --short HEAD) from origin/${REPO_REF}"
 
 # Central and Auth Broker must always share the same signing secret. Older
 # installations may not have it because Entra was configured later from UI.
@@ -42,15 +47,31 @@ if ! grep -Eq '^SIRK_SSO_SHARED_SECRET=.{43,}$' .env; then
   log "Generated missing SIRK_SSO_SHARED_SECRET"
 fi
 
-# Auth Broker is part of the standard SIRK Central deployment. Its Entra
-# configuration may live in the persistent data volume instead of .env.
 compose=(docker compose --profile auth)
 
 log "Validating configuration"
 "${compose[@]}" config >/dev/null
 
-log "Building and applying update"
-"${compose[@]}" up -d --build --remove-orphans
+log "Building Central and Auth without cache"
+"${compose[@]}" build --pull --no-cache central auth
+
+# Force-recreate is required for Caddy as well. Its Caddyfile and public website
+# are bind-mounted, but Caddy does not reload a changed configuration merely
+# because the file on disk changed.
+log "Recreating Central, Auth and Caddy"
+"${compose[@]}" up -d --force-recreate --remove-orphans central auth caddy
+
+log "Verifying deployed frontend"
+"${compose[@]}" exec -T central sh -ec '
+  test -f /app/public/permissions-layout.js
+  test -f /app/public/login-current-tab.js
+  grep -q "permissions-layout.js" /app/public/index.html
+  grep -q "login-current-tab.js" /app/public/index.html
+'
+
+log "Verifying Caddy configuration"
+"${compose[@]}" exec -T caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null
+"${compose[@]}" exec -T caddy sh -ec 'grep -q "script-src.*self" /etc/caddy/Caddyfile'
 
 "${compose[@]}" ps
-log "Update completed; .env backup: ${backup_path}"
+log "Update completed at commit $(git rev-parse --short HEAD); .env backup: ${backup_path}"
