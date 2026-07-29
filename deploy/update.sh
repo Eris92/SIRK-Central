@@ -28,11 +28,16 @@ git fetch --prune origin
 git checkout "$REPO_REF"
 git pull --ff-only origin "$REPO_REF"
 
+compose=(docker compose)
+if grep -q '^SIRK_ENTRA_CLIENT_ID=' .env; then
+  compose+=(--profile auth)
+fi
+
 log "Validating configuration"
-docker compose config >/dev/null
+"${compose[@]}" config >/dev/null
 
 log "Building and applying update"
-docker compose up -d --build --remove-orphans
+"${compose[@]}" up -d --build --remove-orphans
 
-docker compose ps
+"${compose[@]}" ps
 log "Update completed; .env backup: ${backup_path}"

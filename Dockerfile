@@ -6,6 +6,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
 COPY src ./src
+COPY auth ./auth
 COPY public ./public
 COPY scripts ./scripts
 
@@ -16,5 +17,5 @@ RUN mkdir -p /var/lib/sirk-central \
 
 USER node
 ENV NODE_ENV=production
-EXPOSE 8080
+EXPOSE 8080 8081
 CMD ["node", "src/server.js"]

@@ -32,6 +32,7 @@ jobs:
           bash -n \
             deploy/bootstrap-ubuntu.sh \
             deploy/configure-and-start.sh \
+            deploy/configure-auth.sh \
             deploy/install.sh \
             deploy/reset-admin-password.sh \
             deploy/rotate-access-key.sh \
@@ -39,8 +40,10 @@ jobs:
 
       - name: Validate Node.js syntax
         run: |
+          node --check auth/server.js
           node --check scripts/configure-production.js
           node --check src/server.js
+          node --check src/sso-ticket.js
 
       - name: Run tests
         run: npm test

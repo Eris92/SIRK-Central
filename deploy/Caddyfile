@@ -23,6 +23,20 @@ www.{$SIRK_WEBSITE_DOMAIN} {
     }
 }
 
+{$SIRK_AUTH_DOMAIN} {
+    encode zstd gzip
+    reverse_proxy auth:8081
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "no-referrer"
+        Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+        X-Robots-Tag "noindex, nofollow"
+        -Server
+    }
+}
+
 {$SIRK_CENTRAL_DOMAIN} {
     encode zstd gzip
     reverse_proxy central:8080
