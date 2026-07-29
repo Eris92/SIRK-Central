@@ -54,9 +54,9 @@ function normalizePolicy(value, allowInherit) {
     }
     return result;
 }
-function restrictive(states) {
+function restrictive(states, fallback = "deny") {
     const explicit = states.filter((state) => state && state !== "inherit");
-    if (!explicit.length) return "deny";
+    if (!explicit.length) return fallback;
     return explicit.reduce((current, state) => RANK[state] < RANK[current] ? state : current, explicit[0]);
 }
 
@@ -92,7 +92,7 @@ function create(options) {
             updatedAtUtc: new Date().toISOString()
         };
         const index = registry.teams.findIndex((team) => team.id === id);
-        if (index >= 0) registry.teams[index] = item; else registry.teams.push(Object.assign({ createdAtUtc: new Date().toISOString() }, item));
+        if (index >= 0) registry.teams[index] = Object.assign({}, registry.teams[index], item); else registry.teams.push(Object.assign({ createdAtUtc: new Date().toISOString() }, item));
         write(registry);
         return item;
     }
@@ -130,8 +130,9 @@ function create(options) {
         if (!matching.length) return { allowed: false, teams: [], capabilities: normalizePolicy({}, false) };
         const local = portalPolicy(portalId), capabilities = {};
         for (const capability of CAPABILITIES) {
-            const teamState = restrictive(matching.map((team) => team.profile[capability]));
-            capabilities[capability] = restrictive([rolePolicy[capability], teamState, local[capability]]);
+            const teamState = restrictive(matching.map((team) => team.profile[capability]), "allow");
+            const localState = local[capability] === "inherit" ? "allow" : local[capability];
+            capabilities[capability] = restrictive([rolePolicy[capability], teamState, localState]);
         }
         return { allowed: capabilities["portal.view"] !== "deny", teams: matching.map((team) => team.id), capabilities };
     }
