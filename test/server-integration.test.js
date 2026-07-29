@@ -28,11 +28,16 @@ function request(port, method, route, body, cookie, accessKey) {
         }, (res) => {
             const chunks = [];
             res.on("data", (chunk) => chunks.push(chunk));
-            res.on("end", () => resolve({
-                statusCode: res.statusCode,
-                headers: res.headers,
-                body: JSON.parse(Buffer.concat(chunks).toString("utf8"))
-            }));
+            res.on("end", () => {
+                const text = Buffer.concat(chunks).toString("utf8");
+                const isJson = /application\/json/i.test(String(res.headers["content-type"] || ""));
+                resolve({
+                    statusCode: res.statusCode,
+                    headers: res.headers,
+                    text,
+                    body: isJson ? JSON.parse(text) : null
+                });
+            });
         });
         req.on("error", reject);
         if (payload) req.write(payload);
@@ -66,10 +71,44 @@ test("admin login lists an authenticated outbound Portal and connects to it", as
         });
         socket.on("message", (raw) => {
             const message = JSON.parse(String(raw));
+            if (message.kind === "portal-info") {
+                socket.send(JSON.stringify({
+                    type: "response",
+                    requestId: message.requestId,
+                    portal: { id: created.id, hostname: "local-test" }
+                }));
+                return;
+            }
+            if (message.path === "/") {
+                socket.send(JSON.stringify({
+                    type: "response",
+                    requestId: message.requestId,
+                    statusCode: 302,
+                    contentType: "text/plain",
+                    location: "/login",
+                    bodyBase64: ""
+                }));
+                return;
+            }
+            if (message.path === "/login") {
+                socket.send(JSON.stringify({
+                    type: "response",
+                    requestId: message.requestId,
+                    statusCode: 200,
+                    contentType: "text/html; charset=utf-8",
+                    bodyBase64: Buffer.from(
+                        '<script>window.portalUrl="/";</script><script src="/assets/login.js"></script>'
+                    ).toString("base64")
+                }));
+                return;
+            }
             socket.send(JSON.stringify({
                 type: "response",
                 requestId: message.requestId,
-                portal: { id: created.id, hostname: "local-test" }
+                statusCode: 200,
+                contentType: "application/json",
+                setCookie: ["sirk_session=local-session; Path=/; HttpOnly; Secure; SameSite=Strict"],
+                bodyBase64: Buffer.from('{"ok":true}').toString("base64")
             }));
         });
         await new Promise((resolve, reject) => {
@@ -92,6 +131,27 @@ test("admin login lists an authenticated outbound Portal and connects to it", as
         const connected = await request(port, "POST", "/api/portals/portal-one/connect", {}, cookie, accessKey);
         assert.equal(connected.statusCode, 200);
         assert.equal(connected.body.portal.hostname, "local-test");
+        assert.equal(connected.body.url, "/connect/portal-one/");
+
+        const redirected = await request(port, "GET", connected.body.url, null, cookie);
+        assert.equal(redirected.statusCode, 302);
+        assert.equal(redirected.headers.location, "/connect/portal-one/login");
+
+        const loginPage = await request(port, "GET", "/connect/portal-one/login", null, cookie);
+        assert.equal(loginPage.statusCode, 200);
+        assert.match(loginPage.text, /src="\/connect\/portal-one\/assets\/login\.js"/);
+        assert.match(loginPage.text, /window\.portalUrl="\/connect\/portal-one\/"/);
+
+        const localLogin = await request(
+            port,
+            "POST",
+            "/connect/portal-one/api/auth/login",
+            { username: "local", password: "local" },
+            cookie
+        );
+        assert.equal(localLogin.statusCode, 200);
+        assert.match(localLogin.headers["set-cookie"][0], /^sirk_session=local-session;/);
+        assert.match(localLogin.headers["set-cookie"][0], /Path=\/connect\/portal-one\//);
     } finally {
         if (socket) socket.close();
         await new Promise((resolve) => app.server.close(resolve));

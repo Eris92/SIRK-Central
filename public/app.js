@@ -59,9 +59,7 @@ async function loadPortals() {
                     method: "POST",
                     body: "{}"
                 });
-                document.getElementById("connectionDetails").textContent =
-                    JSON.stringify(connected.portal, null, 2);
-                document.getElementById("connectionPanel").hidden = false;
+                location.assign(connected.url);
             });
             card.append(status, title, id, button);
             return card;

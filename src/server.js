@@ -123,6 +123,42 @@ function createApp(config) {
         return value;
     }
 
+    function portalCookies(req) {
+        return String(req.headers.cookie || "").split(";").map((value) => value.trim())
+            .filter((value) => value && !/^sirk_central_session=/i.test(value))
+            .join("; ");
+    }
+
+    function rewriteLocation(value, prefix) {
+        value = String(value || "");
+        if (!value) return "";
+        if (value.startsWith("/")) return prefix + value;
+        try {
+            const parsed = new URL(value);
+            return prefix + parsed.pathname + parsed.search + parsed.hash;
+        } catch (_) {
+            return value;
+        }
+    }
+
+    function rewriteSetCookie(values, prefix) {
+        return (Array.isArray(values) ? values : []).map((value) => {
+            const parts = String(value).split(";").map((part) => part.trim())
+                .filter((part) => !/^domain=/i.test(part) && !/^path=/i.test(part));
+            parts.push("Path=" + prefix + "/");
+            return parts.join("; ");
+        });
+    }
+
+    function rewritePortalBody(body, contentType, prefix) {
+        if (!/^(?:text\/|application\/(?:javascript|json))/i.test(String(contentType || ""))) return body;
+        let text = body.toString("utf8");
+        text = text.replace(/(["'`])\/(?!\/)/g, (_, quote) => quote + prefix + "/");
+        text = text.replace(/(\b(?:href|src|action)=)\/(?!\/)/gi, (_, attribute) => attribute + prefix + "/");
+        text = text.replace(/(url\(\s*)\/(?!\/)/gi, (_, opening) => opening + prefix + "/");
+        return Buffer.from(text);
+    }
+
     async function handler(req, res) {
         try {
             const url = new URL(req.url, "http://central.local");
@@ -130,7 +166,7 @@ function createApp(config) {
                 json(res, 200, { ok: true });
                 return;
             }
-            if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/connect/")) {
+            if (url.pathname.startsWith("/api/")) {
                 if (!verifyAccessKey(bearerCredential(req), config.accessKeyHash)) {
                     return json(res, 404, { ok: false, error: "Not found." });
                 }
@@ -196,7 +232,11 @@ function createApp(config) {
                 if (!requireSession(req, res)) return;
                 if (!sameOrigin(req)) return json(res, 403, { ok: false, error: "Origin rejected." });
                 const response = await broker.request(connectMatch[1], { kind: "portal-info" });
-                return json(res, 200, { ok: true, portal: response.portal });
+                return json(res, 200, {
+                    ok: true,
+                    portal: response.portal,
+                    url: "/connect/" + connectMatch[1] + "/"
+                });
             }
             const proxyMatch = url.pathname.match(/^\/connect\/([a-z0-9-]+)(\/.*)?$/);
             if (proxyMatch) {
@@ -214,17 +254,33 @@ function createApp(config) {
                     headers: {
                         accept: req.headers.accept || "*/*",
                         "content-type": req.headers["content-type"] || "",
-                        cookie: req.headers.cookie || ""
+                        cookie: portalCookies(req),
+                        origin: req.headers.origin || "",
+                        host: req.headers.host || "",
+                        "accept-language": req.headers["accept-language"] || "",
+                        "x-sirk-csrf": req.headers["x-sirk-csrf"] || ""
                     },
                     bodyBase64: Buffer.concat(bodyChunks).toString("base64")
                 });
-                const responseBody = Buffer.from(response.bodyBase64 || "", "base64");
-                res.writeHead(Number(response.statusCode) || 502, {
+                const prefix = "/connect/" + proxyMatch[1];
+                const contentType = response.contentType || "application/octet-stream";
+                const responseBody = rewritePortalBody(
+                    Buffer.from(response.bodyBase64 || "", "base64"),
+                    contentType,
+                    prefix
+                );
+                const responseHeaders = {
                     "Content-Type": response.contentType || "application/octet-stream",
                     "Content-Length": responseBody.length,
                     "Cache-Control": "no-store",
-                    "X-Content-Type-Options": "nosniff"
-                });
+                    "X-Content-Type-Options": "nosniff",
+                    "Content-Security-Policy": "frame-ancestors 'none'; object-src 'none'; base-uri 'self'"
+                };
+                const location = rewriteLocation(response.location, prefix);
+                const setCookie = rewriteSetCookie(response.setCookie, prefix);
+                if (location) responseHeaders.Location = location;
+                if (setCookie.length) responseHeaders["Set-Cookie"] = setCookie;
+                res.writeHead(Number(response.statusCode) || 502, responseHeaders);
                 res.end(responseBody);
                 return;
             }
