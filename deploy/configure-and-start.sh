@@ -16,6 +16,7 @@ fi
 
 sudo docker build --tag sirk-central:setup .
 sudo docker run --rm -it \
+  --user 0:0 \
   --volume /opt/sirk-central:/config \
   --env SIRK_CONFIG_TARGET=/config \
   --env "SIRK_WEBSITE_DOMAIN=${SIRK_WEBSITE_DOMAIN}" \
@@ -26,6 +27,7 @@ sudo docker run --rm -it \
   sirk-central:setup \
   node scripts/configure-production.js
 
+sudo chmod 0600 .env
 sudo docker compose config >/dev/null
 sudo docker compose up -d --build --remove-orphans
 sudo docker compose ps
