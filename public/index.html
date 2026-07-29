@@ -98,7 +98,14 @@
 
           <article class="settings-card">
             <h2>Zakres roli</h2>
-            <p class="muted">Auditor: odczyt. Operator L1: podstawowa obsługa. Support L2: troubleshooting. Engineer L3: zaawansowane operacje. Admin: administracja platformą. SecAdmin: bezpieczeństwo i role uprzywilejowane.</p>
+            <div class="role-scope muted">
+              <p><strong>Auditor:</strong> odczyt.</p>
+              <p><strong>Operator L1:</strong> podstawowa obsługa.</p>
+              <p><strong>Support L2:</strong> troubleshooting.</p>
+              <p><strong>Engineer L3:</strong> zaawansowane operacje.</p>
+              <p><strong>Admin:</strong> administracja platformą.</p>
+              <p><strong>SecAdmin:</strong> bezpieczeństwo i role uprzywilejowane.</p>
+            </div>
           </article>
         </div>
       </section>
@@ -118,6 +125,7 @@
             <p class="muted">Poprzedni link przestanie działać natychmiast.</p>
             <button id="rotateAccessButton">Wygeneruj nowy access URL</button>
             <code id="newAccessUrl" class="secret-output" hidden></code>
+            <p id="newAccessHelp" class="muted" hidden><strong>Nowy access URL będzie potrzebny przy kolejnym logowaniu lokalnym.</strong> Bieżąca sesja Break-Glass pozostaje aktywna. Skopiuj i zapisz nowy adres w bezpiecznym miejscu przed wylogowaniem.</p>
           </article>
         </div>
       </section>
