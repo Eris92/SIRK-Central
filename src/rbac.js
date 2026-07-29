@@ -14,8 +14,8 @@ const ROLE_PERMISSIONS = Object.freeze({
     OperatorL1: ["portals.read", "portals.connect", "operations.l1"],
     SupportL2: ["portals.read", "portals.connect", "operations.l1", "operations.l2"],
     EngineerL3: ["portals.read", "portals.connect", "operations.l1", "operations.l2", "operations.l3"],
-    Admin: ["portals.read", "portals.connect", "portals.manage", "settings.read", "settings.manage", "users.manage"],
-    SecAdmin: ["portals.read", "portals.connect", "settings.read", "security.manage", "users.manage", "roles.secadmin", "audit.read"],
+    Admin: ["portals.read", "portals.connect", "portals.manage", "settings.read", "settings.manage", "identity.manage", "users.manage"],
+    SecAdmin: ["portals.read", "portals.connect", "settings.read", "identity.manage", "security.manage", "users.manage", "roles.secadmin", "audit.read"],
     BreakGlass: ["*"]
 });
 
