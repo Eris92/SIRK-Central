@@ -1,139 +1,18 @@
 <!doctype html>
 <html lang="pl">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="robots" content="noindex,nofollow">
-  <title>SIRK Central</title>
-  <link rel="stylesheet" href="/styles.css">
-</head>
-<body>
-  <main class="shell">
-    <section id="loginView" class="login-card" hidden>
-      <div class="mark">S</div>
-      <p class="eyebrow">SIRK Management Platform</p>
-      <h1>SIRK Central</h1>
-      <p class="muted">Zaloguj się kontem organizacyjnym Microsoft Entra.</p>
-      <a class="button login-provider" href="https://auth.sirkportal.com/login">Zaloguj przez Microsoft</a>
-      <div id="breakGlassPanel" hidden>
-        <div class="login-separator"><span>lokalne logowanie</span></div>
-        <form id="loginForm">
-          <label>Użytkownik<input id="username" autocomplete="username" required></label>
-          <label>Hasło<input id="password" type="password" autocomplete="current-password" required></label>
-          <button type="submit">Zaloguj lokalnie</button>
-          <p id="loginError" class="error" role="alert"></p>
-        </form>
-      </div>
-    </section>
-
-    <section id="dashboardView" class="dashboard" hidden>
-      <header>
-        <div><p class="eyebrow">SIRK Central</p><h1 id="pageTitle">Połączone Portale</h1><p id="identityLabel" class="muted"></p></div>
-        <div class="header-actions">
-          <button id="backButton" class="secondary" hidden>Portale</button>
-          <button id="breakGlassButton" class="danger" hidden>Break-Glass</button>
-          <button id="settingsButton" class="secondary">Ustawienia</button>
-          <button id="logoutButton" class="secondary">Wyloguj</button>
-        </div>
-      </header>
-
-      <section id="portalsView">
-        <div class="toolbar"><div><strong id="onlineCount">0</strong><span> online</span></div><button id="showCreateButton" hidden>Dodaj Portal</button></div>
-        <form id="createForm" class="create-form" hidden>
-          <label>Identyfikator<input id="portalId" placeholder="tenant-site" pattern="[a-z0-9][a-z0-9-]{2,62}" required></label>
-          <label>Nazwa<input id="portalName" placeholder="Portal klienta" required></label>
-          <button type="submit">Utwórz połączenie</button>
-        </form>
-        <aside id="tokenPanel" class="token-panel" hidden><strong>Token pokazujemy tylko raz</strong><code id="portalToken"></code></aside>
-        <div id="portalList" class="portal-grid"></div>
-      </section>
-
-      <section id="settingsView" hidden>
-        <div class="settings-grid">
-          <article class="settings-card">
-            <h2>Twoje uprawnienia</h2>
-            <p id="roleSummary" class="muted"></p>
-            <pre id="permissionsList"></pre>
-          </article>
-
-          <article id="usersCard" class="settings-card" hidden>
-            <h2>Użytkownicy i role</h2>
-            <form id="createUserForm" class="stack-form">
-              <label>Login<input id="newUsername" required></label>
-              <label>Nazwa<input id="newDisplayName" required></label>
-              <label>Hasło<input id="newPassword" type="password" minlength="14" required></label>
-              <label>Rola<select id="newRole"></select></label>
-              <button type="submit">Utwórz konto lokalne</button>
-            </form>
-            <p id="userError" class="error"></p>
-            <div id="usersList" class="users-list"></div>
-          </article>
-
-          <article id="entraCard" class="settings-card wide-card">
-            <h2>Microsoft Entra</h2>
-            <p id="entraStatus" class="muted"></p>
-            <form id="entraForm" class="stack-form">
-              <label class="checkbox-row"><input id="entraEnabled" type="checkbox"> Włącz logowanie Microsoft Entra</label>
-              <label>Tenant
-                <input id="entraTenant" placeholder="organizations lub Tenant ID" required>
-              </label>
-              <label>Application (Client) ID
-                <input id="entraClientId" autocomplete="off" required>
-              </label>
-              <label>Nowy Client Secret
-                <input id="entraClientSecret" type="password" autocomplete="new-password" placeholder="Pozostaw puste, aby zachować obecny">
-              </label>
-              <label>Dozwolone konta <span class="muted">tenant-id:object-id, po jednym w wierszu</span>
-                <textarea id="entraAllowedIdentities" rows="5" placeholder="tenant-id:object-id"></textarea>
-              </label>
-              <label>Redirect URI<input id="entraRedirectUri" readonly></label>
-              <label>Front-channel logout URL<input id="entraLogoutUrl" readonly></label>
-              <div class="form-actions">
-                <button id="testEntraButton" type="button" class="secondary">Testuj Microsoft Entra</button>
-                <button id="saveEntraButton" type="submit">Zapisz i aktywuj Entra</button>
-              </div>
-              <p class="muted">Podczas aktualizacji SIRK Central brakujący wewnętrzny sekret SSO jest generowany automatycznie, a Auth Broker uruchamiany razem z Central.</p>
-              <p id="entraMessage" class="error" role="status"></p>
-            </form>
-          </article>
-
-          <article class="settings-card">
-            <h2>Zakres roli</h2>
-            <div class="role-scope muted">
-              <p><strong>Auditor:</strong> odczyt.</p>
-              <p><strong>Operator L1:</strong> podstawowa obsługa.</p>
-              <p><strong>Support L2:</strong> troubleshooting.</p>
-              <p><strong>Engineer L3:</strong> zaawansowane operacje.</p>
-              <p><strong>Admin:</strong> administracja platformą.</p>
-              <p><strong>SecAdmin:</strong> bezpieczeństwo i role uprzywilejowane.</p>
-            </div>
-          </article>
-        </div>
-      </section>
-
-      <section id="breakGlassView" hidden>
-        <div class="settings-grid">
-          <article class="settings-card danger-card">
-            <h2>Zmień hasło Break-Glass</h2>
-            <form id="breakGlassPasswordForm" class="stack-form">
-              <label>Aktualne hasło<input id="currentBreakGlassPassword" type="password" autocomplete="current-password" required></label>
-              <label>Nowe hasło<input id="newBreakGlassPassword" type="password" autocomplete="new-password" minlength="14" required></label>
-              <label>Powtórz nowe hasło<input id="confirmBreakGlassPassword" type="password" autocomplete="new-password" minlength="14" required></label>
-              <button id="changeBreakGlassPasswordButton" type="submit">Zmień hasło</button>
-              <p id="breakGlassPasswordMessage" class="error" role="status"></p>
-            </form>
-          </article>
-          <article class="settings-card danger-card">
-            <h2>Rotacja access code</h2>
-            <p class="muted">Poprzedni link przestanie działać natychmiast.</p>
-            <button id="rotateAccessButton">Wygeneruj nowy access URL</button>
-            <code id="newAccessUrl" class="secret-output" hidden></code>
-            <p id="newAccessHelp" class="muted" hidden><strong>Nowy access URL będzie potrzebny przy kolejnym logowaniu lokalnym.</strong> Bieżąca sesja Break-Glass pozostaje aktywna. Skopiuj i zapisz nowy adres w bezpiecznym miejscu przed wylogowaniem.</p>
-          </article>
-        </div>
-      </section>
-    </section>
-  </main>
-  <script src="/app.js" defer></script>
-</body>
-</html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>SIRK Central</title><link rel="stylesheet" href="/styles.css"></head>
+<body><main class="shell">
+<section id="loginView" class="login-card" hidden><div class="mark">S</div><p class="eyebrow">SIRK Management Platform</p><h1>SIRK Central</h1><p class="muted">Zaloguj się kontem organizacyjnym Microsoft Entra.</p><a class="button login-provider" href="https://auth.sirkportal.com/login">Zaloguj przez Microsoft</a><div id="breakGlassPanel" hidden><div class="login-separator"><span>lokalne logowanie</span></div><form id="loginForm"><label>Użytkownik<input id="username" autocomplete="username" required></label><label>Hasło<input id="password" type="password" autocomplete="current-password" required></label><button type="submit">Zaloguj lokalnie</button><p id="loginError" class="error" role="alert"></p></form></div></section>
+<section id="dashboardView" class="dashboard" hidden><header><div><p class="eyebrow">SIRK Central</p><h1 id="pageTitle">Połączone Portale</h1><p id="identityLabel" class="muted"></p></div><div class="header-actions"><button id="backButton" class="secondary" hidden>Portale</button><button id="breakGlassButton" class="danger" hidden>Break-Glass</button><button id="settingsButton" class="secondary">Ustawienia</button><button id="logoutButton" class="secondary">Wyloguj</button></div></header>
+<section id="portalsView"><div class="toolbar"><div><strong id="onlineCount">0</strong><span> online</span></div><button id="showCreateButton" hidden>Dodaj Portal</button></div><form id="createForm" class="create-form" hidden><label>Identyfikator<input id="portalId" placeholder="tenant-site" pattern="[a-z0-9][a-z0-9-]{2,62}" required></label><label>Nazwa<input id="portalName" placeholder="Portal klienta" required></label><button type="submit">Utwórz połączenie</button></form><aside id="tokenPanel" class="token-panel" hidden><strong>Token pokazujemy tylko raz</strong><code id="portalToken"></code></aside><div id="portalList" class="portal-grid"></div></section>
+<section id="settingsView" hidden>
+<article class="settings-card permissions-summary"><h2>Twoje uprawnienia</h2><p id="roleSummary" class="muted"></p><pre id="permissionsList"></pre></article>
+<nav class="settings-tabs" aria-label="Sekcje ustawień"><button class="settings-tab active" data-settings-tab="users">Użytkownicy</button><button id="addUserTabButton" class="settings-tab" data-settings-tab="add-user">Dodaj konto</button><button class="settings-tab" data-settings-tab="roles">Zakres ról</button><button class="settings-tab" data-settings-tab="entra">Microsoft Entra</button></nav>
+<div class="settings-panels">
+<section id="settingsTabUsers" class="settings-tab-panel"><article class="settings-card"><h2>Użytkownicy</h2><p class="muted">Konta lokalne i konta Microsoft Entra z przypisanymi rolami.</p><div id="usersList" class="users-list"></div><p id="usersUnavailable" class="muted" hidden>Nie masz uprawnienia do zarządzania użytkownikami.</p></article></section>
+<section id="settingsTabAddUser" class="settings-tab-panel" hidden><article id="usersCard" class="settings-card"><h2>Dodaj konto lokalne</h2><form id="createUserForm" class="stack-form"><label>Login<input id="newUsername" required></label><label>Nazwa<input id="newDisplayName" required></label><label>Hasło<input id="newPassword" type="password" minlength="14" required></label><label>Rola<select id="newRole"></select></label><button type="submit">Utwórz konto lokalne</button></form><p id="userError" class="error"></p></article></section>
+<section id="settingsTabRoles" class="settings-tab-panel" hidden><article class="settings-card"><h2>Zakres ról</h2><div class="role-scope muted"><p><strong>Auditor:</strong> odczyt.</p><p><strong>Operator L1:</strong> podstawowa obsługa.</p><p><strong>Support L2:</strong> troubleshooting.</p><p><strong>Engineer L3:</strong> zaawansowane operacje.</p><p><strong>Admin:</strong> administracja platformą i standardowa konfiguracja Entra.</p><p><strong>SecAdmin:</strong> bezpieczeństwo, Client Secret, allowlista i role uprzywilejowane.</p></div></article></section>
+<section id="settingsTabEntra" class="settings-tab-panel" hidden><article id="entraCard" class="settings-card"><h2>Microsoft Entra</h2><p id="entraStatus" class="muted"></p><form id="entraForm" class="stack-form"><label class="checkbox-row"><input id="entraEnabled" type="checkbox"> Włącz logowanie Microsoft Entra</label><label>Tenant<input id="entraTenant" placeholder="organizations lub Tenant ID" required></label><label>Application (Client) ID<input id="entraClientId" autocomplete="off" required></label><label>Nowy Client Secret<input id="entraClientSecret" type="password" autocomplete="new-password" placeholder="Pozostaw puste, aby zachować obecny"></label><label>Dozwolone konta <span class="muted">tenant-id:object-id, po jednym w wierszu</span><textarea id="entraAllowedIdentities" rows="5" placeholder="tenant-id:object-id"></textarea></label><label>Redirect URI<input id="entraRedirectUri" readonly></label><label>Front-channel logout URL<input id="entraLogoutUrl" readonly></label><div class="form-actions"><button id="testEntraButton" type="button" class="secondary">Testuj Microsoft Entra</button><button id="saveEntraButton" type="submit">Zapisz i aktywuj Entra</button></div><p id="entraSecurityNotice" class="muted"></p><p id="entraMessage" class="error" role="status"></p></form></article></section>
+</div></section>
+<section id="breakGlassView" hidden><div class="settings-grid"><article class="settings-card danger-card"><h2>Zmień hasło Break-Glass</h2><form id="breakGlassPasswordForm" class="stack-form"><label>Aktualne hasło<input id="currentBreakGlassPassword" type="password" autocomplete="current-password" required></label><label>Nowe hasło<input id="newBreakGlassPassword" type="password" autocomplete="new-password" minlength="14" required></label><label>Powtórz nowe hasło<input id="confirmBreakGlassPassword" type="password" autocomplete="new-password" minlength="14" required></label><button id="changeBreakGlassPasswordButton" type="submit">Zmień hasło</button><p id="breakGlassPasswordMessage" class="error" role="status"></p></form></article><article class="settings-card danger-card"><h2>Rotacja access code</h2><p class="muted">Poprzedni link przestanie działać natychmiast.</p><button id="rotateAccessButton">Wygeneruj nowy access URL</button><code id="newAccessUrl" class="secret-output" hidden></code><p id="newAccessHelp" class="muted" hidden><strong>Nowy access URL będzie potrzebny przy kolejnym logowaniu lokalnym.</strong> Bieżąca sesja Break-Glass pozostaje aktywna. Skopiuj i zapisz nowy adres w bezpiecznym miejscu przed wylogowaniem.</p></article></div></section>
+</section></main><script src="/app.js" defer></script></body></html>
