@@ -38,10 +38,7 @@
       </header>
 
       <section id="portalsView">
-        <div class="toolbar">
-          <div><strong id="onlineCount">0</strong><span> online</span></div>
-          <button id="showCreateButton" hidden>Dodaj Portal</button>
-        </div>
+        <div class="toolbar"><div><strong id="onlineCount">0</strong><span> online</span></div><button id="showCreateButton" hidden>Dodaj Portal</button></div>
         <form id="createForm" class="create-form" hidden>
           <label>Identyfikator<input id="portalId" placeholder="tenant-site" pattern="[a-z0-9][a-z0-9-]{2,62}" required></label>
           <label>Nazwa<input id="portalName" placeholder="Portal klienta" required></label>
@@ -58,6 +55,7 @@
             <p id="roleSummary" class="muted"></p>
             <pre id="permissionsList"></pre>
           </article>
+
           <article id="usersCard" class="settings-card" hidden>
             <h2>Użytkownicy i role</h2>
             <form id="createUserForm" class="stack-form">
@@ -70,6 +68,34 @@
             <p id="userError" class="error"></p>
             <div id="usersList" class="users-list"></div>
           </article>
+
+          <article id="entraCard" class="settings-card wide-card">
+            <h2>Microsoft Entra</h2>
+            <p id="entraStatus" class="muted"></p>
+            <form id="entraForm" class="stack-form">
+              <label class="checkbox-row"><input id="entraEnabled" type="checkbox"> Włącz logowanie Microsoft Entra</label>
+              <label>Tenant
+                <input id="entraTenant" placeholder="organizations lub Tenant ID" required>
+              </label>
+              <label>Application (Client) ID
+                <input id="entraClientId" autocomplete="off" required>
+              </label>
+              <label>Nowy Client Secret
+                <input id="entraClientSecret" type="password" autocomplete="new-password" placeholder="Pozostaw puste, aby zachować obecny">
+              </label>
+              <label>Dozwolone konta <span class="muted">tenant-id:object-id, po jednym w wierszu</span>
+                <textarea id="entraAllowedIdentities" rows="5" placeholder="tenant-id:object-id"></textarea>
+              </label>
+              <label>Redirect URI<input id="entraRedirectUri" readonly></label>
+              <label>Front-channel logout URL<input id="entraLogoutUrl" readonly></label>
+              <div class="form-actions">
+                <button id="testEntraButton" type="button" class="secondary">Testuj połączenie</button>
+                <button id="saveEntraButton" type="submit">Zapisz konfigurację</button>
+              </div>
+              <p id="entraMessage" class="error"></p>
+            </form>
+          </article>
+
           <article class="settings-card">
             <h2>Zakres roli</h2>
             <p class="muted">Auditor: odczyt. Operator L1: podstawowa obsługa. Support L2: troubleshooting. Engineer L3: zaawansowane operacje. Admin: administracja platformą. SecAdmin: bezpieczeństwo i role uprzywilejowane.</p>
