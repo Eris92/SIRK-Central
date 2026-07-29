@@ -98,7 +98,7 @@ curl -fsSL \
 sudo env \
   SIRK_WEBSITE_DOMAIN=sirkportal.com \
   SIRK_CENTRAL_DOMAIN=central.sirkportal.com \
-  SIRK_ACME_EMAIL=admin@sir-k.pl \
+  SIRK_ACME_EMAIL=admin@sirkportal.com \
   SIRK_ADMIN_USERNAME=admin \
   SIRK_SESSION_HOURS=8 \
   bash /tmp/install-sirk-central.sh
@@ -156,7 +156,7 @@ cd /opt/sirk-central
 sudo env \
   SIRK_WEBSITE_DOMAIN=sirkportal.com \
   SIRK_CENTRAL_DOMAIN=central.sirkportal.com \
-  SIRK_ACME_EMAIL=admin@sir-k.pl \
+  SIRK_ACME_EMAIL=admin@sirkportal.com \
   SIRK_ADMIN_USERNAME=admin \
   SIRK_SESSION_HOURS=8 \
   ./deploy/configure-and-start.sh
