@@ -152,6 +152,7 @@ function create(options) {
         }
         registry.entraRoles[key] = item; write(registry); return publicEntra(key,item);
     }
+    function roleForEntra(identityKey, profile) { return resolveEntra(identityKey, profile || {}, []).role; }
     function approveEntraRole(identityKey, actor) {
         const registry = read(); const key = normalizeIdentityKey(identityKey); const item = registry.entraRoles[key];
         if (!item || !item.requestedRole) throw new Error("No privileged role is waiting for approval.");
@@ -171,6 +172,6 @@ function create(options) {
     function setAccessKeyHash(hash) { const registry=read(); registry.accessKeyHash=String(hash || ""); write(registry); }
     function securityOverrides() { const registry=read(); return { breakGlassPasswordHash:registry.breakGlassPasswordHash, accessKeyHash:registry.accessKeyHash }; }
 
-    return { authenticateLocal, listUsers, createLocalUser, updateRole, resolveEntra, approveEntraRole, rejectEntraRole, setBreakGlassPassword, setAccessKeyHash, securityOverrides };
+    return { authenticateLocal, listUsers, createLocalUser, updateRole, roleForEntra, resolveEntra, approveEntraRole, rejectEntraRole, setBreakGlassPassword, setAccessKeyHash, securityOverrides };
 }
 module.exports = { create, normalizeUsername, normalizeIdentityKey, normalizeClaimRoles, approvalAllowed };
