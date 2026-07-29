@@ -80,7 +80,7 @@ curl -fsSL \
   -o /tmp/install-sirk-central.sh
 
 sudo bash /tmp/install-sirk-central.sh
-rm -f /tmp/install-sirk-central.sh
+sudo rm -f /tmp/install-sirk-central.sh
 ```
 
 Nie używaj bezpośrednio `curl | sudo bash`, ponieważ instalator wymaga terminala
@@ -103,7 +103,7 @@ sudo env \
   SIRK_SESSION_HOURS=8 \
   bash /tmp/install-sirk-central.sh
 
-rm -f /tmp/install-sirk-central.sh
+sudo rm -f /tmp/install-sirk-central.sh
 ```
 
 Hasło administratora zawsze jest pobierane interaktywnie i nie jest przekazywane
@@ -127,6 +127,30 @@ Dostępne zmienne:
 
 Instalator nie usuwa automatycznie istniejących Docker volumes. Opcja `--force`
 archiwizuje poprzedni katalog do `/opt/sirk-central.backup-<UTC_TIMESTAMP>`.
+
+### Ponowienie po przerwanym instalatorze
+
+Jeżeli instalacja została przerwana po utworzeniu `/opt/sirk-central`, ale przed
+utworzeniem `.env`, pobierz aktualny instalator i uruchom go z `SIRK_FORCE=1`:
+
+```bash
+curl -fsSL \
+  https://raw.githubusercontent.com/Eris92/SIRK-Central/main/deploy/install.sh \
+  -o /tmp/install-sirk-central.sh
+
+sudo env \
+  SIRK_FORCE=1 \
+  SIRK_WEBSITE_DOMAIN=sirkportal.com \
+  SIRK_CENTRAL_DOMAIN=central.sirkportal.com \
+  SIRK_ACME_EMAIL=admin@sirkportal.com \
+  SIRK_ADMIN_USERNAME=admin \
+  SIRK_SESSION_HOURS=8 \
+  bash /tmp/install-sirk-central.sh
+
+sudo rm -f /tmp/install-sirk-central.sh
+```
+
+Nie uruchamiaj `deploy/update.sh`, dopóki `/opt/sirk-central/.env` nie istnieje.
 
 ## Aktualizacja istniejącej instalacji
 
