@@ -17,6 +17,12 @@ function loadConfig(env) {
     const clientSecret = required(env, "SIRK_ENTRA_CLIENT_SECRET");
     const sharedSecret = required(env, "SIRK_SSO_SHARED_SECRET");
     const tenant = String(env.SIRK_ENTRA_TENANT || "organizations").trim();
+    const allowedIdentities = new Set(required(env, "SIRK_ENTRA_ADMIN_IDENTITIES").split(",")
+        .map((value) => value.trim().toLowerCase()).filter(Boolean));
+    const identityPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+    if (!allowedIdentities.size || [...allowedIdentities].some((value) => !identityPattern.test(value))) {
+        throw new Error("SIRK_ENTRA_ADMIN_IDENTITIES must contain comma-separated tenant-id:object-id values.");
+    }
     const port = Number(env.SIRK_AUTH_PORT || 8081);
     const bindHost = env.SIRK_AUTH_BIND_HOST || "127.0.0.1";
     if (!authOrigin.startsWith("https://") || !centralOrigin.startsWith("https://")) {
@@ -30,6 +36,7 @@ function loadConfig(env) {
         clientSecret,
         sharedSecret,
         tenant,
+        allowedIdentities,
         port,
         bindHost,
         callbackUrl: authOrigin + "/auth/entra/callback",
@@ -81,18 +88,21 @@ function createApp(config) {
         for (const [state, item] of pending) if (item.expiresAt < now) pending.delete(state);
     }
 
+    async function downloadJwks() {
+        const response = await fetch(config.jwksUrl, { headers: { accept: "application/json" } });
+        if (!response.ok) throw new Error("Unable to download Entra signing keys.");
+        const body = await response.json();
+        jwksCache = { expiresAt: Date.now() + 60 * 60 * 1000, keys: Array.isArray(body.keys) ? body.keys : [] };
+    }
+
     async function getJwk(kid) {
-        if (jwksCache.expiresAt < Date.now()) {
-            const response = await fetch(config.jwksUrl, { headers: { accept: "application/json" } });
-            if (!response.ok) throw new Error("Unable to download Entra signing keys.");
-            const body = await response.json();
-            jwksCache = { expiresAt: Date.now() + 60 * 60 * 1000, keys: Array.isArray(body.keys) ? body.keys : [] };
-        }
-        const key = jwksCache.keys.find((item) => item.kid === kid && item.kty === "RSA");
+        if (jwksCache.expiresAt < Date.now()) await downloadJwks();
+        let key = jwksCache.keys.find((item) => item.kid === kid && item.kty === "RSA");
         if (!key) {
-            jwksCache.expiresAt = 0;
-            throw new Error("Entra signing key was not found.");
+            await downloadJwks();
+            key = jwksCache.keys.find((item) => item.kid === kid && item.kty === "RSA");
         }
+        if (!key) throw new Error("Entra signing key was not found.");
         return key;
     }
 
@@ -114,6 +124,8 @@ function createApp(config) {
         if (!claims.tid || !claims.oid) throw new Error("Entra token is missing tid or oid.");
         const expectedIssuer = "https://login.microsoftonline.com/" + claims.tid + "/v2.0";
         if (claims.iss !== expectedIssuer) throw new Error("Invalid Entra token issuer.");
+        const identity = (String(claims.tid) + ":" + String(claims.oid)).toLowerCase();
+        if (!config.allowedIdentities.has(identity)) throw new Error("This Entra identity is not authorized for SIRK Central.");
         return claims;
     }
 
