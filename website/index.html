@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="SIRK Central łączy lokalne instalacje SIRK Portal w bezpieczną, centralnie zarządzaną platformę IT.">
+  <meta name="theme-color" content="#07111f">
+  <title>SIRK Central — bezpieczne zarządzanie środowiskami IT</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="SIRK Central — strona główna">
+      <span class="brand-mark" aria-hidden="true">S</span>
+      <span><strong>SIRK</strong> Central</span>
+    </a>
+    <nav class="topnav" aria-label="Nawigacja główna">
+      <a href="#platforma">Platforma</a>
+      <a href="#bezpieczenstwo">Bezpieczeństwo</a>
+      <a href="#architektura">Architektura</a>
+    </nav>
+    <a class="login-button" href="https://auth.sirkportal.com">Zaloguj się</a>
+  </header>
+
+  <main>
+    <section class="hero" id="platforma">
+      <div class="hero-copy">
+        <p class="eyebrow">Central management plane dla SIRK Portal</p>
+        <h1>Zarządzaj środowiskami klientów bez wystawiania ich infrastruktury do Internetu.</h1>
+        <p class="lead">SIRK Central łączy lokalne Portale przez szyfrowany tunel wychodzący. Operator otrzymuje jeden punkt dostępu, a klient zachowuje lokalną kontrolę, własne dane recovery i możliwość pracy podczas awarii Centrali.</p>
+        <div class="hero-actions">
+          <a class="primary-button" href="https://auth.sirkportal.com">Przejdź do logowania</a>
+          <a class="secondary-button" href="#architektura">Zobacz architekturę</a>
+        </div>
+        <div class="trust-row" aria-label="Najważniejsze właściwości">
+          <span>Outbound-only tunnel</span>
+          <span>Host-only sessions</span>
+          <span>Local break-glass</span>
+        </div>
+      </div>
+
+      <div class="console-card" aria-label="Schemat połączeń SIRK Central">
+        <div class="console-header">
+          <span></span><span></span><span></span>
+          <strong>SIRK Central</strong>
+        </div>
+        <div class="console-body">
+          <div class="metric"><span>Połączone Portale</span><strong>3</strong></div>
+          <article class="portal online">
+            <div><span class="status-dot"></span><strong>Investa</strong></div>
+            <small>portal-investa · online</small>
+            <span class="connection">mTLS / WSS</span>
+          </article>
+          <article class="portal online">
+            <div><span class="status-dot"></span><strong>OSiR Pruszcz</strong></div>
+            <small>portal-osir · online</small>
+            <span class="connection">mTLS / WSS</span>
+          </article>
+          <article class="portal offline">
+            <div><span class="status-dot"></span><strong>Site testowy</strong></div>
+            <small>portal-lab · offline</small>
+            <span class="connection">local recovery</span>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="bezpieczenstwo">
+      <div class="section-heading">
+        <p class="eyebrow">Security by architecture</p>
+        <h2>Centralizacja bez centralnego punktu pełnego zaufania.</h2>
+        <p>SIRK Central zarządza relacjami trust i sesjami operatorskimi. Lokalne poświadczenia recovery, klucze prywatne oraz dane Portalu pozostają odseparowane per klient i per instalacja.</p>
+      </div>
+      <div class="feature-grid">
+        <article>
+          <span class="feature-number">01</span>
+          <h3>Brak inbound exposure</h3>
+          <p>SIRK Portal inicjuje połączenie wychodzące. Nie wymaga publicznego adresu, NAT ani przekierowania portów do sieci klienta.</p>
+        </article>
+        <article>
+          <span class="feature-number">02</span>
+          <h3>Izolacja tenantów</h3>
+          <p>Każdy Portal posiada własną tożsamość, lokalne sesje i oddzielny mechanizm recovery. Przejęcie jednej instalacji nie daje dostępu do pozostałych.</p>
+        </article>
+        <article>
+          <span class="feature-number">03</span>
+          <h3>Kontrolowany dostęp</h3>
+          <p>Centralny broker weryfikuje operatora, zakres Customer/Site/Portal oraz stan połączenia przed utworzeniem sesji do Portalu.</p>
+        </article>
+        <article>
+          <span class="feature-number">04</span>
+          <h3>Odporność operacyjna</h3>
+          <p>Lokalny break-glass pozwala wykonać ograniczone działania administracyjne również przy niedostępności SIRK Central lub zewnętrznego IdP.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="architecture section" id="architektura">
+      <div class="section-heading compact">
+        <p class="eyebrow">Rozdzielone odpowiedzialności</p>
+        <h2>Jedna platforma, trzy jasno określone warstwy.</h2>
+      </div>
+      <div class="architecture-flow">
+        <article>
+          <span class="domain">sirkportal.com</span>
+          <h3>Strona produktu</h3>
+          <p>Publiczna prezentacja platformy bez dostępu do API zarządzającego i tuneli.</p>
+        </article>
+        <div class="flow-arrow" aria-hidden="true">→</div>
+        <article class="highlight">
+          <span class="domain">auth.sirkportal.com</span>
+          <h3>SIRK Auth Broker</h3>
+          <p>Centralna sesja tożsamości i bezpieczne przekazywanie dostępu do właściwego Portalu.</p>
+        </article>
+        <div class="flow-arrow" aria-hidden="true">→</div>
+        <article>
+          <span class="domain">central.sirkportal.com</span>
+          <h3>SIRK Central</h3>
+          <p>Lista Portali, relacje Customer/Site, status połączeń i operacje operatorskie.</p>
+        </article>
+      </div>
+      <div class="local-portals">
+        <span>↓ szyfrowane połączenia wychodzące ↓</span>
+        <div>
+          <code>investa.sirkportal.com</code>
+          <code>osir-pruszcz.sirkportal.com</code>
+          <code>sir-k.sirkportal.com</code>
+        </div>
+      </div>
+    </section>
+
+    <section class="cta-section">
+      <div>
+        <p class="eyebrow">SIRK Central</p>
+        <h2>Jeden punkt zarządzania. Lokalne bezpieczeństwo pozostaje lokalne.</h2>
+      </div>
+      <a class="primary-button" href="https://auth.sirkportal.com">Zaloguj się do platformy</a>
+    </section>
+  </main>
+
+  <footer>
+    <a class="brand" href="/"><span class="brand-mark" aria-hidden="true">S</span><span><strong>SIRK</strong> Central</span></a>
+    <p>Bezpieczne zarządzanie rozproszonymi środowiskami IT.</p>
+    <span>© 2026 SIRK</span>
+  </footer>
+</body>
+</html>

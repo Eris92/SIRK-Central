@@ -39,7 +39,7 @@ ufw default deny incoming
 ufw default allow outgoing
 ufw allow 22/tcp comment "SSH"
 ufw allow 80/tcp comment "Lets Encrypt HTTP-01"
-ufw allow 44301/tcp comment "SIRK Portal Central HTTPS"
+ufw allow 443/tcp comment "SIRK Central HTTPS"
 ufw --force enable
 
 rm -f /etc/ssh/sshd_config.d/99-sirk-hardening.conf

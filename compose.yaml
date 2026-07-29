@@ -15,12 +15,14 @@ services:
     restart: unless-stopped
     ports:
       - "80:80"
-      - "44301:443"
+      - "443:443"
     environment:
-      SIRK_DOMAIN: ${SIRK_DOMAIN:-central.sir-k.pl}
+      SIRK_WEBSITE_DOMAIN: ${SIRK_WEBSITE_DOMAIN:-sirkportal.com}
+      SIRK_CENTRAL_DOMAIN: ${SIRK_CENTRAL_DOMAIN:-central.sirkportal.com}
       SIRK_ACME_EMAIL: ${SIRK_ACME_EMAIL}
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./website:/srv/website:ro
       - caddy-data:/data
       - caddy-config:/config
     networks:

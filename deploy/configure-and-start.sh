@@ -8,13 +8,12 @@ if [[ -f .env ]]; then
   exit 1
 fi
 
-sudo docker build --tag sirk-portal-central:setup .
+sudo docker build --tag sirk-central:setup .
 sudo docker run --rm -it \
   --volume /opt/sirk-central:/config \
   --env SIRK_CONFIG_TARGET=/config \
-  sirk-portal-central:setup \
+  sirk-central:setup \
   node scripts/configure-production.js
 
 sudo docker compose up -d --build
 sudo docker compose ps
-
