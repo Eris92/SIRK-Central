@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate shell scripts
+        run: |
+          bash -n \
+            deploy/bootstrap-ubuntu.sh \
+            deploy/configure-and-start.sh \
+            deploy/install.sh \
+            deploy/reset-admin-password.sh \
+            deploy/rotate-access-key.sh \
+            deploy/update.sh
+
+      - name: Validate Node.js syntax
+        run: |
+          node --check scripts/configure-production.js
+          node --check src/server.js
+
+      - name: Run tests
+        run: npm test
