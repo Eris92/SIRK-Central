@@ -5,6 +5,8 @@ services:
     env_file: .env
     environment:
       SIRK_BIND_HOST: 0.0.0.0
+      SIRK_PUBLIC_ORIGIN: https://${SIRK_CENTRAL_DOMAIN:-central.sirkportal.com}
+      SIRK_AUTH_ORIGIN: https://${SIRK_AUTH_DOMAIN:-auth.sirkportal.com}
     volumes:
       - central-data:/var/lib/sirk-central
     networks:
@@ -19,7 +21,8 @@ services:
     environment:
       SIRK_AUTH_BIND_HOST: 0.0.0.0
       SIRK_AUTH_PORT: 8081
-      SIRK_DATA_DIR: /var/lib/sirk-central
+      SIRK_PUBLIC_ORIGIN: https://${SIRK_CENTRAL_DOMAIN:-central.sirkportal.com}
+      SIRK_AUTH_ORIGIN: https://${SIRK_AUTH_DOMAIN:-auth.sirkportal.com}
     volumes:
       - central-data:/var/lib/sirk-central:ro
     networks:
