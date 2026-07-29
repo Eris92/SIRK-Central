@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
-umask 077
+umask 022
 
 REPO_URL="${SIRK_REPO_URL:-https://github.com/Eris92/SIRK-Central.git}"
 REPO_REF="${SIRK_REPO_REF:-main}"
