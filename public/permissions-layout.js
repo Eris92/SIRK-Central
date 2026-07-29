@@ -12,26 +12,8 @@
   const permissionsSummary = settingsView.querySelector(".permissions-summary");
 
   const labels = {
-    pl: {
-      permissions: "Uprawnienia",
-      my: "Twoje uprawnienia",
-      users: "Użytkownicy",
-      add: "Dodaj konto",
-      roles: "Zakres ról",
-      teams: "Zespoły",
-      policy: "Polityka Portalu",
-      simulate: "Symulacja dostępu"
-    },
-    en: {
-      permissions: "Permissions",
-      my: "Your permissions",
-      users: "Users",
-      add: "Add account",
-      roles: "Role scope",
-      teams: "Teams",
-      policy: "Portal policy",
-      simulate: "Access simulation"
-    }
+    pl: {permissions:"Uprawnienia",my:"Twoje uprawnienia",users:"Użytkownicy",add:"Dodaj konto",roles:"Zakres ról",teams:"Zespoły",policy:"Polityka Portalu",simulate:"Symulacja dostępu",settings:"Ustawienia"},
+    en: {permissions:"Permissions",my:"Your permissions",users:"Users",add:"Add account",roles:"Role scope",teams:"Teams",policy:"Portal policy",simulate:"Access simulation",settings:"Settings"}
   };
 
   function currentLanguage() {
@@ -51,7 +33,6 @@
   const navigation = document.createElement("nav");
   navigation.className = "settings-tabs permissions-tabs";
   navigation.setAttribute("aria-label", "Permissions sections");
-
   let activeTab = "users";
 
   function showTab(name) {
@@ -72,34 +53,39 @@
     }
   }
 
-  for (const item of [
-    ["my", "my"],
-    ["users", "users"],
-    ["add", "add"],
-    ["roles", "roles"],
-    ["teams", "teams"],
-    ["policy", "policy"],
-    ["simulate", "simulate"]
-  ]) {
+  for (const [tab, labelKey] of [["my","my"],["users","users"],["add","add"],["roles","roles"],["teams","teams"],["policy","policy"],["simulate","simulate"]]) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "settings-tab";
-    button.dataset.permissionsTab = item[0];
-    button.dataset.labelKey = item[1];
-    button.addEventListener("click", () => showTab(item[0]));
+    button.dataset.permissionsTab = tab;
+    button.dataset.labelKey = labelKey;
+    button.addEventListener("click", () => showTab(tab));
     navigation.append(button);
   }
 
   accessButton.removeAttribute("data-i18n");
   oldAccessNav.replaceWith(navigation);
   oldSettingsNav.remove();
-
   accessPanels.prepend(permissionsSummary);
   for (const id of ["settingsTabUsers", "settingsTabAddUser", "settingsTabRoles"]) {
     accessPanels.insertBefore(document.getElementById(id), document.getElementById("accessTabTeams"));
   }
 
-  settingsPanels.querySelector("#settingsTabEntra").hidden = false;
+  const entraPanel = settingsPanels.querySelector("#settingsTabEntra");
+  entraPanel.hidden = false;
+
+  const originalSetSettingsTab = window.setSettingsTab;
+  if (typeof originalSetSettingsTab === "function") {
+    window.setSettingsTab = function (name) {
+      if (!settingsView.hidden) {
+        for (const panel of Object.values(panels)) if (panel) panel.hidden = true;
+        entraPanel.hidden = false;
+        return;
+      }
+      originalSetSettingsTab(name);
+    };
+  }
+
   showTab("users");
   updateLabels();
 
@@ -109,6 +95,7 @@
     } finally {
       settingsView.hidden = true;
       accessView.hidden = false;
+      entraPanel.hidden = true;
       showTab(activeTab);
       document.getElementById("pageTitle").textContent = labels[currentLanguage()].permissions;
       updateLabels();
@@ -117,16 +104,15 @@
 
   settingsButton.addEventListener("click", () => {
     window.setTimeout(() => {
-      const entra = document.getElementById("settingsTabEntra");
-      entra.hidden = false;
-      document.getElementById("pageTitle").textContent = currentLanguage() === "en" ? "Settings" : "Ustawienia";
-    }, 0);
+      for (const panel of Object.values(panels)) if (panel) panel.hidden = true;
+      entraPanel.hidden = false;
+      document.getElementById("pageTitle").textContent = labels[currentLanguage()].settings;
+    }, 50);
   });
 
   for (const button of document.querySelectorAll("[data-lang]")) {
     button.addEventListener("click", () => window.setTimeout(updateLabels, 0));
   }
 
-  const observer = new MutationObserver(updateLabels);
-  observer.observe(document.documentElement, { attributes: true, attributeFilter: ["lang"] });
+  new MutationObserver(updateLabels).observe(document.documentElement, {attributes:true,attributeFilter:["lang"]});
 })();
