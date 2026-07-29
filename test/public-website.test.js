@@ -8,15 +8,16 @@ const path = require("node:path");
 const websitePath = path.join(__dirname, "..", "website", "index.html");
 const html = fs.readFileSync(websitePath, "utf8");
 
-test("public demo uses only generic portal labels", () => {
-    const labels = [...html.matchAll(
-        /<article class="portal[^>]*>[\s\S]*?<strong>([^<]+)<\/strong>/g
-    )].map((match) => match[1]);
+test("public page presents the complete SIRK product family", () => {
+    assert.match(html, /SIRK Central/);
+    assert.match(html, /SIRK Portal/);
+    assert.match(html, /SIRK Agent/);
+    assert.match(html, /data-lang="pl"/);
+    assert.match(html, /data-lang="en"/);
+});
 
-    assert.deepEqual(labels, ["Portal 01", "Portal 02", "Portal 03"]);
-    assert.match(html, /tenant-01 · online/);
-    assert.match(html, /tenant-02 · online/);
-    assert.match(html, /tenant-03 · offline/);
+test("public page contains no customer-specific labels", () => {
+    assert.doesNotMatch(html, /investa|pruszcz|kris-sirk-portal/i);
 });
 
 test("public page exposes no tenant-specific sirkportal.com hostnames", () => {
