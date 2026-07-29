@@ -8,6 +8,14 @@ const path = require("node:path");
 const root = path.join(__dirname, "..");
 const installer = fs.readFileSync(path.join(root, "deploy", "install.sh"), "utf8");
 const dockerfile = fs.readFileSync(path.join(root, "Dockerfile"), "utf8");
+const helpers = [
+    "configure-and-start.sh",
+    "reset-admin-password.sh",
+    "rotate-access-key.sh"
+].map((name) => ({
+    name,
+    content: fs.readFileSync(path.join(root, "deploy", name), "utf8")
+}));
 
 test("clean installer delegates secret generation to the interactive configurator", () => {
     assert.match(installer, /node scripts\/configure-production\.js/);
@@ -31,4 +39,13 @@ test("container image normalizes ownership and read permissions before USER node
     assert.match(dockerfile, /chown -R node:node \/app \/var\/lib\/sirk-central/);
     assert.match(dockerfile, /chmod -R u=rwX,g=rX,o=rX \/app/);
     assert.match(dockerfile, /USER node/);
+});
+
+test("all credential helpers use root only in the one-shot setup container", () => {
+    for (const helper of helpers) {
+        assert.match(helper.content, /--user 0:0/, helper.name);
+        assert.match(helper.content, /--volume \/opt\/sirk-central:\/config/, helper.name);
+        assert.match(helper.content, /node scripts\/configure-production\.js/, helper.name);
+        assert.match(helper.content, /chmod 0600 \.env/, helper.name);
+    }
 });
