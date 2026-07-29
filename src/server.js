@@ -14,17 +14,11 @@ const tunnelBrokerFactory = require("./tunnel-broker");
 
 function loadConfig(env) {
     const config = {
-        bindHost: env.SIRK_BIND_HOST || "127.0.0.1",
-        port: Number(env.SIRK_PORT || 8080),
-        publicOrigin: String(env.SIRK_PUBLIC_ORIGIN || "").replace(/\/+$/, ""),
-        authOrigin: String(env.SIRK_AUTH_ORIGIN || "").replace(/\/+$/, ""),
-        ssoSharedSecret: String(env.SIRK_SSO_SHARED_SECRET || ""),
-        adminUsername: env.SIRK_ADMIN_USERNAME || "admin",
-        adminPasswordHash: env.SIRK_ADMIN_PASSWORD_HASH || "",
-        accessKeyHash: env.SIRK_ACCESS_KEY_HASH || "",
-        dataDir: path.resolve(env.SIRK_DATA_DIR || path.join(process.cwd(), "data")),
-        sessionHours: Math.max(1, Math.min(24, Number(env.SIRK_SESSION_HOURS || 8))),
-        env
+        bindHost: env.SIRK_BIND_HOST || "127.0.0.1", port: Number(env.SIRK_PORT || 8080),
+        publicOrigin: String(env.SIRK_PUBLIC_ORIGIN || "").replace(/\/+$/, ""), authOrigin: String(env.SIRK_AUTH_ORIGIN || "").replace(/\/+$/, ""),
+        ssoSharedSecret: String(env.SIRK_SSO_SHARED_SECRET || ""), adminUsername: env.SIRK_ADMIN_USERNAME || "admin",
+        adminPasswordHash: env.SIRK_ADMIN_PASSWORD_HASH || "", accessKeyHash: env.SIRK_ACCESS_KEY_HASH || "",
+        dataDir: path.resolve(env.SIRK_DATA_DIR || path.join(process.cwd(), "data")), sessionHours: Math.max(1, Math.min(24, Number(env.SIRK_SESSION_HOURS || 8))), env
     };
     if (!config.publicOrigin.startsWith("https://") && env.NODE_ENV === "production") throw new Error("SIRK_PUBLIC_ORIGIN must use HTTPS in production.");
     if (!config.adminPasswordHash.startsWith("scrypt$")) throw new Error("SIRK_ADMIN_PASSWORD_HASH is required.");
@@ -35,106 +29,50 @@ function loadConfig(env) {
 }
 
 function createApp(config) {
-    const portalStore = portalStoreFactory.create({ dataDir: config.dataDir });
-    const userStore = userStoreFactory.create({ dataDir: config.dataDir });
-    const providerStore = providerStoreFactory.create({ dataDir: config.dataDir, authOrigin: config.authOrigin, env: config.env || process.env });
-    const broker = tunnelBrokerFactory.create();
-    const sessions = new Map();
-    const loginFailures = new Map();
-    const usedSsoTickets = new Map();
-    const webRoot = path.join(__dirname, "..", "public");
-    const wsServer = new WebSocketServer({ noServer: true, maxPayload: 8 * 1024 * 1024 });
+    const portalStore=portalStoreFactory.create({dataDir:config.dataDir}), userStore=userStoreFactory.create({dataDir:config.dataDir}), providerStore=providerStoreFactory.create({dataDir:config.dataDir,authOrigin:config.authOrigin,env:config.env||process.env}), broker=tunnelBrokerFactory.create();
+    const sessions=new Map(), loginFailures=new Map(), usedSsoTickets=new Map(), webRoot=path.join(__dirname,"..","public"), wsServer=new WebSocketServer({noServer:true,maxPayload:8*1024*1024});
+    function json(res,status,body,headers){const data=Buffer.from(JSON.stringify(body));res.writeHead(status,Object.assign({"Content-Type":"application/json; charset=utf-8","Content-Length":data.length,"Cache-Control":"no-store","X-Content-Type-Options":"nosniff"},headers||{}));res.end(data);}
+    function redirect(res,location,headers){res.writeHead(302,Object.assign({Location:location,"Cache-Control":"no-store","Content-Length":"0"},headers||{}));res.end();}
+    function parseCookies(req){const result={};for(const part of String(req.headers.cookie||"").split(";")){const i=part.indexOf("=");if(i>0)result[part.slice(0,i).trim()]=part.slice(i+1).trim();}return result;}
+    function session(req){const token=parseCookies(req).sirk_central_session,value=token&&sessions.get(token);if(!value||value.expiresAt<Date.now()){if(token)sessions.delete(token);return null;}return value;}
+    function createSession(identity){const token=randomToken(32);sessions.set(token,Object.assign({},identity,{permissions:permissionsFor(identity.role,identity.builtIn),expiresAt:Date.now()+config.sessionHours*3600000}));return token;}
+    function sessionCookie(token){return "sirk_central_session="+token+"; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age="+(config.sessionHours*3600);}
+    function sameOrigin(req){const origin=String(req.headers.origin||"");return !origin||origin===config.publicOrigin;}
+    function bearerCredential(req){const m=String(req.headers.authorization||"").match(/^Bearer ([A-Za-z0-9_-]+)$/);return m?m[1]:"";}
+    function effectiveSecurity(){const overrides=userStore.securityOverrides();return{passwordHash:overrides.breakGlassPasswordHash||config.adminPasswordHash,accessKeyHash:overrides.accessKeyHash||config.accessKeyHash};}
+    function requireSession(req,res){const value=session(req);if(!value)json(res,401,{ok:false,error:"Authentication required."});return value;}
+    function requirePermission(req,res,permission){const value=requireSession(req,res);if(!value)return null;if(!hasPermission(value,permission)){json(res,403,{ok:false,error:"Permission denied."});return null;}return value;}
+    function readBody(req,limit){return new Promise((resolve,reject)=>{const chunks=[];let size=0;req.on("data",c=>{size+=c.length;if(size>limit){reject(Object.assign(new Error("Request body is too large."),{statusCode:413}));req.destroy();}else chunks.push(c);});req.on("end",()=>{try{resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")||"{}"));}catch(_){reject(Object.assign(new Error("Invalid JSON body."),{statusCode:400}));}});req.on("error",reject);});}
+    function portalCredentials(req){const m=String(req.headers.authorization||"").match(/^SIRK-Portal ([A-Za-z0-9_-]+)$/);if(!m)return null;try{const decoded=Buffer.from(m[1],"base64url").toString("utf8"),i=decoded.indexOf(":");return i<1?null:{id:decoded.slice(0,i),token:decoded.slice(i+1)};}catch(_){return null;}}
+    function portalCookies(req){return String(req.headers.cookie||"").split(";").map(v=>v.trim()).filter(v=>v&&!/^sirk_central_session=/i.test(v)).join("; ");}
+    function rewriteLocation(value,prefix){value=String(value||"");if(!value)return"";if(value.startsWith("/"))return prefix+value;try{const parsed=new URL(value);return prefix+parsed.pathname+parsed.search+parsed.hash;}catch(_){return value;}}
+    function rewriteSetCookie(values,prefix){return(Array.isArray(values)?values:[]).map(value=>{const parts=String(value).split(";").map(p=>p.trim()).filter(p=>!/^domain=/i.test(p)&&!/^path=/i.test(p));parts.push("Path="+prefix+"/");return parts.join("; ");});}
+    function rewritePortalBody(body,contentType,prefix){if(!/^(?:text\/|application\/(?:javascript|json))/i.test(String(contentType||"")))return body;let text=body.toString("utf8");text=text.replace(/(["'`])\/(?!\/)/g,(_,q)=>q+prefix+"/");text=text.replace(/(\b(?:href|src|action)=)\/(?!\/)/gi,(_,a)=>a+prefix+"/");text=text.replace(/(url\(\s*)\/(?!\/)/gi,(_,o)=>o+prefix+"/");return Buffer.from(text);}
 
-    function json(res, status, body, headers) { const data = Buffer.from(JSON.stringify(body)); res.writeHead(status, Object.assign({ "Content-Type":"application/json; charset=utf-8", "Content-Length":data.length, "Cache-Control":"no-store", "X-Content-Type-Options":"nosniff" }, headers || {})); res.end(data); }
-    function redirect(res, location, headers) { res.writeHead(302, Object.assign({ Location:location, "Cache-Control":"no-store", "Content-Length":"0" }, headers || {})); res.end(); }
-    function parseCookies(req) { const result = {}; for (const part of String(req.headers.cookie || "").split(";")) { const i = part.indexOf("="); if (i > 0) result[part.slice(0,i).trim()] = part.slice(i+1).trim(); } return result; }
-    function session(req) { const token = parseCookies(req).sirk_central_session; const value = token && sessions.get(token); if (!value || value.expiresAt < Date.now()) { if (token) sessions.delete(token); return null; } return value; }
-    function createSession(identity) { const token = randomToken(32); sessions.set(token, Object.assign({}, identity, { permissions:permissionsFor(identity.role, identity.builtIn), expiresAt:Date.now()+config.sessionHours*3600000 })); return token; }
-    function sessionCookie(token) { return "sirk_central_session=" + token + "; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=" + (config.sessionHours*3600); }
-    function sameOrigin(req) { const origin = String(req.headers.origin || ""); return !origin || origin === config.publicOrigin; }
-    function bearerCredential(req) { const m = String(req.headers.authorization || "").match(/^Bearer ([A-Za-z0-9_-]+)$/); return m ? m[1] : ""; }
-    function effectiveSecurity() { const overrides = userStore.securityOverrides(); return { passwordHash:overrides.breakGlassPasswordHash || config.adminPasswordHash, accessKeyHash:overrides.accessKeyHash || config.accessKeyHash }; }
-    function requireSession(req,res) { const value = session(req); if (!value) json(res,401,{ok:false,error:"Authentication required."}); return value; }
-    function requirePermission(req,res,permission) { const value = requireSession(req,res); if (!value) return null; if (!hasPermission(value,permission)) { json(res,403,{ok:false,error:"Permission denied."}); return null; } return value; }
-    function readBody(req,limit) { return new Promise((resolve,reject) => { const chunks=[]; let size=0; req.on("data",c => { size += c.length; if (size > limit) { reject(Object.assign(new Error("Request body is too large."),{statusCode:413})); req.destroy(); } else chunks.push(c); }); req.on("end",() => { try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}")); } catch (_) { reject(Object.assign(new Error("Invalid JSON body."),{statusCode:400})); } }); req.on("error",reject); }); }
-    function portalCredentials(req) { const m=String(req.headers.authorization || "").match(/^SIRK-Portal ([A-Za-z0-9_-]+)$/); if (!m) return null; try { const decoded=Buffer.from(m[1],"base64url").toString("utf8"); const i=decoded.indexOf(":"); return i<1?null:{id:decoded.slice(0,i),token:decoded.slice(i+1)}; } catch (_) { return null; } }
-    function portalCookies(req) { return String(req.headers.cookie || "").split(";").map(v=>v.trim()).filter(v=>v && !/^sirk_central_session=/i.test(v)).join("; "); }
-    function rewriteLocation(value,prefix) { value=String(value||""); if (!value) return ""; if (value.startsWith("/")) return prefix+value; try { const parsed=new URL(value); return prefix+parsed.pathname+parsed.search+parsed.hash; } catch (_) { return value; } }
-    function rewriteSetCookie(values,prefix) { return (Array.isArray(values)?values:[]).map(value => { const parts=String(value).split(";").map(p=>p.trim()).filter(p=>!/^domain=/i.test(p)&&!/^path=/i.test(p)); parts.push("Path="+prefix+"/"); return parts.join("; "); }); }
-    function rewritePortalBody(body,contentType,prefix) { if (!/^(?:text\/|application\/(?:javascript|json))/i.test(String(contentType||""))) return body; let text=body.toString("utf8"); text=text.replace(/(["'`])\/(?!\/)/g,(_,q)=>q+prefix+"/"); text=text.replace(/(\b(?:href|src|action)=)\/(?!\/)/gi,(_,a)=>a+prefix+"/"); text=text.replace(/(url\(\s*)\/(?!\/)/gi,(_,o)=>o+prefix+"/"); return Buffer.from(text); }
-
-    async function handler(req,res) {
-        try {
-            const url = new URL(req.url,"http://central.local");
-            if (req.method === "GET" && url.pathname === "/healthz") return json(res,200,{ok:true});
-            if (req.method === "GET" && url.pathname === "/auth/sso/callback") {
-                if (!config.authOrigin) return json(res,404,{ok:false,error:"Not found."});
-                for (const [jti,expiresAt] of usedSsoTickets) if (expiresAt < Date.now()) usedSsoTickets.delete(jti);
-                const ticket=verifySsoTicket(url.searchParams.get("ticket"),config.ssoSharedSecret,{issuer:config.authOrigin,audience:config.publicOrigin});
-                if (usedSsoTickets.has(ticket.jti)) throw Object.assign(new Error("SSO ticket was already used."),{statusCode:401});
-                usedSsoTickets.set(ticket.jti,ticket.exp*1000);
-                const identityKey=ticket.tid+":"+ticket.oid; const role=userStore.roleForEntra(identityKey,{username:ticket.username,displayName:ticket.name});
-                const token=createSession({username:ticket.username||ticket.name,displayName:ticket.name,identityKey,tenantId:ticket.tid,objectId:ticket.oid,source:"entra",role,builtIn:false});
-                return redirect(res,"/",{"Set-Cookie":sessionCookie(token)});
-            }
-            if (req.method === "GET" && url.pathname === "/api/access") { if (!verifyAccessKey(bearerCredential(req),effectiveSecurity().accessKeyHash)) return json(res,404,{ok:false,error:"Not found."}); return json(res,200,{ok:true}); }
-            if (req.method === "POST" && url.pathname === "/api/login") {
-                if (!verifyAccessKey(bearerCredential(req),effectiveSecurity().accessKeyHash)) return json(res,404,{ok:false,error:"Not found."}); if (!sameOrigin(req)) return json(res,403,{ok:false,error:"Origin rejected."});
-                const address=String(req.socket.remoteAddress||"unknown"); const failure=loginFailures.get(address); if (failure&&failure.blockedUntil>Date.now()) return json(res,429,{ok:false,error:"Too many login attempts. Try again later."});
-                const body=await readBody(req,16384); let identity=null;
-                if (String(body.username||"")===config.adminUsername && verifySecret(String(body.password||""),effectiveSecurity().passwordHash)) identity={username:config.adminUsername,displayName:config.adminUsername,source:"local",role:"BreakGlass",builtIn:true}; else identity=userStore.authenticateLocal(body.username,body.password);
-                if (!identity) { const attempts=failure&&failure.expiresAt>Date.now()?failure.attempts+1:1; loginFailures.set(address,{attempts,expiresAt:Date.now()+900000,blockedUntil:attempts>=5?Date.now()+900000:0}); return json(res,401,{ok:false,error:"Invalid username or password."}); }
-                loginFailures.delete(address); const token=createSession(identity); return json(res,200,Object.assign({ok:true},identity,{permissions:permissionsFor(identity.role,identity.builtIn)}),{"Set-Cookie":sessionCookie(token)});
-            }
-            if (req.method === "POST" && url.pathname === "/api/logout") { const token=parseCookies(req).sirk_central_session; const value=token&&sessions.get(token); if (token) sessions.delete(token); return json(res,200,{ok:true,logoutUrl:value&&value.source==="entra"&&config.authOrigin?config.authOrigin+"/logout":""},{"Set-Cookie":"sirk_central_session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0"}); }
-            if (req.method === "GET" && url.pathname === "/api/session") { const value=session(req); return json(res,value?200:401,value?{ok:true,username:value.username,displayName:value.displayName,source:value.source,role:value.role,builtIn:Boolean(value.builtIn),permissions:value.permissions}:{ok:false,error:"Authentication required."}); }
-
-            if (req.method === "GET" && url.pathname === "/api/settings/roles") { if (!requireSession(req,res)) return; return json(res,200,{ok:true,roles:ASSIGNABLE_ROLES,permissions:ROLE_PERMISSIONS}); }
-            if (req.method === "GET" && url.pathname === "/api/settings/users") { if (!requirePermission(req,res,"users.manage")) return; return json(res,200,{ok:true,users:userStore.listUsers()}); }
-            if (req.method === "POST" && url.pathname === "/api/settings/users") { const actor=requirePermission(req,res,"users.manage"); if (!actor) return; if (!sameOrigin(req)) return json(res,403,{ok:false,error:"Origin rejected."}); return json(res,201,{ok:true,user:userStore.createLocalUser(await readBody(req,32768),actor)}); }
-            const roleMatch=url.pathname.match(/^\/api\/settings\/users\/(local|entra)\/(.+)\/role$/);
-            if (roleMatch&&req.method==="PATCH") { const actor=requirePermission(req,res,"users.manage"); if (!actor) return; if (!sameOrigin(req)) return json(res,403,{ok:false,error:"Origin rejected."}); const body=await readBody(req,16384); return json(res,200,{ok:true,result:userStore.updateRole({source:roleMatch[1],key:decodeURIComponent(roleMatch[2])},body.role,actor)}); }
-
-            if (req.method === "GET" && url.pathname === "/api/settings/identity-provider") {
-                const actor=requireSession(req,res); if (!actor) return;
-                const view=providerStore.publicView();
-                return json(res,200,{ok:true,provider:view,editable:hasPermission(actor,"security.manage")});
-            }
-            if (req.method === "PUT" && url.pathname === "/api/settings/identity-provider") {
-                if (!requirePermission(req,res,"security.manage")) return; if (!sameOrigin(req)) return json(res,403,{ok:false,error:"Origin rejected."});
-                const provider=providerStore.update(await readBody(req,65536)); return json(res,200,{ok:true,provider});
-            }
-            if (req.method === "POST" && url.pathname === "/api/settings/identity-provider/test") {
-                if (!requirePermission(req,res,"security.manage")) return; if (!sameOrigin(req)) return json(res,403,{ok:false,error:"Origin rejected."});
-                const provider=providerStore.read(); if (!provider.enabled) return json(res,400,{ok:false,error:"Microsoft Entra login is disabled."});
-                const metadataUrl="https://login.microsoftonline.com/"+encodeURIComponent(provider.tenant)+"/v2.0/.well-known/openid-configuration";
-                const response=await fetch(metadataUrl,{headers:{accept:"application/json"}}); if (!response.ok) return json(res,502,{ok:false,error:"Unable to read Entra OpenID metadata."});
-                const metadata=await response.json(); return json(res,200,{ok:true,issuer:metadata.issuer,authorizationEndpoint:metadata.authorization_endpoint,tokenEndpoint:metadata.token_endpoint});
-            }
-
-            if (req.method === "POST" && url.pathname === "/api/break-glass/password") { const actor=requireSession(req,res); if (!actor) return; if (!actor.builtIn) return json(res,403,{ok:false,error:"Break-Glass account required."}); const body=await readBody(req,16384); if (!verifySecret(String(body.currentPassword||""),effectiveSecurity().passwordHash)) return json(res,401,{ok:false,error:"Current password is invalid."}); userStore.setBreakGlassPassword(body.newPassword); return json(res,200,{ok:true}); }
-            if (req.method === "POST" && url.pathname === "/api/break-glass/access") { const actor=requireSession(req,res); if (!actor) return; if (!actor.builtIn) return json(res,403,{ok:false,error:"Break-Glass account required."}); const key=randomToken(32); userStore.setAccessKeyHash(hashAccessKey(key)); return json(res,200,{ok:true,accessUrl:config.publicOrigin+"/#access="+key}); }
-
-            if (url.pathname === "/api/portals" && req.method === "GET") { if (!requirePermission(req,res,"portals.read")) return; return json(res,200,{ok:true,portals:broker.list(portalStore.list())}); }
-            if (url.pathname === "/api/portals" && req.method === "POST") { if (!requirePermission(req,res,"portals.manage")) return; if (!sameOrigin(req)) return json(res,403,{ok:false,error:"Origin rejected."}); return json(res,201,{ok:true,portal:portalStore.createPortal(await readBody(req,16384))}); }
-            const connectMatch=url.pathname.match(/^\/api\/portals\/([a-z0-9-]+)\/connect$/);
-            if (connectMatch&&req.method==="POST") { if (!requirePermission(req,res,"portals.connect")) return; if (!sameOrigin(req)) return json(res,403,{ok:false,error:"Origin rejected."}); const response=await broker.request(connectMatch[1],{kind:"portal-info"}); return json(res,200,{ok:true,portal:response.portal,url:"/connect/"+connectMatch[1]+"/"}); }
-            const proxyMatch=url.pathname.match(/^\/connect\/([a-z0-9-]+)(\/.*)?$/);
-            if (proxyMatch) {
-                if (!requirePermission(req,res,"portals.connect")) return; const chunks=[]; let size=0; for await (const chunk of req) { size+=chunk.length; if (size>8388608) throw Object.assign(new Error("Request body is too large."),{statusCode:413}); chunks.push(chunk); }
-                const response=await broker.request(proxyMatch[1],{method:req.method,path:(proxyMatch[2]||"/")+url.search,headers:{accept:req.headers.accept||"*/*","content-type":req.headers["content-type"]||"",cookie:portalCookies(req),origin:req.headers.origin||"",host:req.headers.host||"","accept-language":req.headers["accept-language"]||"","x-sirk-csrf":req.headers["x-sirk-csrf"]||""},bodyBase64:Buffer.concat(chunks).toString("base64")});
-                const prefix="/connect/"+proxyMatch[1]; const contentType=response.contentType||"application/octet-stream"; const responseBody=rewritePortalBody(Buffer.from(response.bodyBase64||"","base64"),contentType,prefix); const headers={"Content-Type":contentType,"Content-Length":responseBody.length,"Cache-Control":"no-store","X-Content-Type-Options":"nosniff","Content-Security-Policy":"frame-ancestors 'none'; object-src 'none'; base-uri 'self'"};
-                const location=rewriteLocation(response.location,prefix); const setCookie=rewriteSetCookie(response.setCookie,prefix); if (location) headers.Location=location; if (setCookie.length) headers["Set-Cookie"]=setCookie; res.writeHead(Number(response.statusCode)||502,headers); res.end(responseBody); return;
-            }
-            if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/app.js" || url.pathname === "/styles.css")) { const fileName=url.pathname==="/"?"index.html":url.pathname.slice(1); const contentType=fileName.endsWith(".html")?"text/html; charset=utf-8":fileName.endsWith(".js")?"text/javascript; charset=utf-8":"text/css; charset=utf-8"; const data=fs.readFileSync(path.join(webRoot,fileName)); res.writeHead(200,{"Content-Type":contentType,"Content-Length":data.length,"Cache-Control":"no-store","X-Content-Type-Options":"nosniff","Content-Security-Policy":"default-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"}); res.end(data); return; }
-            return json(res,404,{ok:false,error:"Not found."});
-        } catch (error) { return json(res,error.statusCode||400,{ok:false,error:error.message||"Internal server error."}); }
-    }
-
-    const server=http.createServer(handler);
-    server.on("upgrade",(req,socket,head) => { const url=new URL(req.url,"http://central.local"); if (url.pathname!=="/tunnel") return socket.destroy(); const credentials=portalCredentials(req); const portal=credentials&&portalStore.authenticate(credentials.id,credentials.token); if (!portal) { socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n"); return socket.destroy(); } wsServer.handleUpgrade(req,socket,head,webSocket=>broker.attach(portal,webSocket)); });
-    return { server, store:portalStore, userStore, providerStore, broker };
+    async function handler(req,res){try{const url=new URL(req.url,"http://central.local");
+        if(req.method==="GET"&&url.pathname==="/healthz")return json(res,200,{ok:true});
+        if(req.method==="GET"&&url.pathname==="/auth/sso/callback"){if(!config.authOrigin)return json(res,404,{ok:false,error:"Not found."});for(const[jti,expiresAt]of usedSsoTickets)if(expiresAt<Date.now())usedSsoTickets.delete(jti);const ticket=verifySsoTicket(url.searchParams.get("ticket"),config.ssoSharedSecret,{issuer:config.authOrigin,audience:config.publicOrigin});if(usedSsoTickets.has(ticket.jti))throw Object.assign(new Error("SSO ticket was already used."),{statusCode:401});usedSsoTickets.set(ticket.jti,ticket.exp*1000);const identityKey=ticket.tid+":"+ticket.oid,role=userStore.roleForEntra(identityKey,{username:ticket.username,displayName:ticket.name}),token=createSession({username:ticket.username||ticket.name,displayName:ticket.name,identityKey,tenantId:ticket.tid,objectId:ticket.oid,source:"entra",role,builtIn:false});return redirect(res,"/",{"Set-Cookie":sessionCookie(token)});}
+        if(req.method==="GET"&&url.pathname==="/api/access"){if(!verifyAccessKey(bearerCredential(req),effectiveSecurity().accessKeyHash))return json(res,404,{ok:false,error:"Not found."});return json(res,200,{ok:true});}
+        if(req.method==="POST"&&url.pathname==="/api/login"){if(!verifyAccessKey(bearerCredential(req),effectiveSecurity().accessKeyHash))return json(res,404,{ok:false,error:"Not found."});if(!sameOrigin(req))return json(res,403,{ok:false,error:"Origin rejected."});const address=String(req.socket.remoteAddress||"unknown"),failure=loginFailures.get(address);if(failure&&failure.blockedUntil>Date.now())return json(res,429,{ok:false,error:"Too many login attempts. Try again later."});const body=await readBody(req,16384);let identity=null;if(String(body.username||"")===config.adminUsername&&verifySecret(String(body.password||""),effectiveSecurity().passwordHash))identity={username:config.adminUsername,displayName:config.adminUsername,source:"local",role:"BreakGlass",builtIn:true};else identity=userStore.authenticateLocal(body.username,body.password);if(!identity){const attempts=failure&&failure.expiresAt>Date.now()?failure.attempts+1:1;loginFailures.set(address,{attempts,expiresAt:Date.now()+900000,blockedUntil:attempts>=5?Date.now()+900000:0});return json(res,401,{ok:false,error:"Invalid username or password."});}loginFailures.delete(address);const token=createSession(identity);return json(res,200,Object.assign({ok:true},identity,{permissions:permissionsFor(identity.role,identity.builtIn)}),{"Set-Cookie":sessionCookie(token)});}
+        if(req.method==="POST"&&url.pathname==="/api/logout"){const token=parseCookies(req).sirk_central_session,value=token&&sessions.get(token);if(token)sessions.delete(token);return json(res,200,{ok:true,logoutUrl:value&&value.source==="entra"&&config.authOrigin?config.authOrigin+"/logout":""},{"Set-Cookie":"sirk_central_session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0"});}
+        if(req.method==="GET"&&url.pathname==="/api/session"){const value=session(req);return json(res,value?200:401,value?{ok:true,username:value.username,displayName:value.displayName,source:value.source,role:value.role,builtIn:Boolean(value.builtIn),permissions:value.permissions}:{ok:false,error:"Authentication required."});}
+        if(req.method==="GET"&&url.pathname==="/api/settings/roles"){if(!requireSession(req,res))return;return json(res,200,{ok:true,roles:ASSIGNABLE_ROLES,permissions:ROLE_PERMISSIONS});}
+        if(req.method==="GET"&&url.pathname==="/api/settings/users"){if(!requirePermission(req,res,"users.manage"))return;return json(res,200,{ok:true,users:userStore.listUsers()});}
+        if(req.method==="POST"&&url.pathname==="/api/settings/users"){const actor=requirePermission(req,res,"users.manage");if(!actor)return;if(!sameOrigin(req))return json(res,403,{ok:false,error:"Origin rejected."});return json(res,201,{ok:true,user:userStore.createLocalUser(await readBody(req,32768),actor)});}
+        const roleMatch=url.pathname.match(/^\/api\/settings\/users\/(local|entra)\/(.+)\/role$/);if(roleMatch&&req.method==="PATCH"){const actor=requirePermission(req,res,"users.manage");if(!actor)return;if(!sameOrigin(req))return json(res,403,{ok:false,error:"Origin rejected."});const body=await readBody(req,16384);return json(res,200,{ok:true,result:userStore.updateRole({source:roleMatch[1],key:decodeURIComponent(roleMatch[2])},body.role,actor)});}
+        if(req.method==="GET"&&url.pathname==="/api/settings/identity-provider"){const actor=requireSession(req,res);if(!actor)return;return json(res,200,{ok:true,provider:providerStore.publicView(),editable:hasPermission(actor,"identity.manage"),securityEditable:hasPermission(actor,"security.manage")});}
+        if(req.method==="PUT"&&url.pathname==="/api/settings/identity-provider"){const actor=requirePermission(req,res,"identity.manage");if(!actor)return;if(!sameOrigin(req))return json(res,403,{ok:false,error:"Origin rejected."});const provider=providerStore.update(await readBody(req,65536),{allowSecurity:hasPermission(actor,"security.manage")});return json(res,200,{ok:true,provider});}
+        if(req.method==="POST"&&url.pathname==="/api/settings/identity-provider/test"){if(!requirePermission(req,res,"identity.manage"))return;if(!sameOrigin(req))return json(res,403,{ok:false,error:"Origin rejected."});const provider=providerStore.read();if(!provider.enabled)return json(res,400,{ok:false,error:"Microsoft Entra login is disabled."});const metadataUrl="https://login.microsoftonline.com/"+encodeURIComponent(provider.tenant)+"/v2.0/.well-known/openid-configuration",response=await fetch(metadataUrl,{headers:{accept:"application/json"}});if(!response.ok)return json(res,502,{ok:false,error:"Unable to read Entra OpenID metadata."});const metadata=await response.json();return json(res,200,{ok:true,issuer:metadata.issuer,authorizationEndpoint:metadata.authorization_endpoint,tokenEndpoint:metadata.token_endpoint});}
+        if(req.method==="POST"&&url.pathname==="/api/break-glass/password"){const actor=requireSession(req,res);if(!actor)return;if(!actor.builtIn)return json(res,403,{ok:false,error:"Break-Glass account required."});const body=await readBody(req,16384);if(!verifySecret(String(body.currentPassword||""),effectiveSecurity().passwordHash))return json(res,401,{ok:false,error:"Current password is invalid."});userStore.setBreakGlassPassword(body.newPassword);return json(res,200,{ok:true});}
+        if(req.method==="POST"&&url.pathname==="/api/break-glass/access"){const actor=requireSession(req,res);if(!actor)return;if(!actor.builtIn)return json(res,403,{ok:false,error:"Break-Glass account required."});const key=randomToken(32);userStore.setAccessKeyHash(hashAccessKey(key));return json(res,200,{ok:true,accessUrl:config.publicOrigin+"/#access="+key});}
+        if(url.pathname==="/api/portals"&&req.method==="GET"){if(!requirePermission(req,res,"portals.read"))return;return json(res,200,{ok:true,portals:broker.list(portalStore.list())});}
+        if(url.pathname==="/api/portals"&&req.method==="POST"){if(!requirePermission(req,res,"portals.manage"))return;if(!sameOrigin(req))return json(res,403,{ok:false,error:"Origin rejected."});return json(res,201,{ok:true,portal:portalStore.createPortal(await readBody(req,16384))});}
+        const connectMatch=url.pathname.match(/^\/api\/portals\/([a-z0-9-]+)\/connect$/);if(connectMatch&&req.method==="POST"){if(!requirePermission(req,res,"portals.connect"))return;if(!sameOrigin(req))return json(res,403,{ok:false,error:"Origin rejected."});const response=await broker.request(connectMatch[1],{kind:"portal-info"});return json(res,200,{ok:true,portal:response.portal,url:"/connect/"+connectMatch[1]+"/"});}
+        const proxyMatch=url.pathname.match(/^\/connect\/([a-z0-9-]+)(\/.*)?$/);if(proxyMatch){if(!requirePermission(req,res,"portals.connect"))return;const chunks=[];let size=0;for await(const chunk of req){size+=chunk.length;if(size>8388608)throw Object.assign(new Error("Request body is too large."),{statusCode:413});chunks.push(chunk);}const response=await broker.request(proxyMatch[1],{method:req.method,path:(proxyMatch[2]||"/")+url.search,headers:{accept:req.headers.accept||"*/*","content-type":req.headers["content-type"]||"",cookie:portalCookies(req),origin:req.headers.origin||"",host:req.headers.host||"","accept-language":req.headers["accept-language"]||"","x-sirk-csrf":req.headers["x-sirk-csrf"]||""},bodyBase64:Buffer.concat(chunks).toString("base64")});const prefix="/connect/"+proxyMatch[1],contentType=response.contentType||"application/octet-stream",responseBody=rewritePortalBody(Buffer.from(response.bodyBase64||"","base64"),contentType,prefix),headers={"Content-Type":contentType,"Content-Length":responseBody.length,"Cache-Control":"no-store","X-Content-Type-Options":"nosniff","Content-Security-Policy":"frame-ancestors 'none'; object-src 'none'; base-uri 'self'"};const location=rewriteLocation(response.location,prefix),setCookie=rewriteSetCookie(response.setCookie,prefix);if(location)headers.Location=location;if(setCookie.length)headers["Set-Cookie"]=setCookie;res.writeHead(Number(response.statusCode)||502,headers);res.end(responseBody);return;}
+        if(req.method==="GET"&&(url.pathname==="/"||url.pathname==="/app.js"||url.pathname==="/styles.css")){const fileName=url.pathname==="/"?"index.html":url.pathname.slice(1),contentType=fileName.endsWith(".html")?"text/html; charset=utf-8":fileName.endsWith(".js")?"text/javascript; charset=utf-8":"text/css; charset=utf-8",data=fs.readFileSync(path.join(webRoot,fileName));res.writeHead(200,{"Content-Type":contentType,"Content-Length":data.length,"Cache-Control":"no-store","X-Content-Type-Options":"nosniff","Content-Security-Policy":"default-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"});res.end(data);return;}
+        return json(res,404,{ok:false,error:"Not found."});
+    }catch(error){return json(res,error.statusCode||400,{ok:false,error:error.message||"Internal server error."});}}
+    const server=http.createServer(handler);server.on("upgrade",(req,socket,head)=>{const url=new URL(req.url,"http://central.local");if(url.pathname!=="/tunnel")return socket.destroy();const credentials=portalCredentials(req),portal=credentials&&portalStore.authenticate(credentials.id,credentials.token);if(!portal){socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");return socket.destroy();}wsServer.handleUpgrade(req,socket,head,webSocket=>broker.attach(portal,webSocket));});return{server,store:portalStore,userStore,providerStore,broker};
 }
-
-if (require.main===module) { const config=loadConfig(process.env); const app=createApp(config); app.server.listen(config.port,config.bindHost,()=>process.stdout.write("SIRK Central listening on "+config.bindHost+":"+config.port+"\n")); }
+if(require.main===module){const config=loadConfig(process.env),app=createApp(config);app.server.listen(config.port,config.bindHost,()=>process.stdout.write("SIRK Central listening on "+config.bindHost+":"+config.port+"\n"));}
 module.exports={loadConfig,createApp};
