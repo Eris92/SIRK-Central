@@ -18,8 +18,8 @@ function applyLanguage(language) {
 
   const heroTitle = document.querySelector(".hero h1");
   if (heroTitle) {
-    heroTitle.dataset.pl = "Centralne zarządzanie każdą infrastrukturą.";
-    heroTitle.dataset.en = "Central management for every infrastructure.";
+    heroTitle.dataset.pl = "Centralne zarządzanie infrastrukturą.";
+    heroTitle.dataset.en = "Central infrastructure management.";
   }
 
   for (const element of document.querySelectorAll("[data-pl][data-en]")) {
