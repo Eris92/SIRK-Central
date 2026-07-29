@@ -49,9 +49,9 @@ chmod 0600 "$TMP"
 mv "$TMP" .env
 unset CLIENT_SECRET SHARED_SECRET ADMIN_IDENTITIES
 
-docker compose config >/dev/null
-docker compose up -d --build --force-recreate auth central caddy
-docker compose ps
+docker compose --profile auth config >/dev/null
+docker compose --profile auth up -d --build --force-recreate auth central caddy
+docker compose --profile auth ps
 
 printf '\nAuth Broker configured.\n'
 printf 'Login URL: https://%s/login\n' "$AUTH_DOMAIN"
