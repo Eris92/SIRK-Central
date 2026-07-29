@@ -5,6 +5,10 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { hashSecret, hashAccessKey } = require("../src/security");
 
+const WEBSITE_DOMAIN = "sirkportal.com";
+const CENTRAL_DOMAIN = "central.sirkportal.com";
+const CENTRAL_ORIGIN = "https://" + CENTRAL_DOMAIN;
+
 function readHidden(prompt) {
     return new Promise((resolve, reject) => {
         if (!process.stdin.isTTY || typeof process.stdin.setRawMode !== "function") {
@@ -68,7 +72,7 @@ async function main() {
             { mode: 0o600, flag: "wx" });
         fs.renameSync(temporaryRotation, targetPath);
         process.stdout.write("\nURL access key rotated. Store this URL now; it is shown only once:\n\n");
-        process.stdout.write("https://central.sir-k.pl:44301/#access=" + accessKey + "\n\n");
+        process.stdout.write(CENTRAL_ORIGIN + "/#access=" + accessKey + "\n\n");
         return;
     }
     const password = await readHidden("New Central admin password: ");
@@ -95,13 +99,14 @@ async function main() {
     const lines = [
         "SIRK_BIND_HOST=127.0.0.1",
         "SIRK_PORT=8080",
-        "SIRK_PUBLIC_ORIGIN=https://central.sir-k.pl:44301",
+        "SIRK_PUBLIC_ORIGIN=" + CENTRAL_ORIGIN,
         "SIRK_ADMIN_USERNAME=admin",
         "SIRK_ADMIN_PASSWORD_HASH='" + hashSecret(password) + "'",
         "SIRK_ACCESS_KEY_HASH='" + hashAccessKey(accessKey) + "'",
         "SIRK_DATA_DIR=/var/lib/sirk-central",
         "SIRK_SESSION_HOURS=8",
-        "SIRK_DOMAIN=central.sir-k.pl",
+        "SIRK_WEBSITE_DOMAIN=" + WEBSITE_DOMAIN,
+        "SIRK_CENTRAL_DOMAIN=" + CENTRAL_DOMAIN,
         "SIRK_ACME_EMAIL=admin@sir-k.pl",
         ""
     ];
@@ -110,7 +115,7 @@ async function main() {
     fs.renameSync(temporary, targetPath);
 
     process.stdout.write("\nConfiguration saved. Store this URL now; the key is shown only once:\n\n");
-    process.stdout.write("https://central.sir-k.pl:44301/#access=" + accessKey + "\n\n");
+    process.stdout.write(CENTRAL_ORIGIN + "/#access=" + accessKey + "\n\n");
     process.stdout.write("Username: admin\n");
     process.stdout.write("Password: the value you just entered\n");
 }
