@@ -10,15 +10,30 @@ services:
     networks:
       - internal
 
+  auth:
+    build: .
+    restart: unless-stopped
+    command: ["node", "auth/server.js"]
+    env_file: .env
+    environment:
+      SIRK_AUTH_BIND_HOST: 0.0.0.0
+      SIRK_AUTH_PORT: 8081
+    networks:
+      - internal
+
   caddy:
     image: caddy:2.10.0-alpine
     restart: unless-stopped
+    depends_on:
+      - central
+      - auth
     ports:
       - "80:80"
       - "443:443"
     environment:
       SIRK_WEBSITE_DOMAIN: ${SIRK_WEBSITE_DOMAIN:-sirkportal.com}
       SIRK_CENTRAL_DOMAIN: ${SIRK_CENTRAL_DOMAIN:-central.sirkportal.com}
+      SIRK_AUTH_DOMAIN: ${SIRK_AUTH_DOMAIN:-auth.sirkportal.com}
       SIRK_ACME_EMAIL: ${SIRK_ACME_EMAIL}
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
