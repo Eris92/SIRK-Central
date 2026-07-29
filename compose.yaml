@@ -11,6 +11,7 @@ services:
       - internal
 
   auth:
+    profiles: ["auth"]
     build: .
     restart: unless-stopped
     command: ["node", "auth/server.js"]
@@ -26,7 +27,6 @@ services:
     restart: unless-stopped
     depends_on:
       - central
-      - auth
     ports:
       - "80:80"
       - "443:443"
