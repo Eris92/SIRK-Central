@@ -29,6 +29,7 @@ function normalizeRole(value) {
 
 function permissionsFor(role, builtIn) {
     if (builtIn) return ROLE_PERMISSIONS.BreakGlass.slice();
+    if (!role) return [];
     return (ROLE_PERMISSIONS[normalizeRole(role)] || []).slice();
 }
 
