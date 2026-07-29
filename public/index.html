@@ -89,10 +89,11 @@
               <label>Redirect URI<input id="entraRedirectUri" readonly></label>
               <label>Front-channel logout URL<input id="entraLogoutUrl" readonly></label>
               <div class="form-actions">
-                <button id="testEntraButton" type="button" class="secondary">Testuj połączenie</button>
-                <button id="saveEntraButton" type="submit">Zapisz konfigurację</button>
+                <button id="testEntraButton" type="button" class="secondary">Testuj Microsoft Entra</button>
+                <button id="saveEntraButton" type="submit">Zapisz i aktywuj Entra</button>
               </div>
-              <p id="entraMessage" class="error"></p>
+              <p class="muted">Podczas aktualizacji SIRK Central brakujący wewnętrzny sekret SSO jest generowany automatycznie, a Auth Broker uruchamiany razem z Central.</p>
+              <p id="entraMessage" class="error" role="status"></p>
             </form>
           </article>
 
@@ -115,9 +116,10 @@
           <article class="settings-card danger-card">
             <h2>Zmień hasło Break-Glass</h2>
             <form id="breakGlassPasswordForm" class="stack-form">
-              <label>Aktualne hasło<input id="currentBreakGlassPassword" type="password" required></label>
-              <label>Nowe hasło<input id="newBreakGlassPassword" type="password" minlength="14" required></label>
-              <button type="submit">Zmień hasło</button>
+              <label>Aktualne hasło<input id="currentBreakGlassPassword" type="password" autocomplete="current-password" required></label>
+              <label>Nowe hasło<input id="newBreakGlassPassword" type="password" autocomplete="new-password" minlength="14" required></label>
+              <button id="changeBreakGlassPasswordButton" type="submit">Zmień hasło</button>
+              <p id="breakGlassPasswordMessage" class="error" role="status"></p>
             </form>
           </article>
           <article class="settings-card danger-card">

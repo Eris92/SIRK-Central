@@ -28,9 +28,22 @@ git fetch --prune origin
 git checkout "$REPO_REF"
 git pull --ff-only origin "$REPO_REF"
 
+# Central and Auth Broker must always share the same signing secret. Older
+# installations may not have it because Entra was configured later from UI.
+if ! grep -Eq '^SIRK_SSO_SHARED_SECRET=.{43,}$' .env; then
+  command -v openssl >/dev/null 2>&1 || die "openssl is required to generate SIRK_SSO_SHARED_SECRET"
+  sso_secret="$(openssl rand -base64 48 | tr -d '\n')"
+  if grep -q '^SIRK_SSO_SHARED_SECRET=' .env; then
+    sed -i "s|^SIRK_SSO_SHARED_SECRET=.*$|SIRK_SSO_SHARED_SECRET=${sso_secret}|" .env
+  else
+    printf '\nSIRK_SSO_SHARED_SECRET=%s\n' "$sso_secret" >> .env
+  fi
+  chmod 0600 .env
+  log "Generated missing SIRK_SSO_SHARED_SECRET"
+fi
+
 # Auth Broker is part of the standard SIRK Central deployment. Its Entra
-# configuration may now live in the persistent data volume instead of .env,
-# therefore checking SIRK_ENTRA_CLIENT_ID here would incorrectly skip it.
+# configuration may live in the persistent data volume instead of .env.
 compose=(docker compose --profile auth)
 
 log "Validating configuration"
