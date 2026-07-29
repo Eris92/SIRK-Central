@@ -9,28 +9,26 @@
 </head>
 <body>
   <main class="shell">
-    <section id="accessDeniedView" class="login-card" hidden>
-      <div class="mark">S</div>
-      <p class="eyebrow">SIRK Management Platform</p>
-      <h1>Brak dostępu</h1>
-      <p class="muted">Adres nie zawiera prawidłowego klucza dostępu.</p>
-    </section>
     <section id="loginView" class="login-card" hidden>
       <div class="mark">S</div>
       <p class="eyebrow">SIRK Management Platform</p>
       <h1>SIRK Central</h1>
-      <p class="muted">Zaloguj się, aby zarządzać połączeniami lokalnych Portali.</p>
-      <form id="loginForm">
-        <label>Użytkownik<input id="username" autocomplete="username" required></label>
-        <label>Hasło<input id="password" type="password" autocomplete="current-password" required></label>
-        <button type="submit">Zaloguj</button>
-        <p id="loginError" class="error" role="alert"></p>
-      </form>
+      <p class="muted">Zaloguj się kontem organizacyjnym Microsoft Entra.</p>
+      <a id="entraLoginButton" class="button login-provider" href="https://auth.sirkportal.com/login">Zaloguj przez Microsoft</a>
+      <div id="breakGlassPanel" hidden>
+        <div class="login-separator"><span>break-glass</span></div>
+        <form id="loginForm">
+          <label>Użytkownik<input id="username" autocomplete="username" required></label>
+          <label>Hasło<input id="password" type="password" autocomplete="current-password" required></label>
+          <button type="submit">Zaloguj lokalnie</button>
+          <p id="loginError" class="error" role="alert"></p>
+        </form>
+      </div>
     </section>
 
     <section id="dashboardView" class="dashboard" hidden>
       <header>
-        <div><p class="eyebrow">SIRK Central</p><h1>Połączone Portale</h1></div>
+        <div><p class="eyebrow">SIRK Central</p><h1>Połączone Portale</h1><p id="identityLabel" class="muted"></p></div>
         <button id="logoutButton" class="secondary">Wyloguj</button>
       </header>
       <div class="toolbar">
@@ -38,8 +36,8 @@
         <button id="showCreateButton">Dodaj Portal</button>
       </div>
       <form id="createForm" class="create-form" hidden>
-        <label>Identyfikator<input id="portalId" placeholder="firma-warszawa" pattern="[a-z0-9][a-z0-9-]{2,62}" required></label>
-        <label>Nazwa<input id="portalName" placeholder="Firma Warszawa" required></label>
+        <label>Identyfikator<input id="portalId" placeholder="tenant-site" pattern="[a-z0-9][a-z0-9-]{2,62}" required></label>
+        <label>Nazwa<input id="portalName" placeholder="Portal klienta" required></label>
         <button type="submit">Utwórz połączenie</button>
       </form>
       <aside id="tokenPanel" class="token-panel" hidden>
