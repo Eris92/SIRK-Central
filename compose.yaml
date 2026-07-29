@@ -1,0 +1,35 @@
+services:
+  central:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      SIRK_BIND_HOST: 0.0.0.0
+    volumes:
+      - central-data:/var/lib/sirk-central
+    networks:
+      - internal
+
+  caddy:
+    image: caddy:2.10.0-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "44301:443"
+    environment:
+      SIRK_DOMAIN: ${SIRK_DOMAIN:-central.sir-k.pl}
+      SIRK_ACME_EMAIL: ${SIRK_ACME_EMAIL}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - internal
+
+networks:
+  internal:
+
+volumes:
+  central-data:
+  caddy-data:
+  caddy-config:

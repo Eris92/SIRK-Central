@@ -1,0 +1,16 @@
+{
+    email {$SIRK_ACME_EMAIL}
+    acme_ca https://acme-v02.api.letsencrypt.org/directory
+}
+
+{$SIRK_DOMAIN} {
+    encode zstd gzip
+    reverse_proxy central:8080
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Frame-Options "DENY"
+        Referrer-Policy "no-referrer"
+        Permissions-Policy "camera=(), microphone=(), geolocation=()"
+        -Server
+    }
+}
