@@ -28,10 +28,10 @@ git fetch --prune origin
 git checkout "$REPO_REF"
 git pull --ff-only origin "$REPO_REF"
 
-compose=(docker compose)
-if grep -q '^SIRK_ENTRA_CLIENT_ID=' .env; then
-  compose+=(--profile auth)
-fi
+# Auth Broker is part of the standard SIRK Central deployment. Its Entra
+# configuration may now live in the persistent data volume instead of .env,
+# therefore checking SIRK_ENTRA_CLIENT_ID here would incorrectly skip it.
+compose=(docker compose --profile auth)
 
 log "Validating configuration"
 "${compose[@]}" config >/dev/null
