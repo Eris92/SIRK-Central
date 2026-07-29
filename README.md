@@ -134,7 +134,7 @@ Instalacja utworzona przez `deploy/install.sh` jest normalnym klonem Git.
 Aktualizację wykonaj poleceniem:
 
 ```bash
-sudo /opt/sirk-central/deploy/update.sh
+sudo bash /opt/sirk-central/deploy/update.sh
 ```
 
 Skrypt:
@@ -159,7 +159,7 @@ sudo env \
   SIRK_ACME_EMAIL=admin@sirkportal.com \
   SIRK_ADMIN_USERNAME=admin \
   SIRK_SESSION_HOURS=8 \
-  ./deploy/configure-and-start.sh
+  bash ./deploy/configure-and-start.sh
 ```
 
 Konfigurator zapisuje wyłącznie hashe hasła i access key. Pełny URL z kluczem
@@ -168,13 +168,13 @@ jest pokazywany jednorazowo w terminalu.
 Reset hasła administratora bez zmiany access key:
 
 ```bash
-sudo /opt/sirk-central/deploy/reset-admin-password.sh
+sudo bash /opt/sirk-central/deploy/reset-admin-password.sh
 ```
 
 Rotacja access key bez zmiany hasła:
 
 ```bash
-sudo /opt/sirk-central/deploy/rotate-access-key.sh
+sudo bash /opt/sirk-central/deploy/rotate-access-key.sh
 ```
 
 ## Development i testy
