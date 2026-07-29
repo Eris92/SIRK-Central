@@ -8,27 +8,26 @@ function environment() {
     return {
         SIRK_AUTH_ORIGIN: "https://auth.sirkportal.com",
         SIRK_PUBLIC_ORIGIN: "https://central.sirkportal.com",
-        SIRK_ENTRA_CLIENT_ID: "11111111-1111-1111-1111-111111111111",
-        SIRK_ENTRA_CLIENT_SECRET: "secret-value",
         SIRK_SSO_SHARED_SECRET: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_",
-        SIRK_ENTRA_ADMIN_IDENTITIES: "22222222-2222-2222-2222-222222222222:33333333-3333-3333-3333-333333333333"
+        SIRK_DATA_DIR: "/tmp/sirk-central-test"
     };
 }
 
-test("Auth Broker accepts an explicit tid:oid administrator allowlist", () => {
+test("Auth Broker loads stable transport configuration independently from Entra provider settings", () => {
     const config = loadConfig(environment());
-    assert.equal(config.tenant, "organizations");
-    assert.equal(config.allowedIdentities.size, 1);
+    assert.equal(config.authOrigin, "https://auth.sirkportal.com");
+    assert.equal(config.centralOrigin, "https://central.sirkportal.com");
+    assert.equal(config.dataDir, "/tmp/sirk-central-test");
 });
 
-test("Auth Broker refuses to start without an administrator allowlist", () => {
+test("Auth Broker requires the shared SSO secret", () => {
     const env = environment();
-    delete env.SIRK_ENTRA_ADMIN_IDENTITIES;
-    assert.throws(() => loadConfig(env), /SIRK_ENTRA_ADMIN_IDENTITIES/);
+    delete env.SIRK_SSO_SHARED_SECRET;
+    assert.throws(() => loadConfig(env), /SIRK_SSO_SHARED_SECRET/);
 });
 
-test("Auth Broker rejects malformed administrator identities", () => {
+test("Auth Broker requires HTTPS origins", () => {
     const env = environment();
-    env.SIRK_ENTRA_ADMIN_IDENTITIES = "tenant:user";
-    assert.throws(() => loadConfig(env), /tenant-id:object-id/);
+    env.SIRK_AUTH_ORIGIN = "http://auth.local";
+    assert.throws(() => loadConfig(env), /must use HTTPS/);
 });
