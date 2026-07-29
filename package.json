@@ -1,5 +1,5 @@
 {
-  "name": "sirk-portal-central",
+  "name": "sirk-central",
   "version": "0.1.0",
   "private": true,
   "description": "Central management plane and outbound tunnel broker for SIRK Portal.",
