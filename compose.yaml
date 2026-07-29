@@ -19,6 +19,9 @@ services:
     environment:
       SIRK_AUTH_BIND_HOST: 0.0.0.0
       SIRK_AUTH_PORT: 8081
+      SIRK_DATA_DIR: /var/lib/sirk-central
+    volumes:
+      - central-data:/var/lib/sirk-central:ro
     networks:
       - internal
 
