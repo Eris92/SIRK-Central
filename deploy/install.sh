@@ -18,9 +18,13 @@ die() {
 }
 
 on_error() {
-  printf '[SIRK] ERROR: installation failed at line %s.\n' "$1" >&2
+  local line="$1"
+  local command="$2"
+  if [[ "${BASH_SUBSHELL:-0}" -eq 0 ]]; then
+    printf '[SIRK] ERROR: installation failed at line %s: %s\n' "$line" "$command" >&2
+  fi
 }
-trap 'on_error "$LINENO"' ERR
+trap 'on_error "$LINENO" "$BASH_COMMAND"' ERR
 
 usage() {
   cat <<'EOF'
@@ -89,14 +93,6 @@ valid_domain "$SIRK_CENTRAL_DOMAIN" || die "invalid Central domain: $SIRK_CENTRA
 [[ "$SIRK_SESSION_HOURS" =~ ^[0-9]+$ ]] || die "session lifetime must be numeric"
 (( SIRK_SESSION_HOURS >= 1 && SIRK_SESSION_HOURS <= 24 )) || die "session lifetime must be between 1 and 24 hours"
 
-read -r -s -p "Initial administrator password (minimum 14 characters): " ADMIN_PASSWORD
-printf '\n'
-read -r -s -p "Repeat administrator password: " ADMIN_PASSWORD_CONFIRMATION
-printf '\n'
-[[ "$ADMIN_PASSWORD" == "$ADMIN_PASSWORD_CONFIRMATION" ]] || die "passwords do not match"
-(( ${#ADMIN_PASSWORD} >= 14 )) || die "password must contain at least 14 characters"
-unset ADMIN_PASSWORD_CONFIRMATION
-
 [[ -r /etc/os-release ]] || die "/etc/os-release not found"
 # shellcheck disable=SC1091
 . /etc/os-release
@@ -152,42 +148,21 @@ cd "$INSTALL_DIR"
 log "Building setup image"
 docker build --tag sirk-central:setup .
 
-log "Generating credential hashes"
-ADMIN_PASSWORD_HASH="$(printf '%s' "$ADMIN_PASSWORD" | docker run --rm -i sirk-central:setup node -e '
-let input = "";
-process.stdin.setEncoding("utf8");
-process.stdin.on("data", (chunk) => input += chunk);
-process.stdin.on("end", () => {
-  const { hashSecret } = require("./src/security");
-  process.stdout.write(hashSecret(input));
-});
-')"
-unset ADMIN_PASSWORD
+log "Creating production configuration"
+docker run --rm -it \
+  --user 0:0 \
+  --volume "${INSTALL_DIR}:/config" \
+  --env SIRK_CONFIG_TARGET=/config \
+  --env "SIRK_WEBSITE_DOMAIN=${SIRK_WEBSITE_DOMAIN}" \
+  --env "SIRK_CENTRAL_DOMAIN=${SIRK_CENTRAL_DOMAIN}" \
+  --env "SIRK_ACME_EMAIL=${SIRK_ACME_EMAIL}" \
+  --env "SIRK_ADMIN_USERNAME=${SIRK_ADMIN_USERNAME}" \
+  --env "SIRK_SESSION_HOURS=${SIRK_SESSION_HOURS}" \
+  sirk-central:setup \
+  node scripts/configure-production.js
 
-mapfile -t ACCESS_DATA < <(docker run --rm sirk-central:setup node -e '
-const { randomToken, hashAccessKey } = require("./src/security");
-const key = randomToken(32);
-process.stdout.write(key + "\n" + hashAccessKey(key) + "\n");
-')
-[[ "${#ACCESS_DATA[@]}" -eq 2 ]] || die "failed to generate URL access key"
-ACCESS_KEY="${ACCESS_DATA[0]}"
-ACCESS_KEY_HASH="${ACCESS_DATA[1]}"
-
-cat > .env <<EOF
-SIRK_BIND_HOST=127.0.0.1
-SIRK_PORT=8080
-SIRK_PUBLIC_ORIGIN=https://${SIRK_CENTRAL_DOMAIN}
-SIRK_ADMIN_USERNAME=${SIRK_ADMIN_USERNAME}
-SIRK_ADMIN_PASSWORD_HASH='${ADMIN_PASSWORD_HASH}'
-SIRK_ACCESS_KEY_HASH='${ACCESS_KEY_HASH}'
-SIRK_DATA_DIR=/var/lib/sirk-central
-SIRK_SESSION_HOURS=${SIRK_SESSION_HOURS}
-SIRK_WEBSITE_DOMAIN=${SIRK_WEBSITE_DOMAIN}
-SIRK_CENTRAL_DOMAIN=${SIRK_CENTRAL_DOMAIN}
-SIRK_ACME_EMAIL=${SIRK_ACME_EMAIL}
-EOF
+test -s .env || die "configuration file was not created"
 chmod 0600 .env
-unset ADMIN_PASSWORD_HASH ACCESS_KEY_HASH
 
 if [[ "$CONFIGURE_UFW" == "1" ]]; then
   SSH_PORT="${SIRK_SSH_PORT:-}"
@@ -216,10 +191,8 @@ docker compose ps
 printf '\nSIRK Central installation completed.\n\n'
 printf 'Website:      https://%s\n' "$SIRK_WEBSITE_DOMAIN"
 printf 'Central:      https://%s\n' "$SIRK_CENTRAL_DOMAIN"
-printf 'Username:     %s\n' "$SIRK_ADMIN_USERNAME"
-printf 'Access URL:   https://%s/#access=%s\n\n' "$SIRK_CENTRAL_DOMAIN" "$ACCESS_KEY"
-printf 'Store the Access URL now. The plaintext access key is not written to .env or logs.\n'
+printf 'Username:     %s\n\n' "$SIRK_ADMIN_USERNAME"
+printf 'The one-time Access URL was displayed by the configuration step above.\n'
 printf 'Verify DNS and run:\n'
 printf '  curl -I https://%s\n' "$SIRK_WEBSITE_DOMAIN"
 printf '  curl -fsS https://%s/healthz\n' "$SIRK_CENTRAL_DOMAIN"
-unset ACCESS_KEY
