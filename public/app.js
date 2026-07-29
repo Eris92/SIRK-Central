@@ -2,44 +2,32 @@
 
 const loginView = document.getElementById("loginView");
 const dashboardView = document.getElementById("dashboardView");
-const accessDeniedView = document.getElementById("accessDeniedView");
 const portalList = document.getElementById("portalList");
+const breakGlassPanel = document.getElementById("breakGlassPanel");
 let refreshTimer = null;
 const fragment = new URLSearchParams(location.hash.replace(/^#/, ""));
 const accessKey = fragment.get("access") || "";
 
 async function api(path, options) {
-    const response = await fetch(path, Object.assign({
-        credentials: "same-origin",
-        headers: {
-            "Content-Type": "application/json",
-            "Authorization": "Bearer " + accessKey
-        }
-    }, options || {}));
+    const headers = { "Content-Type": "application/json" };
+    if (accessKey) headers.Authorization = "Bearer " + accessKey;
+    const response = await fetch(path, Object.assign({ credentials: "same-origin", headers }, options || {}));
     const data = await response.json();
     if (!response.ok) throw Object.assign(new Error(data.error || "Błąd żądania."), { status: response.status });
     return data;
 }
 
-function showLogin() {
-    accessDeniedView.hidden = true;
+function showLogin(enableBreakGlass) {
     loginView.hidden = false;
     dashboardView.hidden = true;
-    if (refreshTimer) clearInterval(refreshTimer);
-}
-
-function showAccessDenied() {
-    accessDeniedView.hidden = false;
-    loginView.hidden = true;
-    dashboardView.hidden = true;
+    breakGlassPanel.hidden = !enableBreakGlass;
     if (refreshTimer) clearInterval(refreshTimer);
 }
 
 async function loadPortals() {
     try {
         const result = await api("/api/portals");
-        document.getElementById("onlineCount").textContent =
-            String(result.portals.filter((item) => item.status === "online").length);
+        document.getElementById("onlineCount").textContent = String(result.portals.filter((item) => item.status === "online").length);
         portalList.replaceChildren(...result.portals.map((portal) => {
             const card = document.createElement("article");
             card.className = "portal-card";
@@ -55,23 +43,23 @@ async function loadPortals() {
             button.textContent = "Połącz";
             button.disabled = portal.status !== "online";
             button.addEventListener("click", async () => {
-                const connected = await api("/api/portals/" + encodeURIComponent(portal.id) + "/connect", {
-                    method: "POST",
-                    body: "{}"
-                });
+                const connected = await api("/api/portals/" + encodeURIComponent(portal.id) + "/connect", { method: "POST", body: "{}" });
                 location.assign(connected.url);
             });
             card.append(status, title, id, button);
             return card;
         }));
     } catch (error) {
-        if (error.status === 401) showLogin();
+        if (error.status === 401) showLogin(Boolean(accessKey));
     }
 }
 
-async function showDashboard() {
+async function showDashboard(identity) {
     loginView.hidden = true;
     dashboardView.hidden = false;
+    document.getElementById("identityLabel").textContent = identity
+        ? (identity.displayName || identity.username || "") + (identity.source === "entra" ? " · Microsoft Entra" : " · break-glass")
+        : "";
     await loadPortals();
     if (refreshTimer) clearInterval(refreshTimer);
     refreshTimer = setInterval(loadPortals, 5000);
@@ -82,7 +70,7 @@ document.getElementById("loginForm").addEventListener("submit", async (event) =>
     const error = document.getElementById("loginError");
     error.textContent = "";
     try {
-        await api("/api/login", {
+        const result = await api("/api/login", {
             method: "POST",
             body: JSON.stringify({
                 username: document.getElementById("username").value,
@@ -90,15 +78,16 @@ document.getElementById("loginForm").addEventListener("submit", async (event) =>
             })
         });
         document.getElementById("password").value = "";
-        await showDashboard();
+        await showDashboard(result);
     } catch (requestError) {
         error.textContent = requestError.message;
     }
 });
 
 document.getElementById("logoutButton").addEventListener("click", async () => {
-    await api("/api/logout", { method: "POST", body: "{}" });
-    showLogin();
+    const result = await api("/api/logout", { method: "POST", body: "{}" });
+    if (result.logoutUrl) location.assign(result.logoutUrl);
+    else showLogin(Boolean(accessKey));
 });
 
 document.getElementById("showCreateButton").addEventListener("click", () => {
@@ -122,10 +111,14 @@ document.getElementById("createForm").addEventListener("submit", async (event) =
     await loadPortals();
 });
 
-if (!accessKey) {
-    showAccessDenied();
-} else {
-    api("/api/access")
-        .then(() => api("/api/session").then(showDashboard).catch(showLogin))
-        .catch(showAccessDenied);
-}
+api("/api/session")
+    .then(showDashboard)
+    .catch(async () => {
+        if (!accessKey) return showLogin(false);
+        try {
+            await api("/api/access");
+            showLogin(true);
+        } catch (_) {
+            showLogin(false);
+        }
+    });
