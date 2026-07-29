@@ -46,17 +46,24 @@ function create(options) {
         };
     }
 
-    function update(input) {
+    function update(input, updateOptions) {
         const current = read();
+        const allowSecurity = Boolean(updateOptions && updateOptions.allowSecurity);
         const tenant = String(input.tenant || "organizations").trim().toLowerCase();
         if (!(tenant === "organizations" || tenant === "common" || UUID.test(tenant))) throw new Error("Tenant must be organizations, common or a tenant UUID.");
         const clientId = String(input.clientId || "").trim();
         if (!UUID.test(clientId)) throw new Error("Application Client ID is invalid.");
-        const identities = Array.isArray(input.allowedIdentities) ? input.allowedIdentities : String(input.allowedIdentities || "").split(/[\n,]+/);
-        const allowedIdentities = [...new Set(identities.map(v => String(v).trim().toLowerCase()).filter(Boolean))];
-        if (allowedIdentities.some(v => !IDENTITY.test(v))) throw new Error("Allowed identities must use tenant-id:object-id format.");
-        const suppliedSecret = String(input.clientSecret || "");
-        const clientSecret = suppliedSecret || current.clientSecret;
+
+        let allowedIdentities = current.allowedIdentities;
+        let clientSecret = current.clientSecret;
+        if (allowSecurity) {
+            const identities = Array.isArray(input.allowedIdentities) ? input.allowedIdentities : String(input.allowedIdentities || "").split(/[\n,]+/);
+            allowedIdentities = [...new Set(identities.map(v => String(v).trim().toLowerCase()).filter(Boolean))];
+            if (allowedIdentities.some(v => !IDENTITY.test(v))) throw new Error("Allowed identities must use tenant-id:object-id format.");
+            const suppliedSecret = String(input.clientSecret || "");
+            clientSecret = suppliedSecret || current.clientSecret;
+        }
+
         if (Boolean(input.enabled) && !clientSecret) throw new Error("Client Secret is required before enabling Entra.");
         const value = {
             schema: 1,
