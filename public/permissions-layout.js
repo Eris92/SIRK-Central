@@ -14,6 +14,7 @@
 
   const accessButton = document.getElementById("accessButton");
   const settingsButton = document.getElementById("settingsButton");
+  const backButton = document.getElementById("backButton");
   const accessView = document.getElementById("accessView");
   const settingsView = document.getElementById("settingsView");
   const portalsView = document.getElementById("portalsView");
@@ -68,6 +69,7 @@
     settingsView.hidden = name !== "settings";
     accessView.hidden = name !== "access";
     if (breakGlassView) breakGlassView.hidden = name !== "breakglass";
+    if (backButton) backButton.hidden = name === "portals";
     if (pageTitle) pageTitle.textContent = name === "access" ? selectedLabels().permissions : selectedLabels().settings;
   }
 
