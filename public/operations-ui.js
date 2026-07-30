@@ -16,50 +16,67 @@
     }
 
     function ensureUi(settings) {
-        if (document.getElementById("operationsSettingsBlock")) return;
-        const block = document.createElement("section");
-        block.id = "operationsSettingsBlock";
-        block.hidden = true;
-        block.style.marginTop = "18px";
-        block.innerHTML = `
-          <nav class="settings-tabs" id="operationsTabs" aria-label="Operations settings">
-            <button type="button" class="settings-tab active" id="updatesTab" data-settings-tab="updates"></button>
-            <button type="button" class="settings-tab" id="backupTab" data-settings-tab="backup"></button>
-          </nav>
-          <div class="settings-panels">
-            <section id="settingsTabUpdates" class="settings-tab-panel">
-              <article class="settings-card">
-                <h2 id="updatesTitle"></h2>
-                <p id="updateHelp" class="muted"></p>
-                <p id="updateStatus" class="muted"></p>
-                <div class="form-actions">
-                  <button type="button" class="secondary" id="refreshUpdateButton"></button>
-                  <button type="button" id="runUpdateButton"></button>
-                </div>
-                <p id="updateMessage" class="error" role="status"></p>
-              </article>
-            </section>
-            <section id="settingsTabBackup" class="settings-tab-panel" hidden>
-              <article class="settings-card">
-                <h2 id="backupTitle"></h2>
-                <p id="backupHelp" class="muted"></p>
-                <div class="form-actions">
-                  <button type="button" class="secondary" id="refreshBackupButton"></button>
-                  <button type="button" id="runBackupButton"></button>
-                </div>
-                <div id="backupList" class="users-list"></div>
-                <p id="backupMessage" class="error" role="status"></p>
-              </article>
-            </section>
-          </div>`;
-        settings.append(block);
+        if (document.getElementById("settingsTabUpdates")) return;
+        const nav = settings.querySelector(":scope > .settings-tabs");
+        const panels = settings.querySelector(":scope > .settings-panels");
+        if (!nav || !panels) throw new Error("Primary settings navigation is unavailable.");
+
+        const updatesTab = document.createElement("button");
+        updatesTab.type = "button";
+        updatesTab.className = "settings-tab";
+        updatesTab.id = "updatesTab";
+        updatesTab.dataset.operationsTab = "updates";
+
+        const backupTab = document.createElement("button");
+        backupTab.type = "button";
+        backupTab.className = "settings-tab";
+        backupTab.id = "backupTab";
+        backupTab.dataset.operationsTab = "backup";
+        nav.append(updatesTab, backupTab);
+
+        const updatesPanel = document.createElement("section");
+        updatesPanel.id = "settingsTabUpdates";
+        updatesPanel.className = "settings-tab-panel";
+        updatesPanel.hidden = true;
+        updatesPanel.innerHTML = `
+          <article class="settings-card">
+            <h2 id="updatesTitle"></h2>
+            <p id="updateHelp" class="muted"></p>
+            <p id="updateStatus" class="muted"></p>
+            <div class="form-actions">
+              <button type="button" class="secondary" id="refreshUpdateButton"></button>
+              <button type="button" id="runUpdateButton"></button>
+            </div>
+            <p id="updateMessage" class="error" role="status"></p>
+          </article>`;
+
+        const backupPanel = document.createElement("section");
+        backupPanel.id = "settingsTabBackup";
+        backupPanel.className = "settings-tab-panel";
+        backupPanel.hidden = true;
+        backupPanel.innerHTML = `
+          <article class="settings-card">
+            <h2 id="backupTitle"></h2>
+            <p id="backupHelp" class="muted"></p>
+            <div class="form-actions">
+              <button type="button" class="secondary" id="refreshBackupButton"></button>
+              <button type="button" id="runBackupButton"></button>
+            </div>
+            <div id="backupList" class="users-list"></div>
+            <p id="backupMessage" class="error" role="status"></p>
+          </article>`;
+        panels.append(updatesPanel, backupPanel);
     }
 
     function selectPanel(name) {
-        document.getElementById("settingsTabUpdates").hidden = name !== "updates";
-        document.getElementById("settingsTabBackup").hidden = name !== "backup";
-        document.getElementById("updatesTab").classList.toggle("active", name === "updates");
-        document.getElementById("backupTab").classList.toggle("active", name === "backup");
+        const settings = document.getElementById("settingsView");
+        for (const button of settings.querySelectorAll(":scope > .settings-tabs > .settings-tab")) {
+            const active = button.dataset.operationsTab === name;
+            button.classList.toggle("active", active);
+        }
+        for (const panel of settings.querySelectorAll(":scope > .settings-panels > .settings-tab-panel")) {
+            panel.hidden = panel.id !== (name === "updates" ? "settingsTabUpdates" : "settingsTabBackup");
+        }
     }
 
     async function loadUpdateStatus() {
@@ -131,9 +148,16 @@
         if (!(identity.builtIn || identity.role === "Admin" || identity.role === "SecAdmin")) return;
 
         ensureUi(settings);
-        document.getElementById("operationsSettingsBlock").hidden = false;
-        document.getElementById("updatesTab").addEventListener("click", () => { selectPanel("updates"); loadUpdateStatus(); });
-        document.getElementById("backupTab").addEventListener("click", () => { selectPanel("backup"); loadBackups(); });
+        document.getElementById("updatesTab").addEventListener("click", event => {
+            event.stopImmediatePropagation();
+            selectPanel("updates");
+            loadUpdateStatus();
+        }, true);
+        document.getElementById("backupTab").addEventListener("click", event => {
+            event.stopImmediatePropagation();
+            selectPanel("backup");
+            loadBackups();
+        }, true);
         document.getElementById("refreshUpdateButton").addEventListener("click", loadUpdateStatus);
         document.getElementById("refreshBackupButton").addEventListener("click", loadBackups);
         document.getElementById("runUpdateButton").addEventListener("click", async () => {
@@ -162,7 +186,6 @@
             }
         });
         applyLanguage();
-        loadUpdateStatus();
         new MutationObserver(applyLanguage).observe(document.documentElement, { attributes: true, attributeFilter: ["lang"] });
     }
 
