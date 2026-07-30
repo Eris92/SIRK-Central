@@ -82,6 +82,13 @@ function sendJson(res, status, body, headOnly) {
     res.end(headOnly ? undefined : data);
 }
 
+function sendCaptured(res, captured, body, headOnly) {
+    const output = body === undefined ? captured.body : Buffer.from(body);
+    const headers = Object.assign({}, captured.headers, { "content-length": String(output.length), "cache-control": "no-store" });
+    res.writeHead(captured.statusCode, headers);
+    res.end(headOnly ? undefined : output);
+}
+
 function redirect(res, location) {
     res.writeHead(302, { Location: location, "Cache-Control": "no-store", "Content-Length": "0" });
     res.end();
@@ -92,6 +99,7 @@ async function main() {
     const app = createApp(config);
     const requestHandler = app.server.listeners("request")[0];
     const routingScript = fs.readFileSync(path.join(__dirname, "..", "public", "workspace-routing.js"));
+    const initScript = fs.readFileSync(path.join(__dirname, "..", "public", "workspace-init.js"));
     if (typeof requestHandler !== "function") throw new Error("SIRK Central request handler is unavailable.");
 
     const server = http.createServer(async (req, res) => {
@@ -111,6 +119,17 @@ async function main() {
                 return;
             }
 
+            if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/workspace-init.js") {
+                res.writeHead(200, {
+                    "Content-Type": "text/javascript; charset=utf-8",
+                    "Content-Length": String(initScript.length),
+                    "Cache-Control": "no-store",
+                    "X-Content-Type-Options": "nosniff"
+                });
+                res.end(headOnly ? undefined : initScript);
+                return;
+            }
+
             if (workspace && (req.method === "GET" || req.method === "HEAD")) {
                 const sessionResult = await capture(requestHandler, cloneRequest(req, "/api/session", "GET"));
                 if (sessionResult.statusCode !== 200) return redirect(res, "/");
@@ -124,8 +143,12 @@ async function main() {
                     return sendJson(res, 403, { ok: false, error: "Workspace access denied." }, headOnly);
                 }
 
-                const forwarded = cloneRequest(req, "/" + url.search, headOnly ? "HEAD" : "GET");
-                return requestHandler(forwarded, res);
+                const page = await capture(requestHandler, cloneRequest(req, "/" + url.search, "GET"));
+                let html = page.body.toString("utf8");
+                if (page.statusCode === 200 && String(page.headers["content-type"] || "").includes("text/html") && !html.includes("/workspace-init.js")) {
+                    html = html.replace("</body>", '<script src="/workspace-init.js" defer></script></body>');
+                }
+                return sendCaptured(res, page, html, headOnly);
             }
 
             if (url.pathname.startsWith("/api/break-glass/")) {
