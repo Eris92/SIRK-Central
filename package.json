@@ -5,8 +5,8 @@
   "description": "Central management plane and outbound tunnel broker for SIRK Portal.",
   "main": "src/entry.js",
   "scripts": {
-    "start": "node src/entry.js",
-    "dev": "node --watch src/entry.js",
+    "start": "node -r ./src/preload-api.js src/entry.js",
+    "dev": "node --watch -r ./src/preload-api.js src/entry.js",
     "test": "node --test",
     "hash-password": "node scripts/hash-password.js",
     "generate-access-key": "node scripts/generate-access-key.js"
