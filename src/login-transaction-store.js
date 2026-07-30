@@ -70,27 +70,42 @@ function create(options = {}) {
         return { token: id + "." + token, expiresAtUtc: new Date(timestamp + lifetimeMs).toISOString() };
     }
 
-    function consume(value, context = {}) {
+    function resolve(value, context = {}, consumeTransaction = false) {
         cleanup();
         const match = String(value || "").match(/^([A-Za-z0-9_-]{16,64})\.([A-Za-z0-9_-]{32,128})$/);
         if (!match) return null;
         const item = state.transactions[match[1]];
         if (!item) return null;
-        item.attempts += 1;
         const valid = safeEqual(item.tokenHash, digest(match[2])) &&
             safeEqual(item.ipHash, digest(context.ip || "")) &&
             safeEqual(item.userAgentHash, digest(context.userAgent || "")) &&
-            !item.usedAt && item.expiresAt > now() && item.attempts <= maxAttempts;
-        if (!valid) {
-            if (item.attempts >= maxAttempts) delete state.transactions[match[1]];
-            persist();
-            return null;
-        }
-        item.usedAt = now();
+            !item.usedAt && item.expiresAt > now() && item.attempts < maxAttempts;
+        if (!valid) return null;
         const identity = JSON.parse(JSON.stringify(item.identity));
-        delete state.transactions[match[1]];
-        persist();
+        if (consumeTransaction) {
+            item.attempts += 1;
+            item.usedAt = now();
+            delete state.transactions[match[1]];
+            persist();
+        }
         return identity;
+    }
+
+    function inspect(value, context = {}) {
+        return resolve(value, context, false);
+    }
+
+    function consume(value, context = {}) {
+        const identity = resolve(value, context, true);
+        if (identity) return identity;
+        const id = String(value || "").split(".")[0];
+        const item = state.transactions[id];
+        if (item) {
+            item.attempts += 1;
+            if (item.attempts >= maxAttempts) delete state.transactions[id];
+            persist();
+        }
+        return null;
     }
 
     function cancel(value) {
@@ -102,7 +117,7 @@ function create(options = {}) {
     }
 
     cleanup();
-    return { issue, consume, cancel, cleanup, filePath };
+    return { issue, inspect, consume, cancel, cleanup, filePath };
 }
 
 module.exports = { create, digest };
