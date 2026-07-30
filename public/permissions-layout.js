@@ -1,177 +1,70 @@
 "use strict";
 
 (function () {
-  const loginLink = document.querySelector("a.login-provider");
-  if (loginLink) {
-    loginLink.target = "_self";
-    loginLink.rel = "noopener";
-    loginLink.addEventListener("click", function (event) {
-      if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
-      event.preventDefault();
-      window.location.assign(loginLink.href);
-    }, { capture: true });
-  }
+  const loginLink=document.querySelector("a.login-provider");
+  if(loginLink){loginLink.target="_self";loginLink.rel="noopener";loginLink.addEventListener("click",function(event){if(event.button!==0||event.ctrlKey||event.metaKey||event.shiftKey||event.altKey)return;event.preventDefault();window.location.assign(loginLink.href);},{capture:true});}
 
-  const accessButton = document.getElementById("accessButton");
-  const settingsButton = document.getElementById("settingsButton");
-  const backButton = document.getElementById("backButton");
-  const accessView = document.getElementById("accessView");
-  const settingsView = document.getElementById("settingsView");
-  const portalsView = document.getElementById("portalsView");
-  const breakGlassView = document.getElementById("breakGlassView");
-  const pageTitle = document.getElementById("pageTitle");
-  if (!accessButton || !settingsButton || !accessView || !settingsView) return;
+  const accessButton=document.getElementById("accessButton"),settingsButton=document.getElementById("settingsButton"),backButton=document.getElementById("backButton"),accessView=document.getElementById("accessView"),settingsView=document.getElementById("settingsView"),portalsView=document.getElementById("portalsView"),breakGlassView=document.getElementById("breakGlassView"),pageTitle=document.getElementById("pageTitle"),headerActions=document.querySelector(".header-actions"),dashboard=document.getElementById("dashboardView");
+  if(!accessButton||!settingsButton||!accessView||!settingsView||!dashboard)return;
 
-  const labels = {
-    pl: {permissions:"Uprawnienia",settings:"Ustawienia",my:"Twoje uprawnienia",users:"Użytkownicy",add:"Dodaj konto",roles:"Zakres ról",teams:"Zespoły",policy:"Polityka Portalu",simulate:"Symulacja dostępu",entraError:"Nie udało się wczytać konfiguracji Microsoft Entra."},
-    en: {permissions:"Permissions",settings:"Settings",my:"Your permissions",users:"Users",add:"Add account",roles:"Role scope",teams:"Teams",policy:"Portal policy",simulate:"Access simulation",entraError:"Microsoft Entra configuration could not be loaded."}
+  const labels={
+    pl:{permissions:"Uprawnienia",settings:"Ustawienia",security:"Bezpieczeństwo",my:"Twoje uprawnienia",users:"Użytkownicy",add:"Dodaj konto",roles:"Zakres ról",teams:"Zespoły",policy:"Polityka Portalu",simulate:"Symulacja dostępu",approvals:"Oczekujące role",sessions:"Aktywne sesje",entra:"Microsoft Entra",breakglass:"Break-Glass",securityPolicies:"Polityki bezpieczeństwa",audit:"Audyt",incidents:"Incydenty",entraError:"Nie udało się wczytać konfiguracji Microsoft Entra."},
+    en:{permissions:"Permissions",settings:"Settings",security:"Security",my:"Your permissions",users:"Users",add:"Add account",roles:"Role scope",teams:"Teams",policy:"Portal policy",simulate:"Access simulation",approvals:"Pending roles",sessions:"Active sessions",entra:"Microsoft Entra",breakglass:"Break-Glass",securityPolicies:"Security policies",audit:"Audit",incidents:"Incidents",entraError:"Microsoft Entra configuration could not be loaded."}
   };
-  function lang(){return document.documentElement.lang === "en" ? "en" : "pl";}
-  function selectedLabels(){return labels[lang()];}
+  function lang(){return document.documentElement.lang==="en"?"en":"pl";}function selectedLabels(){return labels[lang()];}
+  function requestHeaders(){const headers={"Content-Type":"application/json"},params=new URLSearchParams(location.hash.replace(/^#/,"")),access=params.get("access");if(access)headers.Authorization="Bearer "+access;return headers;}
+  async function request(path,options){const response=await fetch(path,Object.assign({credentials:"same-origin",headers:requestHeaders(),cache:"no-store"},options||{})),result=await response.json();if(!response.ok)throw new Error(result.error||"Request failed.");return result;}
+  function text(value){return value===null||value===undefined||value===""?"—":String(value);}
+  function date(value){return value?new Date(value).toLocaleString(lang()):"—";}
 
   accessButton.removeAttribute("data-i18n");
-  const settingsPanels = settingsView.querySelector(".settings-panels");
-  const accessPanels = accessView.querySelector(".settings-panels");
-  const oldSettingsNav = settingsView.querySelector(".settings-tabs");
-  const oldAccessNav = accessView.querySelector(".settings-tabs");
-  const entraPanel = document.getElementById("settingsTabEntra");
-  const panels = {
-    my: settingsView.querySelector(".permissions-summary"),
-    users: document.getElementById("settingsTabUsers"),
-    add: document.getElementById("settingsTabAddUser"),
-    roles: document.getElementById("settingsTabRoles"),
-    teams: document.getElementById("accessTabTeams"),
-    policy: document.getElementById("accessTabPortalPolicy"),
-    simulate: document.getElementById("accessTabSimulate")
-  };
+  const settingsPanels=settingsView.querySelector(".settings-panels"),accessPanels=accessView.querySelector(".settings-panels"),oldSettingsNav=settingsView.querySelector(".settings-tabs"),oldAccessNav=accessView.querySelector(".settings-tabs"),entraPanel=document.getElementById("settingsTabEntra");
+  const panels={my:settingsView.querySelector(".permissions-summary"),users:document.getElementById("settingsTabUsers"),add:document.getElementById("settingsTabAddUser"),roles:document.getElementById("settingsTabRoles"),teams:document.getElementById("accessTabTeams"),policy:document.getElementById("accessTabPortalPolicy"),simulate:document.getElementById("accessTabSimulate")};
+  if(oldSettingsNav)for(const button of oldSettingsNav.querySelectorAll("button")){const isEntra=button.dataset.settingsTab==="entra";button.hidden=!isEntra;button.classList.toggle("active",isEntra);}
+  if(panels.my&&panels.my.parentElement!==accessPanels)accessPanels.prepend(panels.my);
+  for(const key of["users","add","roles"]){const panel=panels[key];if(panel&&panel.parentElement!==accessPanels)accessPanels.insertBefore(panel,panels.teams||null);}
 
-  if (oldSettingsNav) {
-    for (const button of oldSettingsNav.querySelectorAll("button")) {
-      const isEntra = button.dataset.settingsTab === "entra";
-      button.hidden = !isEntra;
-      button.classList.toggle("active", isEntra);
-    }
-  }
-  if (panels.my && panels.my.parentElement !== accessPanels) accessPanels.prepend(panels.my);
-  for (const key of ["users","add","roles"]) {
-    const panel = panels[key];
-    if (panel && panel.parentElement !== accessPanels) accessPanels.insertBefore(panel, panels.teams || null);
-  }
+  const navigation=document.createElement("nav");navigation.className="settings-tabs permissions-tabs";navigation.setAttribute("aria-label","Permissions sections");let activeTab="users",openingPermissions=false;
+  for(const key of["my","users","add","roles","teams","policy","simulate"]){const button=document.createElement("button");button.type="button";button.className="settings-tab";button.dataset.permissionsTab=key;button.addEventListener("click",()=>showTab(key));navigation.append(button);}
+  if(oldAccessNav)oldAccessNav.replaceWith(navigation);else accessView.prepend(navigation);
 
-  const navigation = document.createElement("nav");
-  navigation.className = "settings-tabs permissions-tabs";
-  navigation.setAttribute("aria-label", "Permissions sections");
-  let activeTab = "users";
-  let openingPermissions = false;
+  const securityButton=document.createElement("button");securityButton.type="button";securityButton.id="securityButton";securityButton.className="secondary";securityButton.hidden=true;
+  headerActions.insertBefore(securityButton,settingsButton);
+  const securityView=document.createElement("section");securityView.id="securityView";securityView.hidden=true;securityView.innerHTML='<nav class="settings-tabs security-tabs"></nav><div class="settings-panels security-panels"></div>';
+  dashboard.insertBefore(securityView,breakGlassView);
+  const securityNav=securityView.querySelector(".security-tabs"),securityPanels=securityView.querySelector(".security-panels");
+  let securityData=null,activeSecurityTab="approvals";
+  const securityKeys=["approvals","sessions","entra","breakglass","securityPolicies","audit","incidents"];
+  for(const key of securityKeys){const button=document.createElement("button");button.type="button";button.className="settings-tab";button.dataset.securityTab=key;button.addEventListener("click",()=>showSecurityTab(key));securityNav.append(button);const panel=document.createElement("section");panel.className="settings-tab-panel";panel.dataset.securityPanel=key;panel.hidden=key!==activeSecurityTab;securityPanels.append(panel);}
 
-  function showOnlyView(name) {
-    if (portalsView) portalsView.hidden = name !== "portals";
-    settingsView.hidden = name !== "settings";
-    accessView.hidden = name !== "access";
-    if (breakGlassView) breakGlassView.hidden = name !== "breakglass";
-    if (backButton) backButton.hidden = name === "portals";
-    if (pageTitle) pageTitle.textContent = name === "access" ? selectedLabels().permissions : selectedLabels().settings;
-  }
+  function showOnlyView(name){if(portalsView)portalsView.hidden=name!=="portals";settingsView.hidden=name!=="settings";accessView.hidden=name!=="access";securityView.hidden=name!=="security";if(breakGlassView)breakGlassView.hidden=name!=="breakglass";if(backButton)backButton.hidden=name==="portals";if(pageTitle)pageTitle.textContent=name==="access"?selectedLabels().permissions:name==="security"?selectedLabels().security:selectedLabels().settings;}
+  function showTab(name){activeTab=panels[name]?name:"users";for(const[key,panel]of Object.entries(panels))if(panel)panel.hidden=key!==activeTab;if(entraPanel)entraPanel.hidden=true;for(const button of navigation.querySelectorAll("button"))button.classList.toggle("active",button.dataset.permissionsTab===activeTab);}
+  function showSecurityTab(name){activeSecurityTab=securityKeys.includes(name)?name:"approvals";for(const panel of securityPanels.children)panel.hidden=panel.dataset.securityPanel!==activeSecurityTab;for(const button of securityNav.querySelectorAll("button"))button.classList.toggle("active",button.dataset.securityTab===activeSecurityTab);renderSecurity();}
 
-  function showTab(name) {
-    activeTab = panels[name] ? name : "users";
-    for (const [key,panel] of Object.entries(panels)) if (panel) panel.hidden = key !== activeTab;
-    if (entraPanel) entraPanel.hidden = true;
-    for (const button of navigation.querySelectorAll("button")) button.classList.toggle("active", button.dataset.permissionsTab === activeTab);
-  }
+  function updateLabels(){const selected=selectedLabels();accessButton.textContent=selected.permissions;securityButton.textContent=selected.security;for(const button of navigation.querySelectorAll("button"))button.textContent=selected[button.dataset.permissionsTab];for(const button of securityNav.querySelectorAll("button"))button.textContent=selected[button.dataset.securityTab];if(!accessView.hidden&&pageTitle)pageTitle.textContent=selected.permissions;if(!settingsView.hidden&&pageTitle)pageTitle.textContent=selected.settings;if(!securityView.hidden&&pageTitle)pageTitle.textContent=selected.security;}
 
-  for (const key of ["my","users","add","roles","teams","policy","simulate"]) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "settings-tab";
-    button.dataset.permissionsTab = key;
-    button.addEventListener("click", function(){showTab(key);});
-    navigation.append(button);
-  }
-  if (oldAccessNav) oldAccessNav.replaceWith(navigation); else accessView.prepend(navigation);
+  async function loadEntraDirect(){const message=document.getElementById("entraMessage");try{const result=await request("/api/settings/identity-provider"),provider=result.provider||{};document.getElementById("entraEnabled").checked=Boolean(provider.enabled);document.getElementById("entraTenant").value=provider.tenant||"organizations";document.getElementById("entraClientId").value=provider.clientId||"";document.getElementById("entraClientSecret").value="";document.getElementById("entraAllowedIdentities").value=(provider.allowedIdentities||[]).join("\n");document.getElementById("entraRedirectUri").value=provider.redirectUri||"";document.getElementById("entraLogoutUrl").value=provider.logoutUrl||"";document.getElementById("entraStatus").textContent=(provider.enabled?"Aktywne":"Wyłączone")+" · Client Secret: "+(provider.clientSecretConfigured?"skonfigurowany":"brak")+(provider.updatedAtUtc?" · "+new Date(provider.updatedAtUtc).toLocaleString(lang()):"");for(const id of["entraEnabled","entraTenant","entraClientId","testEntraButton","saveEntraButton"])document.getElementById(id).disabled=!result.editable;for(const id of["entraClientSecret","entraAllowedIdentities"])document.getElementById(id).disabled=!result.securityEditable;if(message&&message.classList.contains("error"))message.textContent="";}catch(error){if(message){message.textContent=error.message||selectedLabels().entraError;message.className="error";}console.error(error);}}
 
-  function updateLabels() {
-    const selected = selectedLabels();
-    accessButton.textContent = selected.permissions;
-    for (const button of navigation.querySelectorAll("button")) button.textContent = selected[button.dataset.permissionsTab];
-    if (!accessView.hidden && pageTitle) pageTitle.textContent = selected.permissions;
-    if (!settingsView.hidden && pageTitle) pageTitle.textContent = selected.settings;
-  }
+  function card(title,body){const article=document.createElement("article");article.className="settings-card";const h=document.createElement("h2");h.textContent=title;article.append(h);if(body)article.append(body);return article;}
+  function emptyMessage(value){const p=document.createElement("p");p.className="muted";p.textContent=value;return p;}
+  function actionButton(label,handler,danger){const button=document.createElement("button");button.type="button";button.textContent=label;if(danger)button.className="danger";button.addEventListener("click",handler);return button;}
 
-  function requestHeaders() {
-    const headers = {"Content-Type":"application/json"};
-    const params = new URLSearchParams(location.hash.replace(/^#/, ""));
-    const access = params.get("access");
-    if (access) headers.Authorization = "Bearer " + access;
-    return headers;
-  }
+  function renderApprovals(panel){const list=document.createElement("div");list.className="users-list";const items=securityData.pendingRoles||[];if(!items.length)list.append(emptyMessage(lang()==="pl"?"Brak oczekujących ról uprzywilejowanych.":"No privileged roles are pending."));for(const user of items){const row=document.createElement("div");row.className="security-row";const info=document.createElement("div");info.innerHTML="<strong></strong><small></small>";info.querySelector("strong").textContent=user.displayName||user.username;info.querySelector("small").textContent=(user.requestedRole||"Pending")+" · "+user.identityKey;const actions=document.createElement("div");actions.className="form-actions";actions.append(actionButton(lang()==="pl"?"Zatwierdź":"Approve",async()=>{await request("/api/settings/users/entra/"+encodeURIComponent(user.identityKey)+"/approve",{method:"POST",body:"{}"});await loadSecurity();}),actionButton(lang()==="pl"?"Odrzuć":"Reject",async()=>{await request("/api/settings/users/entra/"+encodeURIComponent(user.identityKey)+"/reject",{method:"POST",body:"{}"});await loadSecurity();},true));row.append(info,actions);list.append(row);}panel.append(card(selectedLabels().approvals,list));}
+  function renderSessions(panel){const wrap=document.createElement("div"),top=document.createElement("div");top.className="form-actions security-actions";top.append(actionButton(lang()==="pl"?"Unieważnij pozostałe sesje":"Revoke other sessions",async()=>{if(!confirm(lang()==="pl"?"Unieważnić wszystkie pozostałe sesje?":"Revoke all other sessions?"))return;await request("/api/security/sessions/revoke-all",{method:"POST",body:"{}"});await loadSecurity();},true));wrap.append(top);const list=document.createElement("div");list.className="users-list";for(const item of securityData.sessions||[]){const row=document.createElement("div");row.className="security-row";const info=document.createElement("div");info.innerHTML="<strong></strong><small></small>";info.querySelector("strong").textContent=(item.displayName||item.username)+" · "+text(item.role);info.querySelector("small").textContent=item.ip+" · "+date(item.lastSeenAtUtc)+" · "+item.source;const actions=document.createElement("div");actions.append(actionButton(lang()==="pl"?"Unieważnij":"Revoke",async()=>{await request("/api/security/sessions/"+encodeURIComponent(item.id),{method:"DELETE"});await loadSecurity();},true));row.append(info,actions);list.append(row);}wrap.append(list);panel.append(card(selectedLabels().sessions,wrap));}
+  function renderEntra(panel){const p=document.createElement("p");p.className="muted";p.textContent=lang()==="pl"?"Konfiguracja logowania, Client Secret, allowlista i test OIDC są zarządzane w Ustawieniach.":"Sign-in configuration, Client Secret, allowlist and OIDC testing are managed in Settings.";const button=actionButton(lang()==="pl"?"Otwórz ustawienia Entra":"Open Entra settings",()=>settingsButton.click());const body=document.createElement("div");body.append(p,button);panel.append(card(selectedLabels().entra,body));}
+  function renderBreakGlass(panel){const status=securityData.breakGlass||{},grid=document.createElement("div");grid.className="security-facts";for(const[label,value]of[[lang()==="pl"?"Ostatnie użycie":"Last use",date(status.lastUsedAtUtc)],["IP",text(status.lastUsedIp)],[lang()==="pl"?"Ostatnia rotacja":"Last rotation",date(status.lastRotatedAtUtc)],[lang()==="pl"?"Ostatni przegląd":"Last review",date(status.reviewedAtUtc)],[lang()==="pl"?"Sprawdził":"Reviewed by",text(status.reviewedBy)]]){const item=document.createElement("div");item.innerHTML="<span></span><strong></strong>";item.querySelector("span").textContent=label;item.querySelector("strong").textContent=value;grid.append(item);}grid.append(actionButton(lang()==="pl"?"Oznacz jako sprawdzone":"Mark reviewed",async()=>{await request("/api/security/break-glass/review",{method:"POST",body:"{}"});await loadSecurity();}));panel.append(card(selectedLabels().breakglass,grid));}
+  function renderPolicies(panel){const p=securityData.policies||{},form=document.createElement("form");form.className="stack-form security-policy-form";form.innerHTML='<label>Session hours<input name="sessionHours" type="number" min="1" max="24"></label><label class="checkbox-row"><input name="requireReauthenticationForSensitiveActions" type="checkbox"><span>Re-authentication for sensitive actions</span></label><label class="checkbox-row"><input name="privilegedRoleApproval" type="checkbox"><span>Privileged role approval</span></label><label class="checkbox-row"><input name="alertOnBreakGlassUse" type="checkbox"><span>Alert on Break-Glass use</span></label><label class="checkbox-row"><input name="blockNewPortalConnections" type="checkbox"><span>Block new Portal connections</span></label><label class="checkbox-row danger-policy"><input name="emergencyMode" type="checkbox"><span>Emergency mode</span></label><button type="submit">Save security policies</button><p class="error"></p>';form.sessionHours.value=p.sessionHours||8;for(const key of["requireReauthenticationForSensitiveActions","privilegedRoleApproval","alertOnBreakGlassUse","blockNewPortalConnections","emergencyMode"])form.elements[key].checked=Boolean(p[key]);form.addEventListener("submit",async event=>{event.preventDefault();try{const body={sessionHours:Number(form.sessionHours.value)};for(const key of["requireReauthenticationForSensitiveActions","privilegedRoleApproval","alertOnBreakGlassUse","blockNewPortalConnections","emergencyMode"])body[key]=form.elements[key].checked;await request("/api/security/policies",{method:"PUT",body:JSON.stringify(body)});await loadSecurity();}catch(error){form.querySelector(".error").textContent=error.message;}});panel.append(card(selectedLabels().securityPolicies,form));}
+  function renderAudit(panel){const list=document.createElement("div");list.className="audit-list";for(const event of securityData.audit||[]){const row=document.createElement("div");row.className="audit-row";row.innerHTML="<strong></strong><span></span><code></code>";row.querySelector("strong").textContent=event.event;row.querySelector("span").textContent=date(event.atUtc)+" · "+event.actor+" · "+text(event.role);row.querySelector("code").textContent=JSON.stringify(event.details||{});list.append(row);}panel.append(card(selectedLabels().audit,list));}
+  function renderIncidents(panel){const form=document.createElement("form");form.className="stack-form incident-form";form.innerHTML='<label>Title<input name="title" required maxlength="160"></label><label>Severity<select name="severity"><option value="low">Low</option><option value="medium" selected>Medium</option><option value="high">High</option><option value="critical">Critical</option></select></label><label>Description<textarea name="description" rows="3"></textarea></label><button type="submit">Create incident</button><p class="error"></p>';form.addEventListener("submit",async event=>{event.preventDefault();try{await request("/api/security/incidents",{method:"POST",body:JSON.stringify({title:form.title.value,severity:form.severity.value,description:form.description.value})});form.reset();await loadSecurity();}catch(error){form.querySelector(".error").textContent=error.message;}});const list=document.createElement("div");list.className="users-list";for(const incident of securityData.incidents||[]){const row=document.createElement("div");row.className="security-row incident-"+incident.severity;const info=document.createElement("div");info.innerHTML="<strong></strong><small></small>";info.querySelector("strong").textContent=incident.title;info.querySelector("small").textContent=incident.severity+" · "+incident.status+" · "+date(incident.createdAtUtc);const actions=document.createElement("div");if(incident.status!=="resolved")actions.append(actionButton(lang()==="pl"?"Zamknij":"Resolve",async()=>{await request("/api/security/incidents/"+encodeURIComponent(incident.id),{method:"PATCH",body:JSON.stringify({status:"resolved"})});await loadSecurity();}));row.append(info,actions);list.append(row);}const body=document.createElement("div");body.append(form,list);panel.append(card(selectedLabels().incidents,body));}
+  function renderSecurity(){if(!securityData)return;for(const panel of securityPanels.children)panel.replaceChildren();const panel=securityPanels.querySelector('[data-security-panel="'+activeSecurityTab+'"]');if(!panel)return;({approvals:renderApprovals,sessions:renderSessions,entra:renderEntra,breakglass:renderBreakGlass,securityPolicies:renderPolicies,audit:renderAudit,incidents:renderIncidents}[activeSecurityTab]||renderApprovals)(panel);}
+  async function loadSecurity(){securityData=await request("/api/security/overview");renderSecurity();}
+  async function discoverSecurityAccess(){try{const identity=await request("/api/session");securityButton.hidden=!(identity.builtIn||identity.permissions.includes("*")||identity.permissions.includes("security.manage"));}catch(_){securityButton.hidden=true;}}
 
-  async function loadEntraDirect() {
-    const message = document.getElementById("entraMessage");
-    try {
-      const response = await fetch("/api/settings/identity-provider", {credentials:"same-origin", headers:requestHeaders(), cache:"no-store"});
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || selectedLabels().entraError);
-      const provider = result.provider || {};
-      document.getElementById("entraEnabled").checked = Boolean(provider.enabled);
-      document.getElementById("entraTenant").value = provider.tenant || "organizations";
-      document.getElementById("entraClientId").value = provider.clientId || "";
-      document.getElementById("entraClientSecret").value = "";
-      document.getElementById("entraAllowedIdentities").value = (provider.allowedIdentities || []).join("\n");
-      document.getElementById("entraRedirectUri").value = provider.redirectUri || "";
-      document.getElementById("entraLogoutUrl").value = provider.logoutUrl || "";
-      const status = document.getElementById("entraStatus");
-      status.textContent = (provider.enabled ? "Aktywne" : "Wyłączone") + " · Client Secret: " + (provider.clientSecretConfigured ? "skonfigurowany" : "brak") + (provider.updatedAtUtc ? " · " + new Date(provider.updatedAtUtc).toLocaleString(lang()) : "");
-      for (const id of ["entraEnabled","entraTenant","entraClientId","testEntraButton","saveEntraButton"]) document.getElementById(id).disabled = !result.editable;
-      for (const id of ["entraClientSecret","entraAllowedIdentities"]) document.getElementById(id).disabled = !result.securityEditable;
-      if (message && message.classList.contains("error")) message.textContent = "";
-    } catch (error) {
-      if (message) {
-        message.textContent = error.message || selectedLabels().entraError;
-        message.className = "error";
-      }
-      console.error("Unable to load Microsoft Entra settings", error);
-    }
-  }
-
-  accessButton.addEventListener("click", async function (event) {
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    if (openingPermissions) return;
-    openingPermissions = true;
-    accessButton.disabled = true;
-
-    showOnlyView("access");
-    showTab(activeTab);
-    updateLabels();
-
-    try {
-      const tasks = [];
-      if (typeof window.loadSettings === "function") tasks.push(window.loadSettings());
-      if (typeof window.loadAccess === "function") tasks.push(window.loadAccess());
-      await Promise.allSettled(tasks);
-      showOnlyView("access");
-      showTab(activeTab);
-      updateLabels();
-    } finally {
-      accessButton.disabled = false;
-      openingPermissions = false;
-    }
-  }, { capture: true });
-
-  settingsButton.addEventListener("click", async function (event) {
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    showOnlyView("settings");
-    for (const panel of Object.values(panels)) if (panel) panel.hidden = true;
-    if (entraPanel) entraPanel.hidden = false;
-    if (oldSettingsNav) oldSettingsNav.hidden = false;
-    updateLabels();
-    await loadEntraDirect();
-  }, { capture: true });
-
-  for (const button of document.querySelectorAll("[data-lang]")) button.addEventListener("click", function(){window.setTimeout(updateLabels,0);});
-  new MutationObserver(updateLabels).observe(document.documentElement,{attributes:true,attributeFilter:["lang"]});
-  showTab("users");
-  updateLabels();
+  accessButton.addEventListener("click",async function(event){event.preventDefault();event.stopImmediatePropagation();if(openingPermissions)return;openingPermissions=true;accessButton.disabled=true;showOnlyView("access");showTab(activeTab);updateLabels();try{const tasks=[];if(typeof window.loadSettings==="function")tasks.push(window.loadSettings());if(typeof window.loadAccess==="function")tasks.push(window.loadAccess());await Promise.allSettled(tasks);showOnlyView("access");showTab(activeTab);updateLabels();}finally{accessButton.disabled=false;openingPermissions=false;}},{capture:true});
+  settingsButton.addEventListener("click",async function(event){event.preventDefault();event.stopImmediatePropagation();showOnlyView("settings");for(const panel of Object.values(panels))if(panel)panel.hidden=true;if(entraPanel)entraPanel.hidden=false;if(oldSettingsNav)oldSettingsNav.hidden=false;updateLabels();await loadEntraDirect();},{capture:true});
+  securityButton.addEventListener("click",async function(){showOnlyView("security");showSecurityTab(activeSecurityTab);updateLabels();try{await loadSecurity();}catch(error){const panel=securityPanels.querySelector('[data-security-panel="'+activeSecurityTab+'"]');if(panel)panel.replaceChildren(card(selectedLabels().security,emptyMessage(error.message)));}});
+  if(backButton)backButton.addEventListener("click",()=>{securityView.hidden=true;},{capture:true});
+  for(const button of document.querySelectorAll("[data-lang]"))button.addEventListener("click",()=>window.setTimeout(()=>{updateLabels();renderSecurity();},0));
+  new MutationObserver(()=>{updateLabels();renderSecurity();}).observe(document.documentElement,{attributes:true,attributeFilter:["lang"]});
+  showTab("users");showSecurityTab("approvals");updateLabels();discoverSecurityAccess();
 })();
