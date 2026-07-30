@@ -4,7 +4,7 @@ umask 077
 
 INSTALL_DIR="${SIRK_INSTALL_DIR:-/opt/sirk-central}"
 PUBLIC_ORIGIN="${SIRK_PUBLIC_ORIGIN:-https://central.sirkportal.com}"
-PROFILE_ARGS=(--profile auth)
+COMPOSE_FILE="${SIRK_COMPOSE_FILE:-docker-compose.yml}"
 RESTART_TEST="${SIRK_SMOKE_RESTART:-1}"
 BACKUP_TEST="${SIRK_SMOKE_BACKUP:-0}"
 TIMEOUT_SECONDS="${SIRK_SMOKE_TIMEOUT_SECONDS:-180}"
@@ -15,27 +15,28 @@ fail() { printf '[smoke] ERROR: %s\n' "$*" >&2; exit 1; }
 command -v docker >/dev/null 2>&1 || fail "docker is required"
 command -v curl >/dev/null 2>&1 || fail "curl is required"
 [[ -d "${INSTALL_DIR}" ]] || fail "missing install directory: ${INSTALL_DIR}"
-[[ -f "${INSTALL_DIR}/docker-compose.yml" ]] || fail "missing docker-compose.yml"
+[[ -f "${INSTALL_DIR}/${COMPOSE_FILE}" ]] || fail "missing Compose file: ${COMPOSE_FILE}"
 [[ -f "${INSTALL_DIR}/.env" ]] || fail "missing production .env"
 
 cd "${INSTALL_DIR}"
+COMPOSE=(docker compose -f "${COMPOSE_FILE}" --profile auth)
 
 log "validating Compose configuration"
-docker compose "${PROFILE_ARGS[@]}" config >/dev/null
+"${COMPOSE[@]}" config >/dev/null
 
 log "checking required services"
-SERVICES="$(docker compose "${PROFILE_ARGS[@]}" config --services)"
+SERVICES="$("${COMPOSE[@]}" config --services)"
 for service in central caddy auth; do
   grep -qx "${service}" <<<"${SERVICES}" || fail "missing service: ${service}"
 done
 
 log "starting application stack"
-docker compose "${PROFILE_ARGS[@]}" up -d --build central auth caddy
+"${COMPOSE[@]}" up -d --build central auth caddy
 
 wait_ready() {
   local deadline=$((SECONDS + TIMEOUT_SECONDS))
   while (( SECONDS < deadline )); do
-    if docker compose "${PROFILE_ARGS[@]}" exec -T central node - <<'NODE' >/dev/null 2>&1
+    if "${COMPOSE[@]}" exec -T central node - <<'NODE' >/dev/null 2>&1
 fetch('http://127.0.0.1:8080/readyz')
   .then(async response => {
     const body = await response.json();
@@ -52,13 +53,13 @@ NODE
 }
 
 wait_ready || {
-  docker compose "${PROFILE_ARGS[@]}" ps >&2 || true
-  docker compose "${PROFILE_ARGS[@]}" logs --tail=150 central caddy auth >&2 || true
+  "${COMPOSE[@]}" ps >&2 || true
+  "${COMPOSE[@]}" logs --tail=150 central caddy auth >&2 || true
   fail "central did not become ready"
 }
 
 log "validating readiness payload"
-docker compose "${PROFILE_ARGS[@]}" exec -T central node - <<'NODE'
+"${COMPOSE[@]}" exec -T central node - <<'NODE'
 fetch('http://127.0.0.1:8080/readyz')
   .then(async response => {
     const body = await response.json();
@@ -73,10 +74,10 @@ fetch('http://127.0.0.1:8080/readyz')
 NODE
 
 log "validating Caddy configuration"
-docker compose "${PROFILE_ARGS[@]}" exec -T caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null
+"${COMPOSE[@]}" exec -T caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null
 
 log "checking persistent MFA stores"
-SNAPSHOT_BEFORE="$(docker compose "${PROFILE_ARGS[@]}" exec -T central node - <<'NODE'
+SNAPSHOT_BEFORE="$("${COMPOSE[@]}" exec -T central node - <<'NODE'
 const fs = require('node:fs');
 const path = '/var/lib/sirk-central';
 const names = ['passkeys.json', 'recovery-codes.json', 'webauthn-challenges.json', 'login-transactions.json', 'sessions.json'];
@@ -94,9 +95,9 @@ NODE
 
 if [[ "${RESTART_TEST}" == "1" ]]; then
   log "restarting central service"
-  docker compose "${PROFILE_ARGS[@]}" restart central
+  "${COMPOSE[@]}" restart central
   wait_ready || fail "central did not recover after restart"
-  SNAPSHOT_AFTER="$(docker compose "${PROFILE_ARGS[@]}" exec -T central node - <<'NODE'
+  SNAPSHOT_AFTER="$("${COMPOSE[@]}" exec -T central node - <<'NODE'
 const fs = require('node:fs');
 const path = '/var/lib/sirk-central';
 const names = ['passkeys.json', 'recovery-codes.json', 'webauthn-challenges.json', 'login-transactions.json', 'sessions.json'];
@@ -130,7 +131,7 @@ grep -qi '^x-content-type-options: nosniff' "${HEADERS_FILE}" || fail "X-Content
 if [[ "${BACKUP_TEST}" == "1" ]]; then
   [[ "$(id -u)" -eq 0 ]] || fail "backup smoke test requires root"
   log "creating and validating backup archive"
-  OUTPUT="$(SIRK_INSTALL_DIR="${INSTALL_DIR}" deploy/backup.sh)"
+  OUTPUT="$(SIRK_INSTALL_DIR="${INSTALL_DIR}" SIRK_COMPOSE_FILE="${COMPOSE_FILE}" deploy/backup.sh)"
   ARCHIVE="${OUTPUT##*: }"
   [[ -f "${ARCHIVE}" ]] || fail "backup archive was not created"
   if [[ -f "${ARCHIVE}.sha256" ]]; then
