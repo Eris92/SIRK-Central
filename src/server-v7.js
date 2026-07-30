@@ -22,16 +22,22 @@ function createRuntimeApp(config) {
     const inner = app.server.listeners("request")[0];
     if (typeof inner !== "function") throw new Error("SIRK Central v6 request handler is unavailable.");
     const bridgePath = path.join(__dirname, "..", "public", "passkey-attestation-bridge.js");
+    const uiPath = path.join(__dirname, "..", "public", "passkey-ui.js");
     const server = http.createServer((req, res) => {
         try {
             const url = new URL(req.url, "http://central.local");
+            if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/passkey-ui.js") {
+                const data = Buffer.concat([fs.readFileSync(bridgePath), Buffer.from("\n"), fs.readFileSync(uiPath)]);
+                res.writeHead(200, Object.assign(securityHeaders(), { "Content-Type": "text/javascript; charset=utf-8", "Content-Length": String(data.length), "Cache-Control": "no-store" }));
+                return res.end(req.method === "HEAD" ? undefined : data);
+            }
             if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/passkey-attestation-bridge.js") {
                 const data = fs.readFileSync(bridgePath);
                 res.writeHead(200, Object.assign(securityHeaders(), { "Content-Type": "text/javascript; charset=utf-8", "Content-Length": String(data.length), "Cache-Control": "no-store" }));
                 return res.end(req.method === "HEAD" ? undefined : data);
             }
             if (req.method === "GET" && url.pathname === "/readyz") {
-                const checks = { passkeyStore: Boolean(app.passkeys && app.passkeys.filePath), webauthnChallenges: Boolean(app.webauthnChallenges && app.webauthnChallenges.filePath), loginTransactions: Boolean(app.loginTransactions && app.loginTransactions.filePath), attestationBridge: fs.existsSync(bridgePath), attestationParser: true };
+                const checks = { passkeyStore: Boolean(app.passkeys && app.passkeys.filePath), webauthnChallenges: Boolean(app.webauthnChallenges && app.webauthnChallenges.filePath), loginTransactions: Boolean(app.loginTransactions && app.loginTransactions.filePath), passkeyUi: fs.existsSync(uiPath), attestationBridge: fs.existsSync(bridgePath), attestationParser: true };
                 const ok = Object.values(checks).every(Boolean);
                 return json(res, ok ? 200 : 503, { ok, version: VERSION, checks });
             }
