@@ -33,7 +33,7 @@
         if (backButton) backButton.textContent = text("Wróć do wyboru metody", "Back to method selection");
         if (cancelButton) {
             cancelButton.textContent = text("Anuluj", "Cancel");
-            cancelButton.style.marginTop = "12px";
+            cancelButton.style.marginTop = "16px";
         }
 
         if (recoveryPrompt && !recoveryPrompt.hidden) {
@@ -49,10 +49,6 @@
         new MutationObserver(apply).observe(document.documentElement, {
             attributes: true,
             attributeFilter: ["lang"]
-        });
-        new MutationObserver(apply).observe(document.body, {
-            childList: true,
-            subtree: true
         });
     }
 
