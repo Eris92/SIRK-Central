@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex,nofollow,noarchive">
+  <title>Aktualizacja · SIRK Central</title>
+  <link rel="stylesheet" href="/system-update.css">
+</head>
+<body>
+  <main class="shell">
+    <nav><a href="/settings">← Ustawienia</a></nav>
+    <section class="card">
+      <p class="eyebrow">SIRK CENTRAL</p>
+      <h1>Aktualizacja systemu</h1>
+      <p class="lead">Bezpieczna aktualizacja aplikacji Central, Auth Broker i konfiguracji Caddy z repozytorium produkcyjnego.</p>
+      <div class="facts">
+        <div><span>Stan</span><strong id="updateState">Ładowanie…</strong></div>
+        <div><span>Commit</span><strong id="updateCommit">—</strong></div>
+        <div><span>Rozpoczęto</span><strong id="updateStarted">—</strong></div>
+        <div><span>Zakończono</span><strong id="updateFinished">—</strong></div>
+      </div>
+      <p id="updateMessage" class="message"></p>
+      <div class="warning">
+        Aktualizacja tworzy kopię pliku <code>.env</code>, uruchamia testy, waliduje Docker Compose, buduje obrazy i sprawdza endpoint zdrowia. W trakcie może wystąpić krótka przerwa w dostępie.
+      </div>
+      <label for="confirmation">Aby uruchomić, wpisz dokładnie: <code>UPDATE SIRK CENTRAL</code></label>
+      <input id="confirmation" autocomplete="off" spellcheck="false">
+      <div class="actions">
+        <button id="refreshButton" type="button" class="secondary">Odśwież stan</button>
+        <button id="runButton" type="button">Uruchom aktualizację</button>
+      </div>
+      <pre id="updateDetails" hidden></pre>
+    </section>
+  </main>
+  <script src="/system-update.js" defer></script>
+</body>
+</html>
