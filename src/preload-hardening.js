@@ -1,13 +1,13 @@
 "use strict";
 
 const serverPath = require.resolve("./server");
-const hardened = require("./server-hardened");
+const production = require("./server-production");
 
 require.cache[serverPath] = {
     id: serverPath,
     filename: serverPath,
     loaded: true,
-    exports: hardened,
+    exports: production,
     children: [],
     paths: module.paths
 };
