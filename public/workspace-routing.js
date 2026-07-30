@@ -3,7 +3,7 @@
 (function () {
     const routes = Object.freeze({
         portals: "/",
-        admin: "/admin",
+        admin: "/permissions",
         security: "/security",
         settings: "/settings",
         "break-glass": "/break-glass"
@@ -39,14 +39,13 @@
             return ["portals", "admin", "security", "settings", "break-glass"];
         }
         const result = ["portals"];
-        if (identity.role === "Admin") result.push("admin", "settings");
+        if (identity.role === "Admin" || identity.role === "SysAdmin") result.push("admin", "settings");
         if (identity.role === "SecAdmin") result.push("security", "settings");
         return result;
     }
 
     function desiredHidden(workspace) {
-        if (!allowed.has(workspace)) return true;
-        return workspace === "portals" && currentWorkspace === "portals";
+        return !allowed.has(workspace);
     }
 
     function synchronizeMenu() {
