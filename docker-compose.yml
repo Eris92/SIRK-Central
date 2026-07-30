@@ -1,0 +1,82 @@
+services:
+  central:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      SIRK_BIND_HOST: 0.0.0.0
+      SIRK_PUBLIC_ORIGIN: https://${SIRK_CENTRAL_DOMAIN:-central.sirkportal.com}
+      SIRK_AUTH_ORIGIN: https://${SIRK_AUTH_DOMAIN:-auth.sirkportal.com}
+      SIRK_UPDATER_ORIGIN: http://updater:8090
+    volumes:
+      - central-data:/var/lib/sirk-central
+    networks:
+      - internal
+
+  auth:
+    profiles: ["auth"]
+    build: .
+    restart: unless-stopped
+    command: ["node", "auth/server.js"]
+    env_file: .env
+    environment:
+      SIRK_AUTH_BIND_HOST: 0.0.0.0
+      SIRK_AUTH_PORT: 8081
+      SIRK_PUBLIC_ORIGIN: https://${SIRK_CENTRAL_DOMAIN:-central.sirkportal.com}
+      SIRK_AUTH_ORIGIN: https://${SIRK_AUTH_DOMAIN:-auth.sirkportal.com}
+    volumes:
+      - central-data:/var/lib/sirk-central:ro
+    networks:
+      - internal
+
+  updater:
+    build:
+      context: .
+      dockerfile: updater/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      SIRK_UPDATER_BIND_HOST: 0.0.0.0
+      SIRK_UPDATER_PORT: 8090
+      SIRK_UPDATER_STATE_DIR: /var/lib/sirk-updater
+      SIRK_INSTALL_DIR: /opt/sirk-central
+      SIRK_REPO_REF: ${SIRK_REPO_REF:-main}
+    volumes:
+      - /opt/sirk-central:/opt/sirk-central
+      - ${SIRK_BUSINESS_SITE_PATH:-/opt/sir-k.pl}:${SIRK_BUSINESS_SITE_PATH:-/opt/sir-k.pl}
+      - /var/run/docker.sock:/var/run/docker.sock
+      - updater-state:/var/lib/sirk-updater
+    networks:
+      - internal
+
+  caddy:
+    image: caddy:2.10.0-alpine
+    restart: unless-stopped
+    depends_on:
+      - central
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SIRK_WEBSITE_DOMAIN: ${SIRK_WEBSITE_DOMAIN:-sirkportal.com}
+      SIRK_CENTRAL_DOMAIN: ${SIRK_CENTRAL_DOMAIN:-central.sirkportal.com}
+      SIRK_AUTH_DOMAIN: ${SIRK_AUTH_DOMAIN:-auth.sirkportal.com}
+      SIRK_BUSINESS_DOMAIN: ${SIRK_BUSINESS_DOMAIN:-sir-k.pl}
+      SIRK_ACME_EMAIL: ${SIRK_ACME_EMAIL}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./website:/srv/website:ro
+      - ${SIRK_BUSINESS_SITE_PATH:-/opt/sir-k.pl}:/srv/sir-k:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - internal
+
+networks:
+  internal:
+
+volumes:
+  central-data:
+  updater-state:
+  caddy-data:
+  caddy-config:
