@@ -1,15 +1,15 @@
 {
   "name": "sirk-central",
-  "version": "1.0.0-rc.9",
+  "version": "1.0.0-rc.10",
   "private": true,
   "description": "SIRK Central production-ready management plane.",
-  "main": "src/server-v7.js",
+  "main": "src/server-v8.js",
   "scripts": {
-    "start": "node src/server-v7.js",
-    "dev": "node --watch src/server-v7.js",
+    "start": "node src/server-v8.js",
+    "dev": "node --watch src/server-v8.js",
     "start:legacy": "node -r ./src/preload-api.js src/entry.js",
     "test": "node --test",
-    "check": "node --check src/server-v7.js && node --check src/server-v6.js && node --check src/webauthn-attestation.js && node --check src/webauthn-es256.js && node --check public/passkey-attestation-bridge.js && node --check public/passkey-ui.js && node --test",
+    "check": "node --check src/server-v8.js && node --check src/mfa-continuity-policy.js && node --check src/server-v7.js && node --check src/webauthn-attestation.js && node --check src/webauthn-es256.js && node --check public/passkey-attestation-bridge.js && node --check public/passkey-ui.js && node --test",
     "hash-password": "node scripts/hash-password.js",
     "generate-access-key": "node scripts/generate-access-key.js"
   },
