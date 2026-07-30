@@ -50,6 +50,7 @@ jobs:
         run: |
           node --check auth/server.js
           node --check scripts/configure-production.js
+          node --check src/server-v2.js
           node --check src/server-v1.js
           node --check src/server.js
           node --check src/entry.js
@@ -67,6 +68,11 @@ jobs:
 
       - name: Run tests
         run: npm test
+
+      - name: Validate production package entry
+        run: |
+          node -e 'const p=require("./package.json"); if(p.main!=="src/server-v2.js") process.exit(1)'
+          node -e 'const p=require("./package.json"); if(!String(p.scripts.start).includes("server-v2.js")) process.exit(1)'
 
       - name: Validate Docker Compose
         env:
