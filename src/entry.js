@@ -20,8 +20,8 @@ function allowedWorkspaces(identity) {
     if (!identity || !identity.ok) return ["portals"];
     if (isExactBreakGlass(identity)) return ["portals", "permissions", "security", "settings", "break-glass"];
     const result = ["portals"];
-    if (identity.role === "Admin" || identity.role === "SysAdmin") result.push("permissions", "settings");
-    if (identity.role === "SecAdmin") result.push("security", "settings");
+    if (identity.role === "Admin") result.push("permissions", "settings");
+    if (identity.role === "SecAdmin") result.push("permissions", "security", "settings");
     return result;
 }
 
