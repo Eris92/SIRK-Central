@@ -4,14 +4,17 @@ const http = require("node:http");
 const path = require("node:path");
 const organizationStoreFactory = require("./organization-store");
 const approvalStoreFactory = require("./approval-store");
+const portalAssignmentStoreFactory = require("./portal-assignment-store");
 const organizationApiFactory = require("./organization-api");
 const approvalApiFactory = require("./approval-api");
+const portalAssignmentApiFactory = require("./portal-assignment-api");
 
 const originalCreateServer = http.createServer.bind(http);
 const dataDir = path.resolve(process.env.SIRK_DATA_DIR || path.join(process.cwd(), "data"));
 const publicOrigin = String(process.env.SIRK_PUBLIC_ORIGIN || "").replace(/\/+$/, "");
 const organizationStore = organizationStoreFactory.create({ dataDir });
 const approvalStore = approvalStoreFactory.create({ dataDir });
+const portalAssignmentStore = portalAssignmentStoreFactory.create({ dataDir });
 
 function cloneRequest(req, url, method) {
     const clone = Object.create(req);
@@ -92,17 +95,35 @@ http.createServer = function patchedCreateServer(options, requestListener) {
         catch (_) { return null; }
     };
 
+    const readPortals = async req => {
+        const result = await capture(listener, cloneRequest(req, "/api/portals", "GET"));
+        if (result.statusCode !== 200) return [];
+        try {
+            const payload = JSON.parse(result.body.toString("utf8"));
+            return Array.isArray(payload.portals) ? payload.portals : [];
+        } catch (_) { return []; }
+    };
+
     const organizationApi = organizationApiFactory.create({ store: organizationStore, readIdentity });
     const approvalApi = approvalApiFactory.create({ store: approvalStore, readIdentity });
+    const portalAssignmentApi = portalAssignmentApiFactory.create({
+        store: portalAssignmentStore,
+        organizations: organizationStore,
+        readIdentity,
+        readPortals
+    });
 
     const wrapped = async (req, res) => {
         try {
             const url = new URL(req.url, "http://central.local");
-            const managed = url.pathname.startsWith("/api/organizations") || url.pathname.startsWith("/api/approvals");
+            const managed = url.pathname.startsWith("/api/organizations") ||
+                url.pathname.startsWith("/api/approvals") ||
+                url.pathname.startsWith("/api/portal-assignments");
             if (managed) {
                 if (!csrfValid(req)) return json(res, 403, { ok: false, error: "CSRF validation failed." });
                 if (await organizationApi(req, res, url)) return;
                 if (await approvalApi(req, res, url)) return;
+                if (await portalAssignmentApi(req, res, url)) return;
             }
             return listener(req, res);
         } catch (error) {
