@@ -40,10 +40,12 @@ services:
       SIRK_WEBSITE_DOMAIN: ${SIRK_WEBSITE_DOMAIN:-sirkportal.com}
       SIRK_CENTRAL_DOMAIN: ${SIRK_CENTRAL_DOMAIN:-central.sirkportal.com}
       SIRK_AUTH_DOMAIN: ${SIRK_AUTH_DOMAIN:-auth.sirkportal.com}
+      SIRK_BUSINESS_DOMAIN: ${SIRK_BUSINESS_DOMAIN:-sir-k.pl}
       SIRK_ACME_EMAIL: ${SIRK_ACME_EMAIL}
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
       - ./website:/srv/website:ro
+      - ${SIRK_BUSINESS_SITE_PATH:-/opt/sir-k.pl}:/srv/sir-k:ro
       - caddy-data:/data
       - caddy-config:/config
     networks:
