@@ -1,0 +1,63 @@
+name: SIRK Central CI
+
+on:
+  push:
+    branches:
+      - main
+      - feat/**
+      - fix/**
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: central-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Syntax validation
+        run: |
+          find src updater scripts -type f -name '*.js' -print0 | xargs -0 -n1 node --check
+
+      - name: Unit and regression tests
+        run: npm test
+
+      - name: Validate Docker Compose
+        env:
+          SIRK_ADMIN_PASSWORD_HASH: scrypt$16384$8$1$dGVzdA==$dGVzdA==
+          SIRK_ACCESS_KEY_HASH: sha256$dGVzdA==
+          SIRK_PUBLIC_ORIGIN: https://central.example.test
+          SIRK_AUTH_ORIGIN: https://auth.example.test
+          SIRK_SSO_SHARED_SECRET: 012345678901234567890123456789012345678901234567
+          SIRK_UPDATER_TOKEN: 012345678901234567890123456789012345678901234567
+          SIRK_WEBSITE_DOMAIN: example.test
+          SIRK_CENTRAL_DOMAIN: central.example.test
+          SIRK_AUTH_DOMAIN: auth.example.test
+          SIRK_ACME_EMAIL: admin@example.test
+        run: docker compose --profile auth config >/dev/null
+
+      - name: Scan repository for committed secrets
+        run: |
+          if git grep -nE '(BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|client_secret[[:space:]]*[:=][[:space:]]*[^$<{])' -- ':!package-lock.json'; then
+            echo 'Potential secret committed to repository.' >&2
+            exit 1
+          fi
