@@ -18,4 +18,8 @@ RUN mkdir -p /var/lib/sirk-central \
 USER node
 ENV NODE_ENV=production
 EXPOSE 8080 8081
-CMD ["node", "src/entry.js"]
+
+HEALTHCHECK --interval=20s --timeout=5s --start-period=20s --retries=5 \
+  CMD node -e "fetch('http://127.0.0.1:8080/readyz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+
+CMD ["node", "src/server-v2.js"]
