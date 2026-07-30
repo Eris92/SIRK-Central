@@ -15,25 +15,51 @@
         return body;
     }
 
-    function showOperationPanel(name) {
-        const updatePanel = document.getElementById("settingsTabUpdates");
-        const backupPanel = document.getElementById("settingsTabBackup");
-        if (updatePanel) updatePanel.hidden = name !== "updates";
-        if (backupPanel) backupPanel.hidden = name !== "backup";
-        for (const id of ["settingsTabUsers", "settingsTabAddUser", "settingsTabRoles", "settingsTabEntra"]) {
-            const panel = document.getElementById(id);
-            if (panel) panel.hidden = true;
-        }
-        for (const button of document.querySelectorAll("[data-settings-tab]")) {
-            button.classList.toggle("active", button.dataset.settingsTab === name);
-        }
+    function ensureUi(settings) {
+        if (document.getElementById("operationsSettingsBlock")) return;
+        const block = document.createElement("section");
+        block.id = "operationsSettingsBlock";
+        block.hidden = true;
+        block.style.marginTop = "18px";
+        block.innerHTML = `
+          <nav class="settings-tabs" id="operationsTabs" aria-label="Operations settings">
+            <button type="button" class="settings-tab active" id="updatesTab" data-settings-tab="updates"></button>
+            <button type="button" class="settings-tab" id="backupTab" data-settings-tab="backup"></button>
+          </nav>
+          <div class="settings-panels">
+            <section id="settingsTabUpdates" class="settings-tab-panel">
+              <article class="settings-card">
+                <h2 id="updatesTitle"></h2>
+                <p id="updateHelp" class="muted"></p>
+                <p id="updateStatus" class="muted"></p>
+                <div class="form-actions">
+                  <button type="button" class="secondary" id="refreshUpdateButton"></button>
+                  <button type="button" id="runUpdateButton"></button>
+                </div>
+                <p id="updateMessage" class="error" role="status"></p>
+              </article>
+            </section>
+            <section id="settingsTabBackup" class="settings-tab-panel" hidden>
+              <article class="settings-card">
+                <h2 id="backupTitle"></h2>
+                <p id="backupHelp" class="muted"></p>
+                <div class="form-actions">
+                  <button type="button" class="secondary" id="refreshBackupButton"></button>
+                  <button type="button" id="runBackupButton"></button>
+                </div>
+                <div id="backupList" class="users-list"></div>
+                <p id="backupMessage" class="error" role="status"></p>
+              </article>
+            </section>
+          </div>`;
+        settings.append(block);
     }
 
-    function hideOperationPanels() {
-        const updatePanel = document.getElementById("settingsTabUpdates");
-        const backupPanel = document.getElementById("settingsTabBackup");
-        if (updatePanel) updatePanel.hidden = true;
-        if (backupPanel) backupPanel.hidden = true;
+    function selectPanel(name) {
+        document.getElementById("settingsTabUpdates").hidden = name !== "updates";
+        document.getElementById("settingsTabBackup").hidden = name !== "backup";
+        document.getElementById("updatesTab").classList.toggle("active", name === "updates");
+        document.getElementById("backupTab").classList.toggle("active", name === "backup");
     }
 
     async function loadUpdateStatus() {
@@ -97,25 +123,19 @@
     }
 
     async function initialize() {
-        const updateTab = document.getElementById("updatesTab");
-        const backupTab = document.getElementById("backupTab");
-        if (!updateTab || !backupTab) return;
-
+        const settings = document.getElementById("settingsView");
+        if (!settings) return;
         let identity;
         try { identity = await api("/api/session"); }
         catch (_) { return; }
-        const allowed = Boolean(identity.builtIn || identity.role === "Admin" || identity.role === "SecAdmin");
-        updateTab.hidden = !allowed;
-        backupTab.hidden = !allowed;
-        if (!allowed) return;
+        if (!(identity.builtIn || identity.role === "Admin" || identity.role === "SecAdmin")) return;
 
-        updateTab.addEventListener("click", () => { showOperationPanel("updates"); loadUpdateStatus(); });
-        backupTab.addEventListener("click", () => { showOperationPanel("backup"); loadBackups(); });
-        for (const button of document.querySelectorAll("[data-settings-tab]:not(#updatesTab):not(#backupTab)")) {
-            button.addEventListener("click", hideOperationPanels);
-        }
-
+        ensureUi(settings);
+        document.getElementById("operationsSettingsBlock").hidden = false;
+        document.getElementById("updatesTab").addEventListener("click", () => { selectPanel("updates"); loadUpdateStatus(); });
+        document.getElementById("backupTab").addEventListener("click", () => { selectPanel("backup"); loadBackups(); });
         document.getElementById("refreshUpdateButton").addEventListener("click", loadUpdateStatus);
+        document.getElementById("refreshBackupButton").addEventListener("click", loadBackups);
         document.getElementById("runUpdateButton").addEventListener("click", async () => {
             const message = document.getElementById("updateMessage");
             if (!confirm(text("Uruchomić aktualizację SIRK Central?", "Run the SIRK Central update?"))) return;
@@ -129,7 +149,6 @@
                 message.className = "error";
             }
         });
-        document.getElementById("refreshBackupButton").addEventListener("click", loadBackups);
         document.getElementById("runBackupButton").addEventListener("click", async () => {
             const message = document.getElementById("backupMessage");
             try {
@@ -142,8 +161,8 @@
                 message.className = "error";
             }
         });
-
         applyLanguage();
+        loadUpdateStatus();
         new MutationObserver(applyLanguage).observe(document.documentElement, { attributes: true, attributeFilter: ["lang"] });
     }
 
