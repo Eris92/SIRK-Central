@@ -102,14 +102,20 @@ test("BreakGlass recovery code is required before a full session is issued", asy
   assert.equal(pending.payload.methods.includes("recovery-code"), true);
   assert.ok(pending.payload.transactionToken);
   assert.equal(cookieValue(pending.response.headers, "sirk_central_session"), "");
+  const pendingCsrf = cookieValue(pending.response.headers, "sirk_central_csrf");
+  assert.ok(pendingCsrf);
+
+  const mfaHeaders = {
+    ...baseHeaders,
+    cookie: "sirk_central_csrf=" + pendingCsrf,
+    "x-sirk-csrf": pendingCsrf,
+    origin: config.publicOrigin,
+    "sec-fetch-site": "same-origin"
+  };
 
   const completed = await jsonRequest(origin, "/api/login/mfa/recovery", {
     method: "POST",
-    headers: {
-      ...baseHeaders,
-      origin: config.publicOrigin,
-      "sec-fetch-site": "same-origin"
-    },
+    headers: mfaHeaders,
     body: {
       transactionToken: pending.payload.transactionToken,
       recoveryCode
@@ -122,11 +128,7 @@ test("BreakGlass recovery code is required before a full session is issued", asy
 
   const replay = await jsonRequest(origin, "/api/login/mfa/recovery", {
     method: "POST",
-    headers: {
-      ...baseHeaders,
-      origin: config.publicOrigin,
-      "sec-fetch-site": "same-origin"
-    },
+    headers: mfaHeaders,
     body: {
       transactionToken: pending.payload.transactionToken,
       recoveryCode
