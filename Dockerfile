@@ -18,4 +18,4 @@ RUN mkdir -p /var/lib/sirk-central \
 USER node
 ENV NODE_ENV=production
 EXPOSE 8080 8081
-CMD ["node", "src/server.js"]
+CMD ["node", "-r", "./src/workspace-bootstrap.js", "src/server.js"]
