@@ -5,14 +5,19 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: sirk-central-ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - name: Checkout
@@ -36,14 +41,32 @@ jobs:
             deploy/install.sh \
             deploy/reset-admin-password.sh \
             deploy/rotate-access-key.sh \
-            deploy/update.sh
+            deploy/update.sh \
+            deploy/web-update.sh \
+            deploy/backup.sh \
+            deploy/restore.sh
 
       - name: Validate Node.js syntax
         run: |
           node --check auth/server.js
           node --check scripts/configure-production.js
           node --check src/server.js
+          node --check src/entry.js
           node --check src/sso-ticket.js
+          node --check src/session-store.js
+          node --check src/organization-store.js
+          node --check src/approval-store.js
+          node --check src/passkey-store.js
+          node --check src/system-health.js
+          node --check updater/server.js
 
       - name: Run tests
         run: npm test
+
+      - name: Validate Docker Compose
+        env:
+          SIRK_ADMIN_PASSWORD_HASH: 'scrypt$16384$8$1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+          SIRK_ACCESS_KEY_HASH: 'sha256$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+          SIRK_SSO_SHARED_SECRET: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+          SIRK_UPDATER_TOKEN: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+        run: docker compose --profile auth config >/dev/null
