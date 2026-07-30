@@ -46,7 +46,7 @@ jobs:
             deploy/backup.sh \
             deploy/restore.sh
 
-      - name: Validate Node.js syntax
+      - name: Validate JavaScript syntax
         run: |
           find src auth updater scripts public -type f -name '*.js' -print0 | xargs -0 -n1 node --check
 
@@ -59,19 +59,18 @@ jobs:
           const fs = require('node:fs');
           const pkg = require('./package.json');
           const lock = require('./package-lock.json');
+          if (pkg.version !== '1.0.0-rc.9') process.exit(1);
           if (pkg.version !== lock.version || pkg.version !== lock.packages[''].version) process.exit(1);
-          if (pkg.main !== 'src/server-v5.js' || !String(pkg.scripts.start).includes('server-v5.js')) process.exit(1);
+          if (pkg.main !== 'src/server-v7.js' || !String(pkg.scripts.start).includes('server-v7.js')) process.exit(1);
+          for (const file of ['src/webauthn-attestation.js','public/passkey-attestation-bridge.js','test/webauthn-attestation.test.js','test/break-glass-passkey-http.test.js','test/break-glass-passkey-registration-http.test.js']) if (!fs.existsSync(file)) process.exit(1);
           const html = fs.readFileSync('public/index.html', 'utf8');
           const csrf = html.indexOf('/csrf-bootstrap.js');
           const app = html.indexOf('/app.js');
-          const recovery = html.indexOf('/break-glass-mfa.js');
           const passkey = html.indexOf('/passkey-ui.js');
           const routing = html.indexOf('/workspace-routing.js');
-          if ([csrf, app, recovery, passkey, routing].some(index => index < 0)) process.exit(1);
-          if (!(csrf < app && app < passkey && passkey < routing)) process.exit(1);
-          if (!fs.existsSync('test/break-glass-passkey-http.test.js')) process.exit(1);
+          if ([csrf, app, passkey, routing].some(index => index < 0) || !(csrf < app && app < passkey && passkey < routing)) process.exit(1);
           NODE
-          grep -F 'CMD ["node", "src/server-v5.js"]' Dockerfile
+          grep -F 'CMD ["node", "src/server-v7.js"]' Dockerfile
 
       - name: Validate Docker Compose
         env:
