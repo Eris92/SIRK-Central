@@ -5,6 +5,7 @@ umask 077
 INSTALL_DIR="${SIRK_INSTALL_DIR:-/opt/sirk-central}"
 REPO_URL="${SIRK_REPO_URL:-https://github.com/Eris92/SIRK-Central.git}"
 REPO_REF="${SIRK_REPO_REF:-feat/central-production-hardening}"
+COMPOSE_FILE="docker-compose.yml"
 PRESERVE_ENV=1
 PURGE_DATA=0
 RUN_SMOKE=1
@@ -23,7 +24,7 @@ Usage:
 Options:
   --preserve-env       Preserve the current .env file (default).
   --new-env            Do not preserve .env; create a new configuration interactively.
-  --purge-data         Delete the central-data, updater-state and Caddy volumes.
+  --purge-data         Delete application, updater and Caddy volumes.
   --no-smoke           Skip deploy/smoke-test.sh after installation.
   --ref <branch|tag>   Git ref to clone.
   --repo <url>         Git repository URL.
@@ -70,21 +71,25 @@ if [[ -d "$INSTALL_DIR" ]]; then
     log "Production .env saved temporarily"
   fi
 
-  if [[ -f "$INSTALL_DIR/compose.yaml" || -f "$INSTALL_DIR/docker-compose.yml" ]]; then
-    cd "$INSTALL_DIR"
+  old_compose=""
+  [[ -f "$INSTALL_DIR/docker-compose.yml" ]] && old_compose="$INSTALL_DIR/docker-compose.yml"
+  [[ -z "$old_compose" && -f "$INSTALL_DIR/compose.yaml" ]] && old_compose="$INSTALL_DIR/compose.yaml"
+
+  if [[ -n "$old_compose" ]]; then
     if [[ "$PURGE_DATA" == "1" ]]; then
       printf '\nWARNING: this will permanently remove all SIRK Central application data and Caddy state.\n'
       read -r -p 'Type exactly "PURGE SIRK CENTRAL DATA": ' confirmation
       [[ "$confirmation" == "PURGE SIRK CENTRAL DATA" ]] || die "purge confirmation did not match"
       log "Stopping stack and deleting project volumes"
-      docker compose --profile auth down --volumes --remove-orphans
+      docker compose -f "$old_compose" --profile auth down --volumes --remove-orphans
     else
       log "Stopping stack while preserving named volumes"
-      docker compose --profile auth down --remove-orphans
+      docker compose -f "$old_compose" --profile auth down --remove-orphans
     fi
   fi
 
   log "Removing old checkout"
+  cd /
   rm -rf --one-file-system "$INSTALL_DIR"
 fi
 
@@ -92,6 +97,12 @@ log "Cloning $REPO_URL ref $REPO_REF"
 install -d -m 0755 "$(dirname "$INSTALL_DIR")"
 git clone --branch "$REPO_REF" --single-branch "$REPO_URL" "$INSTALL_DIR"
 cd "$INSTALL_DIR"
+
+[[ -f "$COMPOSE_FILE" ]] || die "$COMPOSE_FILE is missing in the fresh checkout"
+if [[ -f compose.yaml ]]; then
+  log "Disabling obsolete compose.yaml to prevent automatic Compose selection"
+  mv compose.yaml compose.yaml.disabled
+fi
 
 if [[ "$PRESERVE_ENV" == "1" && -f "$WORK_DIR/.env" ]]; then
   install -m 0600 "$WORK_DIR/.env" "$INSTALL_DIR/.env"
@@ -101,6 +112,8 @@ else
   SIRK_WEBSITE_DOMAIN="${SIRK_WEBSITE_DOMAIN:-sirkportal.com}"
   read -r -p "Central domain [central.${SIRK_WEBSITE_DOMAIN}]: " SIRK_CENTRAL_DOMAIN
   SIRK_CENTRAL_DOMAIN="${SIRK_CENTRAL_DOMAIN:-central.${SIRK_WEBSITE_DOMAIN}}"
+  read -r -p "Auth domain [auth.${SIRK_WEBSITE_DOMAIN}]: " SIRK_AUTH_DOMAIN
+  SIRK_AUTH_DOMAIN="${SIRK_AUTH_DOMAIN:-auth.${SIRK_WEBSITE_DOMAIN}}"
   read -r -p "ACME email [admin@${SIRK_WEBSITE_DOMAIN}]: " SIRK_ACME_EMAIL
   SIRK_ACME_EMAIL="${SIRK_ACME_EMAIL:-admin@${SIRK_WEBSITE_DOMAIN}}"
   read -r -p 'BreakGlass username [admin]: ' SIRK_ADMIN_USERNAME
@@ -114,6 +127,7 @@ else
     --env SIRK_CONFIG_TARGET=/config \
     --env "SIRK_WEBSITE_DOMAIN=${SIRK_WEBSITE_DOMAIN}" \
     --env "SIRK_CENTRAL_DOMAIN=${SIRK_CENTRAL_DOMAIN}" \
+    --env "SIRK_AUTH_DOMAIN=${SIRK_AUTH_DOMAIN}" \
     --env "SIRK_ACME_EMAIL=${SIRK_ACME_EMAIL}" \
     --env "SIRK_ADMIN_USERNAME=${SIRK_ADMIN_USERNAME}" \
     sirk-central:setup node scripts/configure-production.js
@@ -121,29 +135,31 @@ else
   chmod 0600 .env
 fi
 
+COMPOSE=(docker compose -f "$COMPOSE_FILE" --profile auth)
 log "Validating Compose configuration"
-docker compose --profile auth config >/dev/null
+"${COMPOSE[@]}" config >/dev/null
 log "Building and starting a completely fresh checkout"
-docker compose --profile auth up -d --build --remove-orphans central auth caddy
+"${COMPOSE[@]}" up -d --build --remove-orphans central auth caddy
 
 log "Waiting for container-local readiness"
 ready=0
 for _ in $(seq 1 90); do
-  if docker compose exec -T central node -e "fetch('http://127.0.0.1:8080/readyz').then(async r=>{const j=await r.json();if(!r.ok||!j.ok)process.exit(1)}).catch(()=>process.exit(1))" >/dev/null 2>&1; then
+  if "${COMPOSE[@]}" exec -T central node -e "fetch('http://127.0.0.1:8080/readyz').then(async r=>{const j=await r.json();if(!r.ok||!j.ok)process.exit(1)}).catch(()=>process.exit(1))" >/dev/null 2>&1; then
     ready=1
     break
   fi
   sleep 2
 done
-[[ "$ready" == "1" ]] || { docker compose ps >&2 || true; docker compose logs --tail=200 central auth caddy >&2 || true; die "fresh installation did not become ready"; }
+[[ "$ready" == "1" ]] || { "${COMPOSE[@]}" ps >&2 || true; "${COMPOSE[@]}" logs --tail=200 central auth caddy >&2 || true; die "fresh installation did not become ready"; }
 
 if [[ "$RUN_SMOKE" == "1" ]]; then
   chmod +x deploy/smoke-test.sh
-  SIRK_SMOKE_RESTART=1 bash deploy/smoke-test.sh
+  SIRK_COMPOSE_FILE="$COMPOSE_FILE" SIRK_SMOKE_RESTART=1 bash deploy/smoke-test.sh
 fi
 
 log "Clean reinstall completed"
 printf 'Checkout: %s\n' "$(git rev-parse HEAD)"
 printf 'Ref:      %s\n' "$REPO_REF"
 printf 'Path:     %s\n' "$INSTALL_DIR"
+printf 'Compose:  %s\n' "$COMPOSE_FILE"
 printf 'Data:     %s\n' "$([[ "$PURGE_DATA" == "1" ]] && echo 'purged' || echo 'preserved in Docker volumes')"
