@@ -43,7 +43,7 @@ function canRead(identity) {
 }
 
 function canManage(identity) {
-    return Boolean(identity && identity.ok && identity.role === "Admin" || identity && identity.builtIn === true);
+    return Boolean(identity && identity.ok && identity.role === "Admin" && identity.builtIn !== true || identity && identity.builtIn === true);
 }
 
 function create(options) {
@@ -92,4 +92,4 @@ function create(options) {
     };
 }
 
-module.exports = { create };
+module.exports = { create, canRead, canManage };
