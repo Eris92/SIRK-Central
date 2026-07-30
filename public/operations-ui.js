@@ -16,22 +16,22 @@
     }
 
     function ensureUi(settings) {
-        if (document.getElementById("settingsTabUpdates")) return;
-        const nav = settings.querySelector(":scope > .settings-tabs");
+        if (document.getElementById("updatesTab")) return;
+        const nav = settings.querySelector(":scope > nav.settings-tabs");
         const panels = settings.querySelector(":scope > .settings-panels");
-        if (!nav || !panels) throw new Error("Primary settings navigation is unavailable.");
+        if (!nav || !panels) return;
 
         const updatesTab = document.createElement("button");
         updatesTab.type = "button";
         updatesTab.className = "settings-tab";
         updatesTab.id = "updatesTab";
-        updatesTab.dataset.operationsTab = "updates";
+        updatesTab.dataset.settingsTab = "updates";
 
         const backupTab = document.createElement("button");
         backupTab.type = "button";
         backupTab.className = "settings-tab";
         backupTab.id = "backupTab";
-        backupTab.dataset.operationsTab = "backup";
+        backupTab.dataset.settingsTab = "backup";
         nav.append(updatesTab, backupTab);
 
         const updatesPanel = document.createElement("section");
@@ -62,21 +62,34 @@
               <button type="button" class="secondary" id="refreshBackupButton"></button>
               <button type="button" id="runBackupButton"></button>
             </div>
+            <p id="restoreStatus" class="muted"></p>
             <div id="backupList" class="users-list"></div>
             <p id="backupMessage" class="error" role="status"></p>
           </article>`;
         panels.append(updatesPanel, backupPanel);
     }
 
-    function selectPanel(name) {
-        const settings = document.getElementById("settingsView");
-        for (const button of settings.querySelectorAll(":scope > .settings-tabs > .settings-tab")) {
-            const active = button.dataset.operationsTab === name;
-            button.classList.toggle("active", active);
+    function panelId(name) {
+        return {
+            users: "settingsTabUsers",
+            "add-user": "settingsTabAddUser",
+            roles: "settingsTabRoles",
+            entra: "settingsTabEntra",
+            updates: "settingsTabUpdates",
+            backup: "settingsTabBackup"
+        }[name] || "";
+    }
+
+    function selectPanel(settings, name) {
+        const nav = settings.querySelector(":scope > nav.settings-tabs");
+        const panels = settings.querySelector(":scope > .settings-panels");
+        if (!nav || !panels) return;
+        for (const button of nav.querySelectorAll("[data-settings-tab]")) {
+            button.classList.toggle("active", button.dataset.settingsTab === name);
+            button.setAttribute("aria-selected", String(button.dataset.settingsTab === name));
         }
-        for (const panel of settings.querySelectorAll(":scope > .settings-panels > .settings-tab-panel")) {
-            panel.hidden = panel.id !== (name === "updates" ? "settingsTabUpdates" : "settingsTabBackup");
-        }
+        const selectedId = panelId(name);
+        for (const panel of panels.querySelectorAll(":scope > .settings-tab-panel")) panel.hidden = panel.id !== selectedId;
     }
 
     async function loadUpdateStatus() {
@@ -96,11 +109,46 @@
         }
     }
 
+    function restoreStateText(state) {
+        if (!state || !state.state || state.state === "idle") return "";
+        const labels = {
+            scheduled: ["Odtworzenie zaplanowane", "Restore scheduled"],
+            stopping: ["Zatrzymywanie usług", "Stopping services"],
+            restoring: ["Odtwarzanie danych", "Restoring data"],
+            completed: ["Odtworzenie zakończone", "Restore completed"],
+            failed: ["Odtworzenie nie powiodło się", "Restore failed"]
+        };
+        const label = labels[state.state] || [state.state, state.state];
+        return text(label[0], label[1]) + (state.backup ? ": " + state.backup : "") + (state.error ? " · " + state.error : "");
+    }
+
+    async function restoreBackup(item) {
+        const first = confirm(text(
+            "Odtworzenie zastąpi bieżące dane Central i wyloguje użytkowników. Przed operacją zostanie automatycznie wykonany backup bezpieczeństwa. Kontynuować?",
+            "Restore will replace current Central data and sign users out. A safety backup will be created automatically. Continue?"
+        ));
+        if (!first) return;
+        const phrase = prompt(text(
+            'Aby potwierdzić, wpisz dokładnie: RESTORE SIRK CENTRAL',
+            'To confirm, type exactly: RESTORE SIRK CENTRAL'
+        ), "");
+        if (phrase !== "RESTORE SIRK CENTRAL") {
+            throw new Error(text("Nieprawidłowa fraza potwierdzająca.", "Invalid confirmation phrase."));
+        }
+        return api("/api/settings/backup/restore", {
+            method: "POST",
+            body: JSON.stringify({ name: item.name, confirm: phrase })
+        });
+    }
+
     async function loadBackups() {
         const list = document.getElementById("backupList");
+        const restoreStatus = document.getElementById("restoreStatus");
         try {
             const result = await api("/api/settings/backup/status");
             const backups = Array.isArray(result.backups) ? result.backups : [];
+            restoreStatus.textContent = restoreStateText(result.restore);
+            restoreStatus.className = result.restore && result.restore.state === "failed" ? "error" : "muted";
             if (!backups.length) {
                 list.textContent = text("Brak kopii zapasowych.", "No backups available.");
                 return;
@@ -112,7 +160,26 @@
                 info.innerHTML = "<strong></strong><small></small>";
                 info.querySelector("strong").textContent = item.name;
                 info.querySelector("small").textContent = new Date(item.createdAtUtc).toLocaleString(lang()) + " · " + Math.ceil(Number(item.size || 0) / 1024) + " KiB";
-                row.append(info);
+                const restore = document.createElement("button");
+                restore.type = "button";
+                restore.className = "danger";
+                restore.textContent = text("Odtwórz", "Restore");
+                restore.addEventListener("click", async () => {
+                    const message = document.getElementById("backupMessage");
+                    restore.disabled = true;
+                    try {
+                        const result = await restoreBackup(item);
+                        if (!result) return;
+                        message.textContent = text("Odtworzenie zostało zaplanowane. Backup bezpieczeństwa: ", "Restore scheduled. Safety backup: ") + (result.safetyBackup || "");
+                        message.className = "success";
+                        setTimeout(() => location.reload(), 12000);
+                    } catch (error) {
+                        message.textContent = error.message;
+                        message.className = "error";
+                        restore.disabled = false;
+                    }
+                });
+                row.append(info, restore);
                 return row;
             }));
         } catch (error) {
@@ -148,16 +215,15 @@
         if (!(identity.builtIn || identity.role === "Admin" || identity.role === "SecAdmin")) return;
 
         ensureUi(settings);
-        document.getElementById("updatesTab").addEventListener("click", event => {
-            event.stopImmediatePropagation();
-            selectPanel("updates");
-            loadUpdateStatus();
-        }, true);
-        document.getElementById("backupTab").addEventListener("click", event => {
-            event.stopImmediatePropagation();
-            selectPanel("backup");
-            loadBackups();
-        }, true);
+        const nav = settings.querySelector(":scope > nav.settings-tabs");
+        nav.addEventListener("click", event => {
+            const button = event.target.closest("[data-settings-tab]");
+            if (!button || !nav.contains(button)) return;
+            const name = button.dataset.settingsTab;
+            queueMicrotask(() => selectPanel(settings, name));
+            if (name === "updates") loadUpdateStatus();
+            if (name === "backup") loadBackups();
+        });
         document.getElementById("refreshUpdateButton").addEventListener("click", loadUpdateStatus);
         document.getElementById("refreshBackupButton").addEventListener("click", loadBackups);
         document.getElementById("runUpdateButton").addEventListener("click", async () => {
