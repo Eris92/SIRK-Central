@@ -71,9 +71,14 @@ jobs:
       - name: Run tests
         run: npm test
 
-      - name: Validate package entry point
+      - name: Validate package metadata and entry point
         run: |
-          node -e "const p=require('./package.json'); if(p.main!=='src/server-v2.js'||!String(p.scripts.start).includes('server-v2.js')) process.exit(1)"
+          node - <<'NODE'
+          const pkg = require('./package.json');
+          const lock = require('./package-lock.json');
+          if (pkg.version !== lock.version || pkg.version !== lock.packages[''].version) process.exit(1);
+          if (pkg.main !== 'src/server-v2.js' || !String(pkg.scripts.start).includes('server-v2.js')) process.exit(1);
+          NODE
           grep -F 'CMD ["node", "src/server-v2.js"]' Dockerfile
 
       - name: Validate Docker Compose
