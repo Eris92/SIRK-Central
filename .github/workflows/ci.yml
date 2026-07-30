@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, feat/central-production-hardening]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -50,12 +50,17 @@ jobs:
         run: |
           node --check auth/server.js
           node --check scripts/configure-production.js
+          node --check src/server-v1.js
           node --check src/server.js
           node --check src/entry.js
           node --check src/sso-ticket.js
           node --check src/session-store.js
           node --check src/organization-store.js
+          node --check src/organization-api.js
           node --check src/approval-store.js
+          node --check src/approval-api.js
+          node --check src/portal-assignment-store.js
+          node --check src/portal-assignment-api.js
           node --check src/passkey-store.js
           node --check src/system-health.js
           node --check updater/server.js
