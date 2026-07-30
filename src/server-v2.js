@@ -4,6 +4,9 @@ const crypto = require("node:crypto");
 const http = require("node:http");
 const recoveryCodeStoreFactory = require("./recovery-code-store");
 const challengeStoreFactory = require("./webauthn-challenge-store");
+const loginTransactionStoreFactory = require("./login-transaction-store");
+const { verifySecret, verifyAccessKey } = require("./security");
+const { permissionsFor } = require("./rbac");
 const { loadConfig, createApp } = require("./server-v1");
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
@@ -25,6 +28,10 @@ function validToken(value) {
 
 function csrfCookie(token) {
     return CSRF_COOKIE + "=" + token + "; Path=/; Secure; SameSite=Strict; Max-Age=28800";
+}
+
+function sessionCookie(token, hours) {
+    return "sirk_central_session=" + token + "; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=" + (hours * 3600);
 }
 
 function json(res, status, body, extraHeaders = {}) {
@@ -86,12 +93,10 @@ function decorateResponse(res, token) {
         if (reasonOrHeaders && typeof reasonOrHeaders === "object") headers = reasonOrHeaders;
         else if (maybeHeaders && typeof maybeHeaders === "object") headers = maybeHeaders;
         else headers = {};
-
         const merged = Object.assign({}, securityHeaders(), headers);
         const existingCookie = merged["Set-Cookie"] || merged["set-cookie"] || res.getHeader("Set-Cookie");
         delete merged["set-cookie"];
         merged["Set-Cookie"] = appendSetCookie(existingCookie, csrfCookie(token));
-
         if (reasonOrHeaders && typeof reasonOrHeaders === "string") return originalWriteHead(statusCode, reasonOrHeaders, merged);
         return originalWriteHead(statusCode, merged);
     };
@@ -100,7 +105,7 @@ function decorateResponse(res, token) {
 function csrfRequired(req, url) {
     if (SAFE_METHODS.has(req.method)) return false;
     if (!url.pathname.startsWith("/api/")) return false;
-    return url.pathname !== "/api/login";
+    return url.pathname !== "/api/login" && url.pathname !== "/api/login/mfa/recovery";
 }
 
 function csrfAccepted(req, config, cookies) {
@@ -120,12 +125,45 @@ function breakGlassActor(app, req) {
     return actor;
 }
 
+function requestIp(req, config) {
+    if (config.trustProxy) {
+        const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
+        if (forwarded) return forwarded.slice(0, 128);
+    }
+    return String(req.socket.remoteAddress || "unknown").slice(0, 128);
+}
+
+function bearerCredential(req) {
+    const match = String(req.headers.authorization || "").match(/^Bearer ([A-Za-z0-9_-]+)$/);
+    return match ? match[1] : "";
+}
+
+function effectiveSecurity(app, config) {
+    const overrides = app.userStore.securityOverrides();
+    return {
+        passwordHash: overrides.breakGlassPasswordHash || config.adminPasswordHash,
+        accessKeyHash: overrides.accessKeyHash || config.accessKeyHash
+    };
+}
+
+function issueFullSession(app, config, identity, req) {
+    const issued = app.sessions.issue(Object.assign({}, identity, {
+        permissions: permissionsFor(identity.role, identity.builtIn)
+    }), {
+        ip: requestIp(req, config),
+        userAgent: String(req.headers["user-agent"] || "")
+    });
+    return issued.token;
+}
+
 function createHardenedApp(config) {
     const app = createApp(config);
     const innerHandler = app.server.listeners("request")[0];
     if (typeof innerHandler !== "function") throw new Error("SIRK Central v1 request handler is unavailable.");
     const recoveryCodes = recoveryCodeStoreFactory.create({ dataDir: config.dataDir });
     const webauthnChallenges = challengeStoreFactory.create({ dataDir: config.dataDir });
+    const loginTransactions = loginTransactionStoreFactory.create({ dataDir: config.dataDir });
+    const loginFailures = new Map();
 
     const server = http.createServer(async (req, res) => {
         try {
@@ -136,11 +174,7 @@ function createHardenedApp(config) {
 
             if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/csrf-bootstrap.js") {
                 const data = Buffer.from(csrfBootstrapSource());
-                res.writeHead(200, {
-                    "Content-Type": "text/javascript; charset=utf-8",
-                    "Content-Length": String(data.length),
-                    "Cache-Control": "no-store"
-                });
+                res.writeHead(200, { "Content-Type": "text/javascript; charset=utf-8", "Content-Length": String(data.length), "Cache-Control": "no-store" });
                 return res.end(req.method === "HEAD" ? undefined : data);
             }
 
@@ -151,28 +185,77 @@ function createHardenedApp(config) {
                     approvals: Boolean(app.approvals && app.approvals.filePath),
                     portalAssignments: Boolean(app.portalAssignments && app.portalAssignments.filePath),
                     recoveryCodes: Boolean(recoveryCodes.filePath),
-                    webauthnChallenges: Boolean(webauthnChallenges.filePath)
+                    webauthnChallenges: Boolean(webauthnChallenges.filePath),
+                    loginTransactions: Boolean(loginTransactions.filePath)
                 };
                 const ready = Object.values(checks).every(Boolean);
-                return json(res, ready ? 200 : 503, { ok: ready, version: "1.0.0-rc.3", checks });
+                return json(res, ready ? 200 : 503, { ok: ready, version: "1.0.0-rc.4", checks });
             }
 
             if (csrfRequired(req, url) && !csrfAccepted(req, config, cookies)) {
                 return json(res, 403, { ok: false, error: "CSRF validation failed." });
             }
 
+            if (req.method === "POST" && url.pathname === "/api/login") {
+                if (!verifyAccessKey(bearerCredential(req), effectiveSecurity(app, config).accessKeyHash)) return json(res, 404, { ok: false, error: "Not found." });
+                const origin = String(req.headers.origin || "");
+                if (origin && origin !== config.publicOrigin) return json(res, 403, { ok: false, error: "Origin rejected." });
+                const address = requestIp(req, config);
+                const failure = loginFailures.get(address);
+                if (failure && failure.blockedUntil > Date.now()) return json(res, 429, { ok: false, error: "Too many login attempts. Try again later." });
+                const body = await readBody(req);
+                let identity = null;
+                if (String(body.username || "") === config.adminUsername && verifySecret(String(body.password || ""), effectiveSecurity(app, config).passwordHash)) {
+                    identity = { username: config.adminUsername, displayName: config.adminUsername, identityKey: "breakglass:" + config.adminUsername, source: "local", role: "BreakGlass", builtIn: true, status: "active" };
+                } else {
+                    identity = app.userStore.authenticateLocal(body.username, body.password);
+                }
+                if (!identity) {
+                    const attempts = failure && failure.expiresAt > Date.now() ? failure.attempts + 1 : 1;
+                    loginFailures.set(address, { attempts, expiresAt: Date.now() + 900000, blockedUntil: attempts >= 5 ? Date.now() + 900000 : 0 });
+                    app.securityCenter.audit("authentication.local.failure", null, { username: String(body.username || ""), ip: address });
+                    return json(res, 401, { ok: false, error: "Invalid username or password." });
+                }
+                loginFailures.delete(address);
+                if (identity.builtIn === true && recoveryCodes.status(identity).configured) {
+                    const transaction = loginTransactions.issue(identity, { ip: address, userAgent: String(req.headers["user-agent"] || "") });
+                    app.securityCenter.audit("authentication.breakglass.mfa_required", identity, { ip: address });
+                    return json(res, 202, { ok: true, mfaRequired: true, methods: ["recovery-code"], transactionToken: transaction.token, expiresAtUtc: transaction.expiresAtUtc });
+                }
+                const sessionToken = issueFullSession(app, config, identity, req);
+                app.securityCenter.audit("authentication.local.success", identity, { ip: address, mfa: false });
+                if (identity.builtIn) app.securityCenter.recordBreakGlassUse(address, identity);
+                return json(res, 200, { ok: true, mfaRequired: false }, { "Set-Cookie": sessionCookie(sessionToken, config.sessionAbsoluteHours) });
+            }
+
+            if (req.method === "POST" && url.pathname === "/api/login/mfa/recovery") {
+                const origin = String(req.headers.origin || "");
+                if (origin && origin !== config.publicOrigin) return json(res, 403, { ok: false, error: "Origin rejected." });
+                const body = await readBody(req);
+                const context = { ip: requestIp(req, config), userAgent: String(req.headers["user-agent"] || "") };
+                const identity = loginTransactions.consume(body.transactionToken, context);
+                if (!identity || identity.builtIn !== true) {
+                    app.securityCenter.audit("authentication.breakglass.mfa_transaction_rejected", null, { ip: context.ip });
+                    return json(res, 401, { ok: false, error: "MFA transaction is invalid or expired." });
+                }
+                try {
+                    const result = recoveryCodes.verify(identity, body.recoveryCode);
+                    const sessionToken = issueFullSession(app, config, identity, req);
+                    app.securityCenter.audit("authentication.breakglass.mfa_success", identity, { ip: context.ip, method: "recovery-code", remaining: result.remaining });
+                    app.securityCenter.recordBreakGlassUse(context.ip, identity);
+                    return json(res, 200, { ok: true, mfaRequired: false, recoveryCodesRemaining: result.remaining }, { "Set-Cookie": sessionCookie(sessionToken, config.sessionAbsoluteHours) });
+                } catch (error) {
+                    app.securityCenter.audit("authentication.breakglass.mfa_failure", identity, { ip: context.ip, method: "recovery-code" });
+                    return json(res, 401, { ok: false, error: error.message || "Recovery code verification failed." });
+                }
+            }
+
             if (url.pathname.startsWith("/api/break-glass/mfa")) {
                 const actor = breakGlassActor(app, req);
                 if (!actor) return json(res, 403, { ok: false, error: "Break-Glass session required." });
-
                 if (req.method === "GET" && url.pathname === "/api/break-glass/mfa/status") {
-                    return json(res, 200, {
-                        ok: true,
-                        recoveryCodes: recoveryCodes.status(actor),
-                        passkeys: { configured: false, active: 0, enforcement: "not-enabled" }
-                    });
+                    return json(res, 200, { ok: true, recoveryCodes: recoveryCodes.status(actor), passkeys: { configured: false, active: 0, enforcement: "not-enabled" } });
                 }
-
                 if (req.method === "POST" && url.pathname === "/api/break-glass/mfa/recovery-codes/rotate") {
                     const body = await readBody(req);
                     const count = Math.max(5, Math.min(20, Number(body.count || 10)));
@@ -182,13 +265,11 @@ function createHardenedApp(config) {
                     app.securityCenter.audit("breakglass.recovery_codes.rotated", actor, { count: codes.length, revokedSessions });
                     return json(res, 200, { ok: true, codes, shownOnce: true, revokedSessions });
                 }
-
                 if (req.method === "DELETE" && url.pathname === "/api/break-glass/mfa/recovery-codes") {
                     const removed = recoveryCodes.revoke(actor);
                     app.securityCenter.audit("breakglass.recovery_codes.revoked", actor, { removed });
                     return json(res, 200, { ok: true, removed });
                 }
-
                 return json(res, 404, { ok: false, error: "Not found." });
             }
 
@@ -200,7 +281,7 @@ function createHardenedApp(config) {
     });
 
     server.on("upgrade", (req, socket, head) => app.server.emit("upgrade", req, socket, head));
-    return Object.assign({}, app, { server, recoveryCodes, webauthnChallenges });
+    return Object.assign({}, app, { server, recoveryCodes, webauthnChallenges, loginTransactions });
 }
 
 if (require.main === module) {
