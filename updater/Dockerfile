@@ -1,0 +1,8 @@
+FROM node:22-alpine
+
+RUN apk add --no-cache bash git docker-cli docker-cli-compose curl
+WORKDIR /opt/sirk-central
+COPY updater/server.js /app/server.js
+USER root
+EXPOSE 8090
+CMD ["node", "/app/server.js"]
