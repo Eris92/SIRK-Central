@@ -6,6 +6,7 @@ const path = require("node:path");
 
 const originalCreateServer = http.createServer;
 const SCRIPT_PATH = path.join(__dirname, "..", "public", "workspace-routing.js");
+const ROUTING_TAG = '<script src="/workspace-routing.js" defer></script>';
 
 function workspacesFor(identity) {
   if (!identity || !identity.ok) return [];
@@ -38,7 +39,7 @@ function cloneRequest(req, url) {
 
 async function capture(listener, req) {
   let statusCode = 200;
-  let headers = {};
+  const headers = {};
   const chunks = [];
   const response = {
     statusCode: 200,
@@ -64,8 +65,18 @@ async function capture(listener, req) {
   return { statusCode, headers, body: Buffer.concat(chunks) };
 }
 
+function prepareBody(captured, bodyOverride) {
+  let body = bodyOverride === undefined ? captured.body : Buffer.from(bodyOverride);
+  const contentType = String(captured.headers["content-type"] || "");
+  if (contentType.includes("text/html")) {
+    const html = body.toString("utf8");
+    if (!html.includes("/workspace-routing.js")) body = Buffer.from(html.replace("</body>", ROUTING_TAG + "</body>"));
+  }
+  return body;
+}
+
 function send(res, captured, bodyOverride) {
-  const body = bodyOverride === undefined ? captured.body : Buffer.from(bodyOverride);
+  const body = prepareBody(captured, bodyOverride);
   const headers = Object.assign({}, captured.headers, { "content-length": String(body.length) });
   res.writeHead(captured.statusCode, headers);
   res.end(body);
@@ -132,8 +143,7 @@ http.createServer = function patchedCreateServer(listener) {
           res.end();
           return;
         }
-        const allowed = workspacesFor(identity).includes(workspace);
-        if (!allowed) {
+        if (!workspacesFor(identity).includes(workspace)) {
           const hidden = workspace === "break-glass";
           const body = Buffer.from(JSON.stringify({ ok: false, error: hidden ? "Not found." : "Workspace access denied." }));
           res.writeHead(hidden ? 404 : 403, { "Content-Type": "application/json; charset=utf-8", "Content-Length": body.length, "Cache-Control": "no-store" });
@@ -141,6 +151,12 @@ http.createServer = function patchedCreateServer(listener) {
           return;
         }
         const captured = await capture(listener, cloneRequest(req, "/" + url.search));
+        send(res, captured);
+        return;
+      }
+
+      if (req.method === "GET" && url.pathname === "/") {
+        const captured = await capture(listener, req);
         send(res, captured);
         return;
       }
