@@ -119,11 +119,15 @@ HEADERS_FILE="$(mktemp)"
 BODY_FILE="$(mktemp)"
 trap 'rm -f "${HEADERS_FILE}" "${BODY_FILE}"' EXIT
 curl -fsS --max-time 20 -D "${HEADERS_FILE}" -o "${BODY_FILE}" "${PUBLIC_ORIGIN}/readyz"
-node - "${BODY_FILE}" <<'NODE'
-const fs = require('node:fs');
-const body = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-if (body.ok !== true || !body.version) process.exit(1);
-NODE
+"${COMPOSE[@]}" exec -T central node -e '
+let input = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", chunk => { input += chunk; });
+process.stdin.on("end", () => {
+  const body = JSON.parse(input);
+  if (body.ok !== true || !body.version) process.exit(1);
+});
+' < "${BODY_FILE}"
 grep -qi '^strict-transport-security:' "${HEADERS_FILE}" || fail "HSTS header missing"
 grep -qi '^x-frame-options: DENY' "${HEADERS_FILE}" || fail "X-Frame-Options header missing"
 grep -qi '^x-content-type-options: nosniff' "${HEADERS_FILE}" || fail "X-Content-Type-Options header missing"
