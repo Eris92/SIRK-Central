@@ -6,7 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 const { hashSecret, hashAccessKey } = require("../src/security");
-const { createHardenedApp } = require("../src/server-v2");
+const { createProductionApp } = require("../src/server-v3");
 
 function cookieValue(headers, name) {
   const values = typeof headers.getSetCookie === "function"
@@ -52,7 +52,7 @@ test("BreakGlass recovery code is required before a full session is issued", asy
     env: { NODE_ENV: "test" }
   };
 
-  const app = createHardenedApp(config);
+  const app = createProductionApp(config);
   await new Promise((resolve, reject) => {
     app.server.once("error", reject);
     app.server.listen(0, "127.0.0.1", resolve);
@@ -104,6 +104,21 @@ test("BreakGlass recovery code is required before a full session is issued", asy
   assert.equal(cookieValue(pending.response.headers, "sirk_central_session"), "");
   const pendingCsrf = cookieValue(pending.response.headers, "sirk_central_csrf");
   assert.ok(pendingCsrf);
+
+  const rejectedWithoutCsrf = await jsonRequest(origin, "/api/login/mfa/recovery", {
+    method: "POST",
+    headers: {
+      ...baseHeaders,
+      origin: config.publicOrigin,
+      "sec-fetch-site": "same-origin"
+    },
+    body: {
+      transactionToken: pending.payload.transactionToken,
+      recoveryCode
+    }
+  });
+  assert.equal(rejectedWithoutCsrf.response.status, 403);
+  assert.equal(rejectedWithoutCsrf.payload.error, "CSRF validation failed.");
 
   const mfaHeaders = {
     ...baseHeaders,
