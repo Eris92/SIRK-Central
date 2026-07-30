@@ -10,6 +10,11 @@ LOCK_DIR="${STATE_DIR}/update.lock"
 LOG_FILE="${STATE_DIR}/update-$(date -u +%Y%m%dT%H%M%SZ).log"
 STARTED_AT="${SIRK_UPDATE_STARTED_AT:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
 REQUESTED_BY="${SIRK_UPDATE_REQUESTED_BY:-unknown}"
+CURRENT_COMMIT=""
+TARGET_COMMIT=""
+BACKUP_DIR=""
+DEPLOY_STARTED=0
+ROLLBACK_RUNNING=0
 
 mkdir -p "$STATE_DIR"
 chmod 0700 "$STATE_DIR"
@@ -19,7 +24,7 @@ write_status() {
   python3 - "$STATUS_FILE" "$state" "$message" "$STARTED_AT" "$REQUESTED_BY" "$LOG_FILE" "$commit" <<'PY'
 import json, os, sys, tempfile, datetime
 path,state,message,started,requested,log,commit=sys.argv[1:]
-data={"state":state,"running":state in ("starting","running"),"message":message,"startedAtUtc":started,"requestedBy":requested,"logFile":log}
+data={"state":state,"running":state in ("starting","running","rollback"),"message":message,"startedAtUtc":started,"requestedBy":requested,"logFile":log}
 if commit:data["commit"]=commit
 if state in ("completed","failed"):data["finishedAtUtc"]=datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00","Z")
 os.makedirs(os.path.dirname(path),exist_ok=True)
@@ -29,10 +34,34 @@ os.chmod(tmp,0o600); os.replace(tmp,path)
 PY
 }
 
+rollback() {
+  local original_code="$1"
+  [[ "$ROLLBACK_RUNNING" -eq 0 ]] || exit "$original_code"
+  ROLLBACK_RUNNING=1
+  trap - ERR
+  write_status rollback "Update failed. Restoring the previous version." "${CURRENT_COMMIT:-}" || true
+
+  if [[ -n "$CURRENT_COMMIT" && -d "$INSTALL_DIR/.git" ]]; then
+    cd "$INSTALL_DIR"
+    git reset --hard "$CURRENT_COMMIT" || true
+    if [[ -n "$BACKUP_DIR" && -f "$BACKUP_DIR/.env" ]]; then
+      cp -a "$BACKUP_DIR/.env" .env || true
+      chmod 0600 .env || true
+    fi
+    if [[ "$DEPLOY_STARTED" -eq 1 ]]; then
+      docker compose --profile auth config >/dev/null || true
+      docker compose --profile auth build central auth updater || true
+      docker compose --profile auth up -d --force-recreate --remove-orphans central auth caddy || true
+    fi
+  fi
+
+  write_status failed "Update failed and rollback was attempted. Check the updater log." "${CURRENT_COMMIT:-}" || true
+  exit "$original_code"
+}
+
 fail() {
   local code=$?
-  write_status failed "Update failed. Check the updater log." || true
-  exit "$code"
+  rollback "$code"
 }
 trap fail ERR
 
@@ -73,6 +102,7 @@ write_status running "Building updated services." "$TARGET_COMMIT"
 docker compose --profile auth build --pull central auth updater
 
 write_status running "Deploying updated services." "$TARGET_COMMIT"
+DEPLOY_STARTED=1
 docker compose --profile auth up -d --force-recreate --remove-orphans central auth caddy
 
 healthy=0
