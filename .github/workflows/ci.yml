@@ -44,7 +44,8 @@ jobs:
             deploy/update.sh \
             deploy/web-update.sh \
             deploy/backup.sh \
-            deploy/restore.sh
+            deploy/restore.sh \
+            deploy/smoke-test.sh
 
       - name: Validate JavaScript syntax
         run: |
@@ -70,8 +71,15 @@ jobs:
             'test/mfa-continuity-http.test.js',
             'test/webauthn-attestation.test.js',
             'test/break-glass-passkey-http.test.js',
-            'test/break-glass-passkey-registration-http.test.js'
+            'test/break-glass-passkey-registration-http.test.js',
+            'deploy/smoke-test.sh'
           ]) if (!fs.existsSync(file)) process.exit(1);
+          const restore = fs.readFileSync('deploy/restore.sh', 'utf8');
+          if (!restore.includes('/readyz') || restore.includes('/healthz')) process.exit(1);
+          const smoke = fs.readFileSync('deploy/smoke-test.sh', 'utf8');
+          for (const required of ['caddy validate', '/readyz', 'restart central', 'strict-transport-security']) {
+            if (!smoke.includes(required)) process.exit(1);
+          }
           const html = fs.readFileSync('public/index.html', 'utf8');
           const csrf = html.indexOf('/csrf-bootstrap.js');
           const app = html.indexOf('/app.js');
