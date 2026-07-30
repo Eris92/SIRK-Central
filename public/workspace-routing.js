@@ -25,11 +25,24 @@
     });
 
     const bootstrap = window.__SIRK_WORKSPACE_BOOTSTRAP || { workspaces: ["portals"] };
-    const allowed = new Set(Array.isArray(bootstrap.workspaces) ? bootstrap.workspaces : ["portals"]);
+    let allowed = new Set(Array.isArray(bootstrap.workspaces) ? bootstrap.workspaces : ["portals"]);
     const currentPath = window.location.pathname.toLowerCase();
     const currentWorkspace = Object.keys(routes).find(key => routes[key] === currentPath) || "portals";
     let reconcileQueued = false;
     let openTimer = null;
+    let identityRefreshInProgress = false;
+    let dashboardWasVisible = false;
+
+    function workspacesFromIdentity(identity) {
+        if (!identity || !identity.ok) return ["portals"];
+        if (identity.builtIn === true && identity.source === "local" && identity.role === "BreakGlass") {
+            return ["portals", "admin", "security", "settings", "break-glass"];
+        }
+        const result = ["portals"];
+        if (identity.role === "Admin") result.push("admin", "settings");
+        if (identity.role === "SecAdmin") result.push("security", "settings");
+        return result;
+    }
 
     function desiredHidden(workspace) {
         if (!allowed.has(workspace)) return true;
@@ -100,6 +113,37 @@
         }
     }
 
+    async function refreshAllowedFromSession() {
+        if (identityRefreshInProgress) return;
+        identityRefreshInProgress = true;
+        try {
+            const response = await fetch("/api/session", {
+                credentials: "same-origin",
+                cache: "no-store",
+                headers: { Accept: "application/json" }
+            });
+            if (!response.ok) return;
+            const identity = await response.json();
+            allowed = new Set(workspacesFromIdentity(identity));
+            window.__SIRK_WORKSPACE_BOOTSTRAP = {
+                authenticated: Boolean(identity && identity.ok),
+                workspaces: Array.from(allowed)
+            };
+            synchronizeMenu();
+            enforceCurrentWorkspace();
+        } catch (_) {
+        } finally {
+            identityRefreshInProgress = false;
+        }
+    }
+
+    function refreshWhenDashboardBecomesVisible() {
+        const dashboard = document.getElementById("dashboardView");
+        const visible = Boolean(dashboard && !dashboard.hidden);
+        if (visible && !dashboardWasVisible) refreshAllowedFromSession();
+        dashboardWasVisible = visible;
+    }
+
     document.addEventListener("click", function (event) {
         const button = event.target && event.target.closest ? event.target.closest("button") : null;
         if (!button) return;
@@ -121,9 +165,11 @@
 
     function initialize() {
         synchronizeMenu();
+        refreshWhenDashboardBecomesVisible();
         enforceCurrentWorkspace();
 
         const observer = new MutationObserver(function () {
+            refreshWhenDashboardBecomesVisible();
             queueSynchronizeMenu();
             enforceCurrentWorkspace();
         });
@@ -136,6 +182,7 @@
 
         for (const delay of [0, 50, 150, 350, 700, 1200, 2000]) {
             window.setTimeout(function () {
+                refreshWhenDashboardBecomesVisible();
                 synchronizeMenu();
                 enforceCurrentWorkspace();
             }, delay);
