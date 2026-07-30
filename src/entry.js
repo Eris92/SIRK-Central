@@ -17,7 +17,7 @@ function isExactBreakGlass(identity) {
 }
 
 function allowedWorkspaces(identity) {
-    if (!identity || !identity.ok) return [];
+    if (!identity || !identity.ok) return ["portals"];
     if (isExactBreakGlass(identity)) return ["portals", "admin", "security", "settings", "break-glass"];
     const result = ["portals"];
     if (identity.role === "Admin") result.push("admin", "settings");
@@ -82,11 +82,16 @@ function sendJson(res, status, body, headOnly) {
     res.end(headOnly ? undefined : data);
 }
 
-function sendCaptured(res, captured, body, headOnly) {
-    const output = body === undefined ? captured.body : Buffer.from(body);
-    const headers = Object.assign({}, captured.headers, { "content-length": String(output.length), "cache-control": "no-store" });
-    res.writeHead(captured.statusCode, headers);
-    res.end(headOnly ? undefined : output);
+function sendScript(res, source, headOnly) {
+    const data = Buffer.from(source, "utf8");
+    res.writeHead(200, {
+        "Content-Type": "text/javascript; charset=utf-8",
+        "Content-Length": String(data.length),
+        "Cache-Control": "no-store, no-cache, must-revalidate",
+        "Pragma": "no-cache",
+        "X-Content-Type-Options": "nosniff"
+    });
+    res.end(headOnly ? undefined : data);
 }
 
 function redirect(res, location) {
@@ -94,12 +99,18 @@ function redirect(res, location) {
     res.end();
 }
 
+async function readIdentity(requestHandler, req) {
+    const result = await capture(requestHandler, cloneRequest(req, "/api/session", "GET"));
+    if (result.statusCode !== 200) return null;
+    try { return JSON.parse(result.body.toString("utf8")); }
+    catch (_) { return null; }
+}
+
 async function main() {
     const config = loadConfig(process.env);
     const app = createApp(config);
     const requestHandler = app.server.listeners("request")[0];
     const routingScript = fs.readFileSync(path.join(__dirname, "..", "public", "workspace-routing.js"));
-    const initScript = fs.readFileSync(path.join(__dirname, "..", "public", "workspace-init.js"));
     if (typeof requestHandler !== "function") throw new Error("SIRK Central request handler is unavailable.");
 
     const server = http.createServer(async (req, res) => {
@@ -119,44 +130,29 @@ async function main() {
                 return;
             }
 
-            if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/workspace-init.js") {
-                res.writeHead(200, {
-                    "Content-Type": "text/javascript; charset=utf-8",
-                    "Content-Length": String(initScript.length),
-                    "Cache-Control": "no-store",
-                    "X-Content-Type-Options": "nosniff"
-                });
-                res.end(headOnly ? undefined : initScript);
-                return;
+            if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/workspace-bootstrap.js") {
+                const identity = await readIdentity(requestHandler, req);
+                const bootstrap = {
+                    authenticated: Boolean(identity && identity.ok),
+                    workspaces: allowedWorkspaces(identity)
+                };
+                return sendScript(res, "window.__SIRK_WORKSPACE_BOOTSTRAP=" + JSON.stringify(bootstrap) + ";\n", headOnly);
             }
 
             if (workspace && (req.method === "GET" || req.method === "HEAD")) {
-                const sessionResult = await capture(requestHandler, cloneRequest(req, "/api/session", "GET"));
-                if (sessionResult.statusCode !== 200) return redirect(res, "/");
-
-                let identity;
-                try { identity = JSON.parse(sessionResult.body.toString("utf8")); }
-                catch (_) { return redirect(res, "/"); }
+                const identity = await readIdentity(requestHandler, req);
+                if (!identity) return redirect(res, "/");
 
                 if (!allowedWorkspaces(identity).includes(workspace)) {
                     if (workspace === "break-glass") return sendJson(res, 404, { ok: false, error: "Not found." }, headOnly);
                     return sendJson(res, 403, { ok: false, error: "Workspace access denied." }, headOnly);
                 }
 
-                const page = await capture(requestHandler, cloneRequest(req, "/" + url.search, "GET"));
-                let html = page.body.toString("utf8");
-                if (page.statusCode === 200 && String(page.headers["content-type"] || "").includes("text/html") && !html.includes("/workspace-init.js")) {
-                    html = html.replace("</body>", '<script src="/workspace-init.js" defer></script></body>');
-                }
-                return sendCaptured(res, page, html, headOnly);
+                return requestHandler(cloneRequest(req, "/" + url.search, headOnly ? "HEAD" : "GET"), res);
             }
 
             if (url.pathname.startsWith("/api/break-glass/")) {
-                const sessionResult = await capture(requestHandler, cloneRequest(req, "/api/session", "GET"));
-                let identity = null;
-                if (sessionResult.statusCode === 200) {
-                    try { identity = JSON.parse(sessionResult.body.toString("utf8")); } catch (_) {}
-                }
+                const identity = await readIdentity(requestHandler, req);
                 if (!isExactBreakGlass(identity)) return sendJson(res, 404, { ok: false, error: "Not found." }, headOnly);
             }
 
