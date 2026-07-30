@@ -138,6 +138,7 @@ async function main() {
 
     const centralOrigin = "https://" + centralDomain;
     const accessKey = crypto.randomBytes(32).toString("base64url");
+    const updaterToken = crypto.randomBytes(48).toString("base64url");
     const lines = [
         "SIRK_BIND_HOST=127.0.0.1",
         "SIRK_PORT=8080",
@@ -147,6 +148,7 @@ async function main() {
         "SIRK_ACCESS_KEY_HASH='" + hashAccessKey(accessKey) + "'",
         "SIRK_DATA_DIR=/var/lib/sirk-central",
         "SIRK_SESSION_HOURS=" + sessionHours,
+        "SIRK_UPDATER_TOKEN='" + updaterToken + "'",
         "SIRK_WEBSITE_DOMAIN=" + websiteDomain,
         "SIRK_CENTRAL_DOMAIN=" + centralDomain,
         "SIRK_ACME_EMAIL=" + acmeEmail,
