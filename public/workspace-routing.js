@@ -3,7 +3,7 @@
 (function () {
     const routes = Object.freeze({
         portals: "/",
-        admin: "/permissions",
+        permissions: "/permissions",
         security: "/security",
         settings: "/settings",
         "break-glass": "/break-glass"
@@ -11,14 +11,14 @@
 
     const buttonWorkspaces = Object.freeze({
         backButton: "portals",
-        accessButton: "admin",
+        accessButton: "permissions",
         securityButton: "security",
         settingsButton: "settings",
         breakGlassButton: "break-glass"
     });
 
     const viewIds = Object.freeze({
-        admin: "accessView",
+        permissions: "accessView",
         security: "securityView",
         settings: "settingsView",
         "break-glass": "breakGlassView"
@@ -36,10 +36,10 @@
     function workspacesFromIdentity(identity) {
         if (!identity || !identity.ok) return ["portals"];
         if (identity.builtIn === true && identity.source === "local" && identity.role === "BreakGlass") {
-            return ["portals", "admin", "security", "settings", "break-glass"];
+            return ["portals", "permissions", "security", "settings", "break-glass"];
         }
         const result = ["portals"];
-        if (identity.role === "Admin" || identity.role === "SysAdmin") result.push("admin", "settings");
+        if (identity.role === "Admin" || identity.role === "SysAdmin") result.push("permissions", "settings");
         if (identity.role === "SecAdmin") result.push("security", "settings");
         return result;
     }
