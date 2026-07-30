@@ -22,7 +22,7 @@ Usage:
 
 Options:
   --preserve-env       Preserve the current .env file (default).
-  --new-env            Do not preserve .env; run interactive configuration again.
+  --new-env            Do not preserve .env; create a new configuration interactively.
   --purge-data         Delete the central-data, updater-state and Caddy volumes.
   --no-smoke           Skip deploy/smoke-test.sh after installation.
   --ref <branch|tag>   Git ref to clone.
@@ -53,6 +53,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ "$(id -u)" -eq 0 ]] || die "run as root"
+[[ -t 0 && -t 1 ]] || die "interactive terminal required"
 command -v git >/dev/null 2>&1 || die "git is required"
 command -v docker >/dev/null 2>&1 || die "docker is required"
 docker compose version >/dev/null 2>&1 || die "Docker Compose plugin is required"
@@ -95,17 +96,35 @@ cd "$INSTALL_DIR"
 if [[ "$PRESERVE_ENV" == "1" && -f "$WORK_DIR/.env" ]]; then
   install -m 0600 "$WORK_DIR/.env" "$INSTALL_DIR/.env"
   log "Restored preserved .env"
-  log "Validating Compose configuration"
-  docker compose --profile auth config >/dev/null
-  log "Building and starting a completely fresh checkout"
-  docker compose --profile auth up -d --build --remove-orphans central auth caddy
 else
-  log "No .env restored; starting the interactive clean installer"
-  export SIRK_REPO_URL="$REPO_URL"
-  export SIRK_REPO_REF="$REPO_REF"
-  export SIRK_INSTALL_DIR="$INSTALL_DIR"
-  bash deploy/configure-and-start.sh
+  read -r -p 'Website domain [sirkportal.com]: ' SIRK_WEBSITE_DOMAIN
+  SIRK_WEBSITE_DOMAIN="${SIRK_WEBSITE_DOMAIN:-sirkportal.com}"
+  read -r -p "Central domain [central.${SIRK_WEBSITE_DOMAIN}]: " SIRK_CENTRAL_DOMAIN
+  SIRK_CENTRAL_DOMAIN="${SIRK_CENTRAL_DOMAIN:-central.${SIRK_WEBSITE_DOMAIN}}"
+  read -r -p "ACME email [admin@${SIRK_WEBSITE_DOMAIN}]: " SIRK_ACME_EMAIL
+  SIRK_ACME_EMAIL="${SIRK_ACME_EMAIL:-admin@${SIRK_WEBSITE_DOMAIN}}"
+  read -r -p 'BreakGlass username [admin]: ' SIRK_ADMIN_USERNAME
+  SIRK_ADMIN_USERNAME="${SIRK_ADMIN_USERNAME:-admin}"
+
+  log "Building setup image and creating a brand-new .env"
+  docker build --tag sirk-central:setup .
+  docker run --rm -it \
+    --user 0:0 \
+    --volume "${INSTALL_DIR}:/config" \
+    --env SIRK_CONFIG_TARGET=/config \
+    --env "SIRK_WEBSITE_DOMAIN=${SIRK_WEBSITE_DOMAIN}" \
+    --env "SIRK_CENTRAL_DOMAIN=${SIRK_CENTRAL_DOMAIN}" \
+    --env "SIRK_ACME_EMAIL=${SIRK_ACME_EMAIL}" \
+    --env "SIRK_ADMIN_USERNAME=${SIRK_ADMIN_USERNAME}" \
+    sirk-central:setup node scripts/configure-production.js
+  [[ -s .env ]] || die "configuration file was not created"
+  chmod 0600 .env
 fi
+
+log "Validating Compose configuration"
+docker compose --profile auth config >/dev/null
+log "Building and starting a completely fresh checkout"
+docker compose --profile auth up -d --build --remove-orphans central auth caddy
 
 log "Waiting for container-local readiness"
 ready=0
