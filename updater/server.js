@@ -3,7 +3,7 @@
 const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
-const { spawn } = require("node:child_process");
+const { spawn, spawnSync } = require("node:child_process");
 const crypto = require("node:crypto");
 
 const bindHost = process.env.SIRK_UPDATER_BIND_HOST || "0.0.0.0";
@@ -13,8 +13,12 @@ const script = process.env.SIRK_UPDATER_SCRIPT || "/opt/sirk-central/deploy/web-
 const stateDir = process.env.SIRK_UPDATER_STATE_DIR || "/var/lib/sirk-updater";
 const dataDir = process.env.SIRK_BACKUP_SOURCE_DIR || "/var/lib/sirk-central";
 const backupDir = process.env.SIRK_BACKUP_DIR || path.join(stateDir, "backups");
+const backupTimeZone = process.env.SIRK_BACKUP_TIME_ZONE || "Europe/Warsaw";
+const composeFile = process.env.SIRK_COMPOSE_FILE || "/opt/sirk-central/docker-compose.yml";
 const statusPath = path.join(stateDir, "status.json");
+const restoreStatusPath = path.join(stateDir, "restore-status.json");
 let child = null;
+let restoreRunning = false;
 
 if (token.length < 43) throw new Error("SIRK_UPDATER_TOKEN must contain at least 43 characters.");
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("SIRK_UPDATER_PORT is invalid.");
@@ -30,18 +34,25 @@ function authorized(req) {
     const match = String(req.headers.authorization || "").match(/^Bearer (.+)$/);
     return Boolean(match && safeEqual(match[1], token));
 }
-function writeStatus(value) {
-    const temporary = statusPath + ".tmp";
+function atomicJson(filePath, value) {
+    const temporary = filePath + ".tmp";
     fs.writeFileSync(temporary, JSON.stringify(value, null, 2) + "\n", { mode: 0o600 });
-    fs.renameSync(temporary, statusPath);
+    fs.renameSync(temporary, filePath);
 }
-function readStatus() {
-    try { return JSON.parse(fs.readFileSync(statusPath, "utf8")); }
-    catch (_) { return { state: "idle", running: false }; }
+function readJson(filePath, fallback) {
+    try { return JSON.parse(fs.readFileSync(filePath, "utf8")); }
+    catch (_) { return fallback; }
+}
+function writeStatus(value) { atomicJson(statusPath, value); }
+function readStatus() { return readJson(statusPath, { state: "idle", running: false }); }
+function writeRestoreStatus(value) { atomicJson(restoreStatusPath, value); }
+function readRestoreStatus() { return readJson(restoreStatusPath, { state: "idle", running: false }); }
+function backupNameAllowed(name) {
+    return /^sirk-central-\d{8}T\d{6}(?:Z|[+-]\d{4})\.tar\.gz$/.test(String(name || ""));
 }
 function listBackups() {
     return fs.readdirSync(backupDir, { withFileTypes: true })
-        .filter(entry => entry.isFile() && /^sirk-central-\d{8}T\d{6}Z\.tar\.gz$/.test(entry.name))
+        .filter(entry => entry.isFile() && backupNameAllowed(entry.name))
         .map(entry => {
             const stat = fs.statSync(path.join(backupDir, entry.name));
             return { name: entry.name, size: stat.size, createdAtUtc: stat.mtime.toISOString() };
@@ -61,16 +72,65 @@ function readBody(req, limit = 8192) {
         req.on("error", reject);
     });
 }
-function timestamp() { return new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z"); }
+function zonedTimestamp() {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+        timeZone: backupTimeZone,
+        year: "numeric", month: "2-digit", day: "2-digit",
+        hour: "2-digit", minute: "2-digit", second: "2-digit",
+        hourCycle: "h23", timeZoneName: "longOffset"
+    }).formatToParts(new Date());
+    const value = type => (parts.find(part => part.type === type) || {}).value || "";
+    const offset = value("timeZoneName").replace(/^GMT/, "").replace(":", "") || "+0000";
+    return value("year") + value("month") + value("day") + "T" + value("hour") + value("minute") + value("second") + offset;
+}
 function createBackup() {
     if (!fs.existsSync(dataDir)) throw new Error("Persistent data directory is unavailable.");
-    const name = "sirk-central-" + timestamp() + ".tar.gz";
+    const name = "sirk-central-" + zonedTimestamp() + ".tar.gz";
     const target = path.join(backupDir, name);
-    const result = require("node:child_process").spawnSync("tar", ["-czf", target, "-C", dataDir, "."], { encoding: "utf8" });
+    const result = spawnSync("tar", ["-czf", target, "-C", dataDir, "."], { encoding: "utf8" });
     if (result.status !== 0) throw new Error("Backup failed: " + String(result.stderr || result.error || result.status));
     fs.chmodSync(target, 0o600);
     const stat = fs.statSync(target);
     return { name, size: stat.size, createdAtUtc: stat.mtime.toISOString() };
+}
+function validatedBackupPath(name) {
+    if (!backupNameAllowed(name)) throw new Error("Backup name is invalid.");
+    const target = path.join(backupDir, name);
+    if (!fs.existsSync(target) || !fs.statSync(target).isFile()) throw new Error("Backup was not found.");
+    const listing = spawnSync("tar", ["-tzf", target], { encoding: "utf8" });
+    if (listing.status !== 0) throw new Error("Backup archive is damaged or unreadable.");
+    for (const item of String(listing.stdout || "").split(/\r?\n/).filter(Boolean)) {
+        const normalized = path.posix.normalize(item.replace(/^\.\//, ""));
+        if (path.posix.isAbsolute(item) || normalized === ".." || normalized.startsWith("../")) throw new Error("Backup archive contains an unsafe path.");
+    }
+    return target;
+}
+function runCompose(args) {
+    const result = spawnSync("docker", ["compose", "-f", composeFile, "--profile", "auth", ...args], { cwd: "/opt/sirk-central", encoding: "utf8" });
+    if (result.status !== 0) throw new Error("Docker Compose failed: " + String(result.stderr || result.stdout || result.status));
+}
+function clearDataDirectory() {
+    fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+    for (const entry of fs.readdirSync(dataDir)) fs.rmSync(path.join(dataDir, entry), { recursive: true, force: true });
+}
+function performRestore(name, archive, safetyBackup) {
+    restoreRunning = true;
+    const startedAtUtc = new Date().toISOString();
+    writeRestoreStatus({ state: "stopping", running: true, backup: name, safetyBackup: safetyBackup.name, startedAtUtc });
+    try {
+        runCompose(["stop", "central", "auth"]);
+        writeRestoreStatus({ state: "restoring", running: true, backup: name, safetyBackup: safetyBackup.name, startedAtUtc });
+        clearDataDirectory();
+        const extract = spawnSync("tar", ["-xzf", archive, "-C", dataDir], { encoding: "utf8" });
+        if (extract.status !== 0) throw new Error("Restore extraction failed: " + String(extract.stderr || extract.error || extract.status));
+        runCompose(["up", "-d", "--force-recreate", "central", "auth"]);
+        writeRestoreStatus({ state: "completed", running: false, backup: name, safetyBackup: safetyBackup.name, startedAtUtc, finishedAtUtc: new Date().toISOString() });
+    } catch (error) {
+        try { runCompose(["up", "-d", "--force-recreate", "central", "auth"]); } catch (_) { /* preserve original error */ }
+        writeRestoreStatus({ state: "failed", running: false, backup: name, safetyBackup: safetyBackup.name, startedAtUtc, finishedAtUtc: new Date().toISOString(), error: String(error.message || error) });
+    } finally {
+        restoreRunning = false;
+    }
 }
 
 const server = http.createServer(async (req, res) => {
@@ -93,11 +153,22 @@ const server = http.createServer(async (req, res) => {
             child.once("exit", code => { const current = readStatus(); if (current.state === "running" || current.state === "starting") writeStatus(Object.assign({}, current, { state: code === 0 ? "completed" : "failed", running: false, finishedAtUtc: new Date().toISOString(), exitCode: code })); child = null; });
             return json(res, 202, { ok: true, accepted: true, startedAtUtc });
         }
-        if (url.pathname === "/backup/status" && req.method === "GET") return json(res, 200, { ok: true, backups: listBackups() });
+        if (url.pathname === "/backup/status" && req.method === "GET") return json(res, 200, { ok: true, backups: listBackups(), restore: readRestoreStatus() });
         if (url.pathname === "/backup/run" && req.method === "POST") {
             const body = await readBody(req);
             if (body.confirm !== "BACKUP SIRK CENTRAL") return json(res, 400, { ok: false, error: "Backup confirmation is invalid." });
             return json(res, 201, { ok: true, backup: createBackup() });
+        }
+        if (url.pathname === "/backup/restore" && req.method === "POST") {
+            if (restoreRunning) return json(res, 409, { ok: false, error: "A restore is already running." });
+            const body = await readBody(req);
+            if (body.confirm !== "RESTORE SIRK CENTRAL") return json(res, 400, { ok: false, error: "Restore confirmation is invalid." });
+            const name = String(body.name || "");
+            const archive = validatedBackupPath(name);
+            const safetyBackup = createBackup();
+            writeRestoreStatus({ state: "scheduled", running: true, backup: name, safetyBackup: safetyBackup.name, requestedAtUtc: new Date().toISOString() });
+            setTimeout(() => performRestore(name, archive, safetyBackup), 750);
+            return json(res, 202, { ok: true, accepted: true, backup: name, safetyBackup: safetyBackup.name });
         }
         return json(res, 404, { ok: false, error: "Not found." });
     } catch (error) {
