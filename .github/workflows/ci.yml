@@ -48,26 +48,7 @@ jobs:
 
       - name: Validate Node.js syntax
         run: |
-          node --check auth/server.js
-          node --check scripts/configure-production.js
-          node --check src/server-v2.js
-          node --check src/server-v1.js
-          node --check src/server.js
-          node --check src/entry.js
-          node --check src/sso-ticket.js
-          node --check src/session-store.js
-          node --check src/organization-store.js
-          node --check src/organization-api.js
-          node --check src/approval-store.js
-          node --check src/approval-api.js
-          node --check src/portal-assignment-store.js
-          node --check src/portal-assignment-api.js
-          node --check src/passkey-store.js
-          node --check src/webauthn-challenge-store.js
-          node --check src/recovery-code-store.js
-          node --check src/login-transaction-store.js
-          node --check src/system-health.js
-          node --check updater/server.js
+          find src auth updater scripts public -type f -name '*.js' -print0 | xargs -0 -n1 node --check
 
       - name: Run tests
         run: npm test
@@ -75,12 +56,18 @@ jobs:
       - name: Validate package metadata and entry point
         run: |
           node - <<'NODE'
+          const fs = require('node:fs');
           const pkg = require('./package.json');
           const lock = require('./package-lock.json');
           if (pkg.version !== lock.version || pkg.version !== lock.packages[''].version) process.exit(1);
-          if (pkg.main !== 'src/server-v2.js' || !String(pkg.scripts.start).includes('server-v2.js')) process.exit(1);
+          if (pkg.main !== 'src/server-v3.js' || !String(pkg.scripts.start).includes('server-v3.js')) process.exit(1);
+          const html = fs.readFileSync('public/index.html', 'utf8');
+          const csrf = html.indexOf('/csrf-bootstrap.js');
+          const app = html.indexOf('/app.js');
+          const mfa = html.indexOf('/break-glass-mfa.js');
+          if (csrf < 0 || app < 0 || mfa < 0 || csrf > app || mfa < app) process.exit(1);
           NODE
-          grep -F 'CMD ["node", "src/server-v2.js"]' Dockerfile
+          grep -F 'CMD ["node", "src/server-v3.js"]' Dockerfile
 
       - name: Validate Docker Compose
         env:
