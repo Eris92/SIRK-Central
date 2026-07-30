@@ -104,6 +104,7 @@ async function main() {
 
     const websiteDomain = validateDomain("SIRK_WEBSITE_DOMAIN", environment("SIRK_WEBSITE_DOMAIN", "sirkportal.com"));
     const centralDomain = validateDomain("SIRK_CENTRAL_DOMAIN", environment("SIRK_CENTRAL_DOMAIN", "central." + websiteDomain));
+    const authDomain = validateDomain("SIRK_AUTH_DOMAIN", environment("SIRK_AUTH_DOMAIN", "auth." + websiteDomain));
     const acmeEmail = environment("SIRK_ACME_EMAIL", "admin@" + websiteDomain);
     const adminUsername = environment("SIRK_ADMIN_USERNAME", "admin");
     const idleMinutes = integerSetting("SIRK_SESSION_IDLE_MINUTES", 30, 5, 1440);
@@ -113,13 +114,18 @@ async function main() {
     if (!/^[A-Za-z0-9._-]{3,64}$/.test(adminUsername)) throw new Error("SIRK_ADMIN_USERNAME is invalid.");
 
     const centralOrigin = "https://" + centralDomain;
+    const authOrigin = "https://" + authDomain;
     const accessKey = crypto.randomBytes(32).toString("base64url");
     const updaterToken = crypto.randomBytes(48).toString("base64url");
+    const ssoSharedSecret = crypto.randomBytes(48).toString("base64url");
     const lines = [
         "NODE_ENV=production",
         "SIRK_BIND_HOST=0.0.0.0",
         "SIRK_PORT=8080",
         "SIRK_PUBLIC_ORIGIN=" + centralOrigin,
+        "SIRK_AUTH_ORIGIN=" + authOrigin,
+        "SIRK_AUTH_DOMAIN=" + authDomain,
+        "SIRK_SSO_SHARED_SECRET='" + ssoSharedSecret + "'",
         "SIRK_ADMIN_USERNAME=" + adminUsername,
         "SIRK_ADMIN_PASSWORD_HASH='" + hashSecret(password) + "'",
         "SIRK_ACCESS_KEY_HASH='" + hashAccessKey(accessKey) + "'",
