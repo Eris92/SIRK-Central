@@ -2,6 +2,8 @@
 
 const crypto = require("node:crypto");
 const http = require("node:http");
+const recoveryCodeStoreFactory = require("./recovery-code-store");
+const challengeStoreFactory = require("./webauthn-challenge-store");
 const { loadConfig, createApp } = require("./server-v1");
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
@@ -34,6 +36,25 @@ function json(res, status, body, extraHeaders = {}) {
         "X-Content-Type-Options": "nosniff"
     }, extraHeaders));
     res.end(data);
+}
+
+function readBody(req, limit = 16384) {
+    return new Promise((resolve, reject) => {
+        const chunks = [];
+        let size = 0;
+        req.on("data", chunk => {
+            size += chunk.length;
+            if (size > limit) {
+                reject(Object.assign(new Error("Request body is too large."), { statusCode: 413 }));
+                req.destroy();
+            } else chunks.push(chunk);
+        });
+        req.on("end", () => {
+            try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}")); }
+            catch (_) { reject(Object.assign(new Error("Invalid JSON body."), { statusCode: 400 })); }
+        });
+        req.on("error", reject);
+    });
 }
 
 function securityHeaders() {
@@ -92,47 +113,94 @@ function csrfAccepted(req, config, cookies) {
     return !site || site === "same-origin" || site === "none";
 }
 
+function breakGlassActor(app, req) {
+    const token = parseCookies(req).sirk_central_session || "";
+    const actor = token && app.sessions ? app.sessions.get(token, true) : null;
+    if (!actor || actor.builtIn !== true || actor.source !== "local" || actor.role !== "BreakGlass") return null;
+    return actor;
+}
+
 function createHardenedApp(config) {
     const app = createApp(config);
     const innerHandler = app.server.listeners("request")[0];
     if (typeof innerHandler !== "function") throw new Error("SIRK Central v1 request handler is unavailable.");
+    const recoveryCodes = recoveryCodeStoreFactory.create({ dataDir: config.dataDir });
+    const webauthnChallenges = challengeStoreFactory.create({ dataDir: config.dataDir });
 
     const server = http.createServer(async (req, res) => {
-        const url = new URL(req.url, "http://central.local");
-        const cookies = parseCookies(req);
-        const token = validToken(cookies[CSRF_COOKIE]) ? cookies[CSRF_COOKIE] : crypto.randomBytes(32).toString("base64url");
-        decorateResponse(res, token);
+        try {
+            const url = new URL(req.url, "http://central.local");
+            const cookies = parseCookies(req);
+            const token = validToken(cookies[CSRF_COOKIE]) ? cookies[CSRF_COOKIE] : crypto.randomBytes(32).toString("base64url");
+            decorateResponse(res, token);
 
-        if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/csrf-bootstrap.js") {
-            const data = Buffer.from(csrfBootstrapSource());
-            res.writeHead(200, {
-                "Content-Type": "text/javascript; charset=utf-8",
-                "Content-Length": String(data.length),
-                "Cache-Control": "no-store"
-            });
-            return res.end(req.method === "HEAD" ? undefined : data);
+            if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/csrf-bootstrap.js") {
+                const data = Buffer.from(csrfBootstrapSource());
+                res.writeHead(200, {
+                    "Content-Type": "text/javascript; charset=utf-8",
+                    "Content-Length": String(data.length),
+                    "Cache-Control": "no-store"
+                });
+                return res.end(req.method === "HEAD" ? undefined : data);
+            }
+
+            if (req.method === "GET" && url.pathname === "/readyz") {
+                const checks = {
+                    sessionStore: Boolean(app.sessions && app.sessions.filePath),
+                    organizations: Boolean(app.organizations && app.organizations.filePath),
+                    approvals: Boolean(app.approvals && app.approvals.filePath),
+                    portalAssignments: Boolean(app.portalAssignments && app.portalAssignments.filePath),
+                    recoveryCodes: Boolean(recoveryCodes.filePath),
+                    webauthnChallenges: Boolean(webauthnChallenges.filePath)
+                };
+                const ready = Object.values(checks).every(Boolean);
+                return json(res, ready ? 200 : 503, { ok: ready, version: "1.0.0-rc.3", checks });
+            }
+
+            if (csrfRequired(req, url) && !csrfAccepted(req, config, cookies)) {
+                return json(res, 403, { ok: false, error: "CSRF validation failed." });
+            }
+
+            if (url.pathname.startsWith("/api/break-glass/mfa")) {
+                const actor = breakGlassActor(app, req);
+                if (!actor) return json(res, 403, { ok: false, error: "Break-Glass session required." });
+
+                if (req.method === "GET" && url.pathname === "/api/break-glass/mfa/status") {
+                    return json(res, 200, {
+                        ok: true,
+                        recoveryCodes: recoveryCodes.status(actor),
+                        passkeys: { configured: false, active: 0, enforcement: "not-enabled" }
+                    });
+                }
+
+                if (req.method === "POST" && url.pathname === "/api/break-glass/mfa/recovery-codes/rotate") {
+                    const body = await readBody(req);
+                    const count = Math.max(5, Math.min(20, Number(body.count || 10)));
+                    const codes = recoveryCodes.generate(actor, count);
+                    const currentToken = cookies.sirk_central_session || "";
+                    const revokedSessions = app.sessions.revokeWhere(record => record.builtIn === true && record.source === "local", currentToken);
+                    app.securityCenter.audit("breakglass.recovery_codes.rotated", actor, { count: codes.length, revokedSessions });
+                    return json(res, 200, { ok: true, codes, shownOnce: true, revokedSessions });
+                }
+
+                if (req.method === "DELETE" && url.pathname === "/api/break-glass/mfa/recovery-codes") {
+                    const removed = recoveryCodes.revoke(actor);
+                    app.securityCenter.audit("breakglass.recovery_codes.revoked", actor, { removed });
+                    return json(res, 200, { ok: true, removed });
+                }
+
+                return json(res, 404, { ok: false, error: "Not found." });
+            }
+
+            return innerHandler(req, res);
+        } catch (error) {
+            if (!res.headersSent) return json(res, error.statusCode || 400, { ok: false, error: error.message || "Request failed." });
+            res.destroy(error);
         }
-
-        if (req.method === "GET" && url.pathname === "/readyz") {
-            const checks = {
-                sessionStore: Boolean(app.sessions && app.sessions.filePath),
-                organizations: Boolean(app.organizations && app.organizations.filePath),
-                approvals: Boolean(app.approvals && app.approvals.filePath),
-                portalAssignments: Boolean(app.portalAssignments && app.portalAssignments.filePath)
-            };
-            const ready = Object.values(checks).every(Boolean);
-            return json(res, ready ? 200 : 503, { ok: ready, version: "1.0.0-rc.2", checks });
-        }
-
-        if (csrfRequired(req, url) && !csrfAccepted(req, config, cookies)) {
-            return json(res, 403, { ok: false, error: "CSRF validation failed." });
-        }
-
-        return innerHandler(req, res);
     });
 
     server.on("upgrade", (req, socket, head) => app.server.emit("upgrade", req, socket, head));
-    return Object.assign({}, app, { server });
+    return Object.assign({}, app, { server, recoveryCodes, webauthnChallenges });
 }
 
 if (require.main === module) {
@@ -141,4 +209,4 @@ if (require.main === module) {
     app.server.listen(config.port, config.bindHost, () => process.stdout.write("SIRK Central v2 listening on " + config.bindHost + ":" + config.port + "\n"));
 }
 
-module.exports = { createHardenedApp, parseCookies, validToken, csrfRequired, csrfAccepted, securityHeaders };
+module.exports = { createHardenedApp, parseCookies, validToken, csrfRequired, csrfAccepted, securityHeaders, breakGlassActor };
