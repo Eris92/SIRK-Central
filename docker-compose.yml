@@ -60,12 +60,15 @@ services:
       SIRK_UPDATER_BIND_HOST: 0.0.0.0
       SIRK_UPDATER_PORT: 8090
       SIRK_UPDATER_STATE_DIR: /var/lib/sirk-updater
+      SIRK_BACKUP_SOURCE_DIR: /var/lib/sirk-central
+      SIRK_BACKUP_DIR: /var/lib/sirk-updater/backups
       SIRK_INSTALL_DIR: /opt/sirk-central
       SIRK_REPO_REF: ${SIRK_REPO_REF:-main}
     volumes:
       - /opt/sirk-central:/opt/sirk-central
       - ${SIRK_BUSINESS_SITE_PATH:-/opt/sir-k.pl}:${SIRK_BUSINESS_SITE_PATH:-/opt/sir-k.pl}
       - /var/run/docker.sock:/var/run/docker.sock
+      - central-data:/var/lib/sirk-central:ro
       - updater-state:/var/lib/sirk-updater
     networks:
       - internal
