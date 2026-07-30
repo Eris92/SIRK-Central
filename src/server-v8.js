@@ -4,8 +4,9 @@ const http = require("node:http");
 const policy = require("./mfa-continuity-policy");
 const { createRuntimeApp } = require("./server-v7");
 const { loadConfig } = require("./server-v1");
+const { hasPermission } = require("./rbac");
 
-const VERSION = "1.0.0-rc.10";
+const VERSION = "1.0.0-rc.11";
 
 function parseCookies(req) {
     const result = {};
@@ -16,9 +17,13 @@ function parseCookies(req) {
     return result;
 }
 
-function breakGlassActor(app, req) {
+function sessionActor(app, req) {
     const token = parseCookies(req).sirk_central_session || "";
-    const actor = token && app.sessions ? app.sessions.get(token, true) : null;
+    return token && app.sessions ? app.sessions.get(token, true) : null;
+}
+
+function breakGlassActor(app, req) {
+    const actor = sessionActor(app, req);
     if (!actor || actor.builtIn !== true || actor.source !== "local" || actor.role !== "BreakGlass") return null;
     return actor;
 }
@@ -47,16 +52,88 @@ function json(res, status, body) {
     res.end(data);
 }
 
+function readBody(req, limit = 65536) {
+    return new Promise((resolve, reject) => {
+        const chunks = [];
+        let size = 0;
+        req.on("data", chunk => {
+            size += chunk.length;
+            if (size > limit) {
+                reject(Object.assign(new Error("Request body is too large."), { statusCode: 413 }));
+                req.destroy();
+            } else chunks.push(chunk);
+        });
+        req.on("end", () => {
+            try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}")); }
+            catch (_) { reject(Object.assign(new Error("Invalid JSON body."), { statusCode: 400 })); }
+        });
+        req.on("error", reject);
+    });
+}
+
+function providerAccess(app, req) {
+    const actor = sessionActor(app, req);
+    if (!actor) return { actor: null, editable: false, securityEditable: false };
+    return {
+        actor,
+        editable: hasPermission(actor, "identity.manage"),
+        securityEditable: actor.builtIn === true || actor.role === "SecAdmin"
+    };
+}
+
+async function testProvider(provider) {
+    if (!provider.clientId) throw new Error("Application Client ID is required.");
+    const tenant = String(provider.tenant || "organizations");
+    const endpoint = "https://login.microsoftonline.com/" + encodeURIComponent(tenant) + "/v2.0/.well-known/openid-configuration";
+    const response = await fetch(endpoint, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(15000) });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.issuer || !result.authorization_endpoint || !result.token_endpoint) {
+        throw new Error("Microsoft Entra discovery failed: " + String(result.error_description || result.error || response.status));
+    }
+    return { issuer: result.issuer, authorizationEndpoint: result.authorization_endpoint, tokenEndpoint: result.token_endpoint };
+}
+
 function createContinuityApp(config) {
     const app = createRuntimeApp(config);
     const inner = app.server.listeners("request")[0];
     if (typeof inner !== "function") throw new Error("SIRK Central v7 request handler is unavailable.");
 
-    const server = http.createServer((req, res) => {
+    const server = http.createServer(async (req, res) => {
         try {
             const url = new URL(req.url, "http://central.local");
             const passkeyDelete = url.pathname.match(/^\/api\/break-glass\/passkeys\/([A-Za-z0-9_-]{16,512})$/);
             const recoveryDelete = url.pathname === "/api/break-glass/mfa/recovery-codes";
+
+            if (req.method === "GET" && url.pathname === "/api/settings/identity-provider") {
+                const access = providerAccess(app, req);
+                if (!access.actor) return json(res, 401, { ok: false, error: "Authentication required." });
+                if (!hasPermission(access.actor, "settings.read") && !access.editable) return json(res, 403, { ok: false, error: "Permission denied." });
+                return json(res, 200, {
+                    ok: true,
+                    provider: app.providerStore.publicView(),
+                    editable: access.editable,
+                    securityEditable: access.securityEditable
+                });
+            }
+
+            if (req.method === "PUT" && url.pathname === "/api/settings/identity-provider") {
+                if (!csrfAccepted(req, config)) return json(res, 403, { ok: false, error: "CSRF validation failed." });
+                const access = providerAccess(app, req);
+                if (!access.actor) return json(res, 401, { ok: false, error: "Authentication required." });
+                if (!access.editable) return json(res, 403, { ok: false, error: "Permission denied." });
+                const provider = app.providerStore.update(await readBody(req), { allowSecurity: access.securityEditable });
+                if (app.securityCenter) app.securityCenter.audit("identity_provider.updated", access.actor, { enabled: provider.enabled, tenant: provider.tenant, clientId: provider.clientId, securityFieldsUpdated: access.securityEditable });
+                return json(res, 200, { ok: true, provider });
+            }
+
+            if (req.method === "POST" && url.pathname === "/api/settings/identity-provider/test") {
+                if (!csrfAccepted(req, config)) return json(res, 403, { ok: false, error: "CSRF validation failed." });
+                const access = providerAccess(app, req);
+                if (!access.actor) return json(res, 401, { ok: false, error: "Authentication required." });
+                if (!access.editable) return json(res, 403, { ok: false, error: "Permission denied." });
+                const tested = await testProvider(app.providerStore.read());
+                return json(res, 200, Object.assign({ ok: true }, tested));
+            }
 
             if (req.method === "GET" && url.pathname === "/api/break-glass/mfa/continuity") {
                 const actor = breakGlassActor(app, req);
@@ -77,8 +154,8 @@ function createContinuityApp(config) {
             }
 
             if (req.method === "GET" && url.pathname === "/readyz") {
-                const continuity = Boolean(app.passkeys && app.recoveryCodes);
-                if (!continuity) return json(res, 503, { ok: false, version: VERSION, checks: { mfaContinuityPolicy: false } });
+                const continuity = Boolean(app.passkeys && app.recoveryCodes && app.providerStore);
+                if (!continuity) return json(res, 503, { ok: false, version: VERSION, checks: { mfaContinuityPolicy: false, identityProviderStore: Boolean(app.providerStore) } });
             }
 
             return inner(req, res);
@@ -98,4 +175,4 @@ if (require.main === module) {
     app.server.listen(config.port, config.bindHost, () => process.stdout.write("SIRK Central v8 listening on " + config.bindHost + ":" + config.port + "\n"));
 }
 
-module.exports = { createContinuityApp, VERSION, parseCookies, breakGlassActor, csrfAccepted };
+module.exports = { createContinuityApp, VERSION, parseCookies, breakGlassActor, csrfAccepted, providerAccess, testProvider };
