@@ -51,9 +51,9 @@ write_status running "Preparing update."
 cd "$INSTALL_DIR"
 
 CURRENT_COMMIT="$(git rev-parse HEAD)"
-BACKUP_DIR="/root/sirk-central-web-update-$(date -u +%Y%m%dT%H%M%SZ)"
+BACKUP_DIR="${STATE_DIR}/backups/sirk-central-$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "$BACKUP_DIR"
-chmod 0700 "$BACKUP_DIR"
+chmod 0700 "${STATE_DIR}/backups" "$BACKUP_DIR"
 cp -a .env "$BACKUP_DIR/.env"
 git rev-parse HEAD > "$BACKUP_DIR/previous-commit.txt"
 docker compose --profile auth config > "$BACKUP_DIR/compose-before.yml"
@@ -84,7 +84,8 @@ for _ in $(seq 1 60); do
   sleep 2
 done
 [[ "$healthy" -eq 1 ]]
-curl -fsS --max-time 10 https://central.sirkportal.com/healthz >/dev/null
+CENTRAL_DOMAIN="${SIRK_CENTRAL_DOMAIN:-central.sirkportal.com}"
+curl -fsS --max-time 10 "https://${CENTRAL_DOMAIN}/healthz" >/dev/null
 
 write_status completed "Update completed successfully." "$TARGET_COMMIT"
 # This is deliberately last. Recreating this container terminates the current
