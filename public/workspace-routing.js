@@ -9,118 +9,124 @@
         "break-glass": "/break-glass"
     });
 
-    let allowed = new Set(["portals"]);
+    const buttonWorkspaces = Object.freeze({
+        backButton: "portals",
+        accessButton: "admin",
+        securityButton: "security",
+        settingsButton: "settings",
+        breakGlassButton: "break-glass"
+    });
+
+    const viewIds = Object.freeze({
+        admin: "accessView",
+        security: "securityView",
+        settings: "settingsView",
+        "break-glass": "breakGlassView"
+    });
+
+    const bootstrap = window.__SIRK_WORKSPACE_BOOTSTRAP || { workspaces: ["portals"] };
+    const allowed = new Set(Array.isArray(bootstrap.workspaces) ? bootstrap.workspaces : ["portals"]);
+    const currentPath = window.location.pathname.toLowerCase();
+    const currentWorkspace = Object.keys(routes).find(key => routes[key] === currentPath) || "portals";
     let reconcileQueued = false;
-
-    function workspaceFromIdentity(identity) {
-        if (!identity || !identity.ok) return ["portals"];
-        if (identity.builtIn === true && identity.source === "local" && identity.role === "BreakGlass") {
-            return ["portals", "admin", "security", "settings", "break-glass"];
-        }
-        const result = ["portals"];
-        if (identity.role === "Admin") result.push("admin", "settings");
-        if (identity.role === "SecAdmin") result.push("security", "settings");
-        return result;
-    }
-
-    function navigate(workspace) {
-        const route = routes[workspace];
-        if (!route || !allowed.has(workspace) || window.location.pathname === route) return;
-        window.location.assign(route);
-    }
+    let openTimer = null;
 
     function desiredHidden(workspace) {
         if (!allowed.has(workspace)) return true;
-        return workspace === "portals" && window.location.pathname === "/";
+        return workspace === "portals" && currentWorkspace === "portals";
     }
 
-    function bind(id, workspace) {
-        const button = document.getElementById(id);
-        if (!button) return false;
-
-        const hidden = desiredHidden(workspace);
-        if (button.hidden !== hidden) button.hidden = hidden;
-
-        if (button.dataset.workspaceRouting === "1") return true;
-        button.dataset.workspaceRouting = "1";
-        button.addEventListener("click", function (event) {
-            if (button.dataset.workspaceOpen === "1") return;
-            if (!allowed.has(workspace)) return;
-            event.preventDefault();
-            event.stopImmediatePropagation();
-            navigate(workspace);
-        }, { capture: true });
-        return true;
+    function synchronizeMenu() {
+        for (const [id, workspace] of Object.entries(buttonWorkspaces)) {
+            const button = document.getElementById(id);
+            if (!button) continue;
+            const hidden = desiredHidden(workspace);
+            if (button.hidden !== hidden) button.hidden = hidden;
+        }
     }
 
-    function bindAll() {
-        bind("backButton", "portals");
-        bind("accessButton", "admin");
-        bind("securityButton", "security");
-        bind("settingsButton", "settings");
-        bind("breakGlassButton", "break-glass");
-    }
-
-    function queueReconcile() {
+    function queueSynchronizeMenu() {
         if (reconcileQueued) return;
         reconcileQueued = true;
         window.requestAnimationFrame(function () {
             reconcileQueued = false;
-            bindAll();
+            synchronizeMenu();
         });
     }
 
-    function openCurrentWorkspace() {
-        const pathname = window.location.pathname.toLowerCase();
-        const mapping = {
-            "/admin": "accessButton",
-            "/security": "securityButton",
-            "/settings": "settingsButton",
-            "/break-glass": "breakGlassButton"
-        };
-        const buttonId = mapping[pathname];
-        if (!buttonId) return;
-
-        const open = function () {
-            const button = document.getElementById(buttonId);
-            if (!button || button.hidden) return false;
-            button.dataset.workspaceOpen = "1";
-            try {
-                button.click();
-            } finally {
-                delete button.dataset.workspaceOpen;
-            }
-            return true;
-        };
-
-        if (open()) return;
-        const observer = new MutationObserver(function () {
-            bindAll();
-            if (open()) observer.disconnect();
-        });
-        observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["hidden"] });
-        window.setTimeout(function () { observer.disconnect(); }, 10000);
-    }
-
-    async function loadIdentityWithRetry() {
-        for (const delay of [0, 50, 150, 400]) {
-            if (delay) await new Promise(resolve => window.setTimeout(resolve, delay));
-            try {
-                const response = await fetch("/api/session", { credentials: "same-origin", cache: "no-store" });
-                if (response.ok) return await response.json();
-            } catch (_) {}
+    function isWorkspaceOpen(workspace) {
+        if (workspace === "portals") {
+            const portals = document.getElementById("portalsView");
+            return Boolean(portals && !portals.hidden);
         }
-        return null;
+        const view = document.getElementById(viewIds[workspace]);
+        return Boolean(view && !view.hidden);
     }
 
-    async function initialize() {
-        const identity = await loadIdentityWithRetry();
-        if (identity) allowed = new Set(workspaceFromIdentity(identity));
+    function activateCurrentWorkspace() {
+        if (currentWorkspace === "portals" || !allowed.has(currentWorkspace)) return true;
+        if (isWorkspaceOpen(currentWorkspace)) return true;
 
-        bindAll();
-        openCurrentWorkspace();
+        const buttonId = Object.keys(buttonWorkspaces).find(id => buttonWorkspaces[id] === currentWorkspace);
+        const button = buttonId ? document.getElementById(buttonId) : null;
+        const dashboard = document.getElementById("dashboardView");
+        if (!button || button.hidden || !dashboard || dashboard.hidden) return false;
 
-        const observer = new MutationObserver(queueReconcile);
+        button.dataset.workspaceInternalOpen = "1";
+        try {
+            button.click();
+        } finally {
+            delete button.dataset.workspaceInternalOpen;
+        }
+        return isWorkspaceOpen(currentWorkspace);
+    }
+
+    function enforceCurrentWorkspace() {
+        if (activateCurrentWorkspace()) {
+            if (openTimer) window.clearInterval(openTimer);
+            openTimer = null;
+            return;
+        }
+        if (!openTimer) {
+            let attempts = 0;
+            openTimer = window.setInterval(function () {
+                attempts += 1;
+                synchronizeMenu();
+                if (activateCurrentWorkspace() || attempts >= 60) {
+                    window.clearInterval(openTimer);
+                    openTimer = null;
+                }
+            }, 100);
+        }
+    }
+
+    document.addEventListener("click", function (event) {
+        const button = event.target && event.target.closest ? event.target.closest("button") : null;
+        if (!button) return;
+        const workspace = buttonWorkspaces[button.id];
+        if (!workspace || button.dataset.workspaceInternalOpen === "1") return;
+        if (!allowed.has(workspace)) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            return;
+        }
+
+        const route = routes[workspace];
+        if (route && window.location.pathname !== route) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            window.location.assign(route);
+        }
+    }, true);
+
+    function initialize() {
+        synchronizeMenu();
+        enforceCurrentWorkspace();
+
+        const observer = new MutationObserver(function () {
+            queueSynchronizeMenu();
+            enforceCurrentWorkspace();
+        });
         observer.observe(document.documentElement, {
             childList: true,
             subtree: true,
@@ -128,8 +134,11 @@
             attributeFilter: ["hidden"]
         });
 
-        for (const delay of [0, 100, 300, 800, 1500]) {
-            window.setTimeout(bindAll, delay);
+        for (const delay of [0, 50, 150, 350, 700, 1200, 2000]) {
+            window.setTimeout(function () {
+                synchronizeMenu();
+                enforceCurrentWorkspace();
+            }, delay);
         }
     }
 
