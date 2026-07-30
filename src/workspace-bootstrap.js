@@ -75,11 +75,11 @@ function prepareBody(captured, bodyOverride) {
   return body;
 }
 
-function send(res, captured, bodyOverride) {
+function send(res, captured, bodyOverride, headOnly) {
   const body = prepareBody(captured, bodyOverride);
   const headers = Object.assign({}, captured.headers, { "content-length": String(body.length) });
   res.writeHead(captured.statusCode, headers);
-  res.end(body);
+  res.end(headOnly ? undefined : body);
 }
 
 async function readIdentity(listener, req) {
@@ -98,8 +98,10 @@ http.createServer = function patchedCreateServer(listener) {
   return originalCreateServer.call(this, async function workspaceGuard(req, res) {
     try {
       const url = new URL(req.url, "http://central.local");
+      const isReadRequest = req.method === "GET" || req.method === "HEAD";
+      const headOnly = req.method === "HEAD";
 
-      if (req.method === "GET" && url.pathname === "/workspace-routing.js") {
+      if (isReadRequest && url.pathname === "/workspace-routing.js") {
         const body = fs.readFileSync(SCRIPT_PATH);
         res.writeHead(200, {
           "Content-Type": "text/javascript; charset=utf-8",
@@ -107,21 +109,21 @@ http.createServer = function patchedCreateServer(listener) {
           "Cache-Control": "no-store",
           "X-Content-Type-Options": "nosniff"
         });
-        res.end(body);
+        res.end(headOnly ? undefined : body);
         return;
       }
 
-      if (req.method === "GET" && url.pathname === "/api/session") {
-        const captured = await capture(listener, req);
+      if (isReadRequest && url.pathname === "/api/session") {
+        const captured = await capture(listener, cloneRequest(req, "/api/session"));
         if (captured.statusCode === 200) {
           try {
             const identity = JSON.parse(captured.body.toString("utf8"));
             identity.workspaces = workspacesFor(identity);
-            send(res, captured, JSON.stringify(identity));
+            send(res, captured, JSON.stringify(identity), headOnly);
             return;
           } catch (_) {}
         }
-        send(res, captured);
+        send(res, captured, undefined, headOnly);
         return;
       }
 
@@ -130,12 +132,12 @@ http.createServer = function patchedCreateServer(listener) {
         if (!isExactBreakGlass(identity)) {
           const body = Buffer.from(JSON.stringify({ ok: false, error: "Not found." }));
           res.writeHead(404, { "Content-Type": "application/json; charset=utf-8", "Content-Length": body.length, "Cache-Control": "no-store" });
-          res.end(body);
+          res.end(headOnly ? undefined : body);
           return;
         }
       }
 
-      const workspace = req.method === "GET" ? workspaceForPath(url.pathname) : null;
+      const workspace = isReadRequest ? workspaceForPath(url.pathname) : null;
       if (workspace && workspace !== "portals") {
         const identity = await readIdentity(listener, req);
         if (!identity) {
@@ -147,17 +149,17 @@ http.createServer = function patchedCreateServer(listener) {
           const hidden = workspace === "break-glass";
           const body = Buffer.from(JSON.stringify({ ok: false, error: hidden ? "Not found." : "Workspace access denied." }));
           res.writeHead(hidden ? 404 : 403, { "Content-Type": "application/json; charset=utf-8", "Content-Length": body.length, "Cache-Control": "no-store" });
-          res.end(body);
+          res.end(headOnly ? undefined : body);
           return;
         }
         const captured = await capture(listener, cloneRequest(req, "/" + url.search));
-        send(res, captured);
+        send(res, captured, undefined, headOnly);
         return;
       }
 
-      if (req.method === "GET" && url.pathname === "/") {
-        const captured = await capture(listener, req);
-        send(res, captured);
+      if (isReadRequest && url.pathname === "/") {
+        const captured = await capture(listener, cloneRequest(req, "/" + url.search));
+        send(res, captured, undefined, headOnly);
         return;
       }
 
@@ -166,7 +168,7 @@ http.createServer = function patchedCreateServer(listener) {
       if (!res.headersSent) {
         const body = Buffer.from(JSON.stringify({ ok: false, error: "Workspace authorization failed." }));
         res.writeHead(500, { "Content-Type": "application/json; charset=utf-8", "Content-Length": body.length, "Cache-Control": "no-store" });
-        res.end(body);
+        res.end(req.method === "HEAD" ? undefined : body);
       } else {
         res.destroy(error);
       }
