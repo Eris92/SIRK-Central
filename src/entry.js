@@ -1,6 +1,8 @@
 "use strict";
 
+const fs = require("node:fs");
 const http = require("node:http");
+const path = require("node:path");
 const { loadConfig, createApp } = require("./server");
 
 const WORKSPACES = Object.freeze({
@@ -89,6 +91,7 @@ async function main() {
     const config = loadConfig(process.env);
     const app = createApp(config);
     const requestHandler = app.server.listeners("request")[0];
+    const routingScript = fs.readFileSync(path.join(__dirname, "..", "public", "workspace-routing.js"));
     if (typeof requestHandler !== "function") throw new Error("SIRK Central request handler is unavailable.");
 
     const server = http.createServer(async (req, res) => {
@@ -96,6 +99,17 @@ async function main() {
             const url = new URL(req.url, "http://central.local");
             const workspace = WORKSPACES[url.pathname];
             const headOnly = req.method === "HEAD";
+
+            if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/workspace-routing.js") {
+                res.writeHead(200, {
+                    "Content-Type": "text/javascript; charset=utf-8",
+                    "Content-Length": String(routingScript.length),
+                    "Cache-Control": "no-store",
+                    "X-Content-Type-Options": "nosniff"
+                });
+                res.end(headOnly ? undefined : routingScript);
+                return;
+            }
 
             if (workspace && (req.method === "GET" || req.method === "HEAD")) {
                 const sessionResult = await capture(requestHandler, cloneRequest(req, "/api/session", "GET"));
