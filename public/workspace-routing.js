@@ -10,6 +10,7 @@
     });
 
     let allowed = new Set(["portals"]);
+    let reconcileQueued = false;
 
     function workspaceFromIdentity(identity) {
         if (!identity || !identity.ok) return ["portals"];
@@ -28,10 +29,18 @@
         window.location.assign(route);
     }
 
+    function desiredHidden(workspace) {
+        if (!allowed.has(workspace)) return true;
+        return workspace === "portals" && window.location.pathname === "/";
+    }
+
     function bind(id, workspace) {
         const button = document.getElementById(id);
         if (!button) return false;
-        button.hidden = !allowed.has(workspace);
+
+        const hidden = desiredHidden(workspace);
+        if (button.hidden !== hidden) button.hidden = hidden;
+
         if (button.dataset.workspaceRouting === "1") return true;
         button.dataset.workspaceRouting = "1";
         button.addEventListener("click", function (event) {
@@ -50,6 +59,15 @@
         bind("securityButton", "security");
         bind("settingsButton", "settings");
         bind("breakGlassButton", "break-glass");
+    }
+
+    function queueReconcile() {
+        if (reconcileQueued) return;
+        reconcileQueued = true;
+        window.requestAnimationFrame(function () {
+            reconcileQueued = false;
+            bindAll();
+        });
     }
 
     function openCurrentWorkspace() {
@@ -84,17 +102,35 @@
         window.setTimeout(function () { observer.disconnect(); }, 10000);
     }
 
+    async function loadIdentityWithRetry() {
+        for (const delay of [0, 50, 150, 400]) {
+            if (delay) await new Promise(resolve => window.setTimeout(resolve, delay));
+            try {
+                const response = await fetch("/api/session", { credentials: "same-origin", cache: "no-store" });
+                if (response.ok) return await response.json();
+            } catch (_) {}
+        }
+        return null;
+    }
+
     async function initialize() {
-        try {
-            const response = await fetch("/api/session", { credentials: "same-origin", cache: "no-store" });
-            if (response.ok) allowed = new Set(workspaceFromIdentity(await response.json()));
-        } catch (_) {}
+        const identity = await loadIdentityWithRetry();
+        if (identity) allowed = new Set(workspaceFromIdentity(identity));
 
         bindAll();
         openCurrentWorkspace();
 
-        const observer = new MutationObserver(bindAll);
-        observer.observe(document.documentElement, { childList: true, subtree: true });
+        const observer = new MutationObserver(queueReconcile);
+        observer.observe(document.documentElement, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ["hidden"]
+        });
+
+        for (const delay of [0, 100, 300, 800, 1500]) {
+            window.setTimeout(bindAll, delay);
+        }
     }
 
     if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", initialize, { once: true });
