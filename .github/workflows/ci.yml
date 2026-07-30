@@ -63,16 +63,18 @@ jobs:
           node --check src/portal-assignment-store.js
           node --check src/portal-assignment-api.js
           node --check src/passkey-store.js
+          node --check src/webauthn-challenge-store.js
+          node --check src/recovery-code-store.js
           node --check src/system-health.js
           node --check updater/server.js
 
       - name: Run tests
         run: npm test
 
-      - name: Validate production package entry
+      - name: Validate package entry point
         run: |
-          node -e 'const p=require("./package.json"); if(p.main!=="src/server-v2.js") process.exit(1)'
-          node -e 'const p=require("./package.json"); if(!String(p.scripts.start).includes("server-v2.js")) process.exit(1)'
+          node -e "const p=require('./package.json'); if(p.main!=='src/server-v2.js'||!String(p.scripts.start).includes('server-v2.js')) process.exit(1)"
+          grep -F 'CMD ["node", "src/server-v2.js"]' Dockerfile
 
       - name: Validate Docker Compose
         env:
@@ -80,4 +82,7 @@ jobs:
           SIRK_ACCESS_KEY_HASH: 'sha256$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
           SIRK_SSO_SHARED_SECRET: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
           SIRK_UPDATER_TOKEN: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+          SIRK_CENTRAL_DOMAIN: central.example.com
+          SIRK_WEBSITE_DOMAIN: example.com
+          SIRK_ACME_EMAIL: admin@example.com
         run: docker compose --profile auth config >/dev/null
