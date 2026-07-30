@@ -1,6 +1,6 @@
 {
   "name": "sirk-central",
-  "version": "1.0.0-rc.3",
+  "version": "1.0.0-rc.4",
   "private": true,
   "description": "SIRK Central production-ready management plane.",
   "main": "src/server-v2.js",
