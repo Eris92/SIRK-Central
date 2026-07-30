@@ -58,7 +58,7 @@ cp -a .env "$BACKUP_DIR/.env"
 git rev-parse HEAD > "$BACKUP_DIR/previous-commit.txt"
 docker compose --profile auth config > "$BACKUP_DIR/compose-before.yml"
 
-write_status running "Fetching signed deployment source." "$CURRENT_COMMIT"
+write_status running "Fetching deployment source." "$CURRENT_COMMIT"
 git fetch --prune origin
 git checkout -B "$REPO_REF" "origin/$REPO_REF"
 git reset --hard "origin/$REPO_REF"
@@ -75,13 +75,18 @@ docker compose --profile auth build --pull central auth updater
 write_status running "Deploying updated services." "$TARGET_COMMIT"
 docker compose --profile auth up -d --force-recreate --remove-orphans central auth caddy
 
+healthy=0
 for _ in $(seq 1 60); do
-  if curl -fsS --max-time 5 http://central:8080/healthz >/dev/null 2>&1 || curl -fsS --max-time 5 https://central.sirkportal.com/healthz >/dev/null 2>&1; then
+  if curl -fsS --max-time 5 http://central:8080/healthz >/dev/null 2>&1; then
+    healthy=1
     break
   fi
   sleep 2
 done
+[[ "$healthy" -eq 1 ]]
 curl -fsS --max-time 10 https://central.sirkportal.com/healthz >/dev/null
 
-docker compose --profile auth up -d --force-recreate updater
 write_status completed "Update completed successfully." "$TARGET_COMMIT"
+# This is deliberately last. Recreating this container terminates the current
+# updater process, but the completed state has already been persisted.
+docker compose --profile auth up -d --force-recreate updater || true
