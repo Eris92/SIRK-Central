@@ -123,8 +123,19 @@ test("BreakGlass recovery code is required before a full session is issued", asy
   });
   assert.equal(completed.response.status, 200);
   assert.equal(completed.payload.ok, true);
-  assert.equal(completed.payload.role, "BreakGlass");
-  assert.ok(cookieValue(completed.response.headers, "sirk_central_session"));
+  const completedSession = cookieValue(completed.response.headers, "sirk_central_session");
+  assert.ok(completedSession);
+
+  const identity = await jsonRequest(origin, "/api/session", {
+    headers: {
+      cookie: "sirk_central_session=" + completedSession,
+      "user-agent": "sirk-mfa-test"
+    }
+  });
+  assert.equal(identity.response.status, 200);
+  assert.equal(identity.payload.ok, true);
+  assert.equal(identity.payload.role, "BreakGlass");
+  assert.equal(identity.payload.builtIn, true);
 
   const replay = await jsonRequest(origin, "/api/login/mfa/recovery", {
     method: "POST",
