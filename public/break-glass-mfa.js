@@ -1,0 +1,212 @@
+"use strict";
+
+(function () {
+    const view = document.getElementById("breakGlassView");
+    if (!view) return;
+
+    const labels = {
+        pl: {
+            title: "Ochrona MFA Break-Glass",
+            loading: "Wczytywanie stanu MFA...",
+            configured: "Recovery codes są aktywne.",
+            missing: "Recovery codes nie są jeszcze skonfigurowane.",
+            remaining: "Pozostałe kody",
+            rotated: "Ostatnia rotacja",
+            blocked: "Weryfikacja zablokowana do",
+            generate: "Wygeneruj nowe recovery codes",
+            revoke: "Unieważnij recovery codes",
+            confirmRotate: "Dotychczasowe recovery codes przestaną działać. Kontynuować?",
+            confirmRevoke: "Po unieważnieniu logowanie Break-Glass nie będzie wymagało recovery code do czasu ponownej konfiguracji. Kontynuować?",
+            shownOnce: "Kody są pokazane tylko raz. Zapisz je w bezpiecznym, niezależnym miejscu.",
+            saved: "Zapisałem kody w bezpiecznym miejscu",
+            hide: "Ukryj zapisane kody",
+            revoked: "Recovery codes zostały unieważnione.",
+            generated: "Nowe recovery codes zostały wygenerowane.",
+            noPasskey: "YubiKey/WebAuthn nie jest jeszcze aktywny.",
+            requestError: "Nie udało się wykonać operacji MFA."
+        },
+        en: {
+            title: "Break-Glass MFA protection",
+            loading: "Loading MFA status...",
+            configured: "Recovery codes are active.",
+            missing: "Recovery codes are not configured yet.",
+            remaining: "Codes remaining",
+            rotated: "Last rotation",
+            blocked: "Verification blocked until",
+            generate: "Generate new recovery codes",
+            revoke: "Revoke recovery codes",
+            confirmRotate: "Existing recovery codes will stop working. Continue?",
+            confirmRevoke: "After revocation, Break-Glass sign-in will not require a recovery code until MFA is configured again. Continue?",
+            shownOnce: "These codes are shown once. Store them in a secure, independent location.",
+            saved: "I stored the codes securely",
+            hide: "Hide stored codes",
+            revoked: "Recovery codes have been revoked.",
+            generated: "New recovery codes have been generated.",
+            noPasskey: "YubiKey/WebAuthn is not active yet.",
+            requestError: "The MFA operation failed."
+        }
+    };
+
+    function lang() {
+        return document.documentElement.lang === "en" ? "en" : "pl";
+    }
+
+    function text(key) {
+        return labels[lang()][key];
+    }
+
+    async function request(path, options) {
+        const response = await fetch(path, Object.assign({
+            credentials: "same-origin",
+            cache: "no-store",
+            headers: { "Content-Type": "application/json" }
+        }, options || {}));
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || text("requestError"));
+        return result;
+    }
+
+    const article = document.createElement("article");
+    article.className = "settings-card danger-card";
+    article.innerHTML = [
+        '<h2 data-mfa-title></h2>',
+        '<p class="muted" data-mfa-status></p>',
+        '<div class="security-facts" data-mfa-facts></div>',
+        '<p class="muted" data-mfa-passkey></p>',
+        '<div class="form-actions">',
+        '  <button type="button" data-mfa-rotate></button>',
+        '  <button type="button" class="danger" data-mfa-revoke></button>',
+        '</div>',
+        '<section data-mfa-secret hidden>',
+        '  <p class="warning" data-mfa-once></p>',
+        '  <pre class="secret-output" data-mfa-codes></pre>',
+        '  <label class="checkbox-row"><input type="checkbox" data-mfa-saved><span data-mfa-saved-label></span></label>',
+        '  <button type="button" class="secondary" data-mfa-hide disabled></button>',
+        '</section>',
+        '<p class="muted" role="status" data-mfa-message></p>'
+    ].join("");
+
+    const grid = view.querySelector(".settings-grid") || view;
+    grid.append(article);
+
+    const title = article.querySelector("[data-mfa-title]");
+    const status = article.querySelector("[data-mfa-status]");
+    const facts = article.querySelector("[data-mfa-facts]");
+    const passkey = article.querySelector("[data-mfa-passkey]");
+    const rotate = article.querySelector("[data-mfa-rotate]");
+    const revoke = article.querySelector("[data-mfa-revoke]");
+    const secret = article.querySelector("[data-mfa-secret]");
+    const once = article.querySelector("[data-mfa-once]");
+    const codes = article.querySelector("[data-mfa-codes]");
+    const saved = article.querySelector("[data-mfa-saved]");
+    const savedLabel = article.querySelector("[data-mfa-saved-label]");
+    const hide = article.querySelector("[data-mfa-hide]");
+    const message = article.querySelector("[data-mfa-message]");
+
+    function applyLabels() {
+        title.textContent = text("title");
+        rotate.textContent = text("generate");
+        revoke.textContent = text("revoke");
+        once.textContent = text("shownOnce");
+        savedLabel.textContent = text("saved");
+        hide.textContent = text("hide");
+        passkey.textContent = text("noPasskey");
+    }
+
+    function fact(label, value) {
+        const item = document.createElement("div");
+        const name = document.createElement("span");
+        const content = document.createElement("strong");
+        name.textContent = label;
+        content.textContent = value || "—";
+        item.append(name, content);
+        return item;
+    }
+
+    function clearSecrets() {
+        codes.textContent = "";
+        saved.checked = false;
+        hide.disabled = true;
+        secret.hidden = true;
+    }
+
+    async function loadStatus() {
+        status.textContent = text("loading");
+        message.textContent = "";
+        try {
+            const result = await request("/api/break-glass/mfa/status");
+            const recovery = result.recoveryCodes || {};
+            status.textContent = recovery.configured ? text("configured") : text("missing");
+            facts.replaceChildren(
+                fact(text("remaining"), String(recovery.remaining || 0)),
+                fact(text("rotated"), recovery.rotatedAtUtc ? new Date(recovery.rotatedAtUtc).toLocaleString(lang()) : "—"),
+                fact(text("blocked"), recovery.blockedUntilUtc ? new Date(recovery.blockedUntilUtc).toLocaleString(lang()) : "—")
+            );
+            revoke.disabled = !recovery.configured;
+        } catch (error) {
+            status.textContent = error.message;
+            status.className = "error";
+        }
+    }
+
+    rotate.addEventListener("click", async function () {
+        if (!window.confirm(text("confirmRotate"))) return;
+        rotate.disabled = true;
+        revoke.disabled = true;
+        message.textContent = "";
+        clearSecrets();
+        try {
+            const result = await request("/api/break-glass/mfa/recovery-codes/rotate", {
+                method: "POST",
+                body: JSON.stringify({ count: 10 })
+            });
+            codes.textContent = (result.codes || []).join("\n");
+            secret.hidden = false;
+            message.textContent = text("generated");
+            await loadStatus();
+        } catch (error) {
+            message.textContent = error.message;
+            message.className = "error";
+        } finally {
+            rotate.disabled = false;
+        }
+    });
+
+    revoke.addEventListener("click", async function () {
+        if (!window.confirm(text("confirmRevoke"))) return;
+        rotate.disabled = true;
+        revoke.disabled = true;
+        message.textContent = "";
+        clearSecrets();
+        try {
+            await request("/api/break-glass/mfa/recovery-codes", { method: "DELETE" });
+            message.textContent = text("revoked");
+            await loadStatus();
+        } catch (error) {
+            message.textContent = error.message;
+            message.className = "error";
+        } finally {
+            rotate.disabled = false;
+        }
+    });
+
+    saved.addEventListener("change", function () {
+        hide.disabled = !saved.checked;
+    });
+
+    hide.addEventListener("click", function () {
+        if (!saved.checked) return;
+        clearSecrets();
+    });
+
+    window.addEventListener("pagehide", clearSecrets);
+    document.addEventListener("visibilitychange", function () {
+        if (document.visibilityState === "hidden" && saved.checked) clearSecrets();
+    });
+    new MutationObserver(function () {
+        applyLabels();
+    }).observe(document.documentElement, { attributes: true, attributeFilter: ["lang"] });
+
+    applyLabels();
+    loadStatus();
+}());
