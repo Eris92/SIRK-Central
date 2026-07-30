@@ -65,6 +65,7 @@ jobs:
           node --check src/passkey-store.js
           node --check src/webauthn-challenge-store.js
           node --check src/recovery-code-store.js
+          node --check src/login-transaction-store.js
           node --check src/system-health.js
           node --check updater/server.js
 
