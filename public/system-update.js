@@ -68,10 +68,8 @@
                 method: "POST",
                 headers: {
                     Accept: "application/json",
-                    "Content-Type": "application/json",
                     "X-SIRK-Update-Confirm": value
-                },
-                body: JSON.stringify({ confirm: value })
+                }
             });
             confirmation.value = "";
             render({ state: "starting", running: true, startedAtUtc: body.startedAtUtc, message: "Aktualizacja została przyjęta." });
