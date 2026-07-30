@@ -6,12 +6,23 @@ services:
     environment:
       SIRK_BIND_HOST: 0.0.0.0
       SIRK_PUBLIC_ORIGIN: https://${SIRK_CENTRAL_DOMAIN:-central.sirkportal.com}
-      SIRK_AUTH_ORIGIN: https://${SIRK_AUTH_DOMAIN:-auth.sirkportal.com}
+      SIRK_AUTH_ORIGIN: ${SIRK_AUTH_ORIGIN:-}
+      SIRK_SSO_SHARED_SECRET: ${SIRK_SSO_SHARED_SECRET:-}
       SIRK_UPDATER_ORIGIN: http://updater:8090
     volumes:
       - central-data:/var/lib/sirk-central
     networks:
       - internal
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/readyz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 20s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
 
   auth:
     profiles: ["auth"]
@@ -23,11 +34,15 @@ services:
       SIRK_AUTH_BIND_HOST: 0.0.0.0
       SIRK_AUTH_PORT: 8081
       SIRK_PUBLIC_ORIGIN: https://${SIRK_CENTRAL_DOMAIN:-central.sirkportal.com}
-      SIRK_AUTH_ORIGIN: https://${SIRK_AUTH_DOMAIN:-auth.sirkportal.com}
+      SIRK_AUTH_ORIGIN: ${SIRK_AUTH_ORIGIN:-}
     volumes:
       - central-data:/var/lib/sirk-central:ro
     networks:
       - internal
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
 
   updater:
     build:
@@ -53,7 +68,8 @@ services:
     image: caddy:2.10.0-alpine
     restart: unless-stopped
     depends_on:
-      - central
+      central:
+        condition: service_healthy
     ports:
       - "80:80"
       - "443:443"
@@ -71,9 +87,12 @@ services:
       - caddy-config:/config
     networks:
       - internal
+    security_opt:
+      - no-new-privileges:true
 
 networks:
   internal:
+    driver: bridge
 
 volumes:
   central-data:
