@@ -35,6 +35,7 @@
         if (button.dataset.workspaceRouting === "1") return true;
         button.dataset.workspaceRouting = "1";
         button.addEventListener("click", function (event) {
+            if (button.dataset.workspaceOpen === "1") return;
             if (!allowed.has(workspace)) return;
             event.preventDefault();
             event.stopImmediatePropagation();
@@ -65,7 +66,12 @@
         const open = function () {
             const button = document.getElementById(buttonId);
             if (!button || button.hidden) return false;
-            button.click();
+            button.dataset.workspaceOpen = "1";
+            try {
+                button.click();
+            } finally {
+                delete button.dataset.workspaceOpen;
+            }
             return true;
         };
 
