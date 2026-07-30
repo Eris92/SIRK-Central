@@ -24,6 +24,7 @@ function createRuntimeApp(config) {
     const bridgePath = path.join(__dirname, "..", "public", "passkey-attestation-bridge.js");
     const uiPath = path.join(__dirname, "..", "public", "passkey-ui.js");
     const uiPolishPath = path.join(__dirname, "..", "public", "passkey-ui-polish.js");
+    const operationsUiPath = path.join(__dirname, "..", "public", "operations-ui.js");
     const centralUxPath = path.join(__dirname, "..", "public", "central-ux.js");
     const server = http.createServer((req, res) => {
         try {
@@ -36,6 +37,8 @@ function createRuntimeApp(config) {
                     Buffer.from("\n"),
                     fs.readFileSync(uiPolishPath),
                     Buffer.from("\n"),
+                    fs.readFileSync(operationsUiPath),
+                    Buffer.from("\n"),
                     fs.readFileSync(centralUxPath)
                 ]);
                 res.writeHead(200, Object.assign(securityHeaders(), { "Content-Type": "text/javascript; charset=utf-8", "Content-Length": String(data.length), "Cache-Control": "no-store" }));
@@ -47,7 +50,7 @@ function createRuntimeApp(config) {
                 return res.end(req.method === "HEAD" ? undefined : data);
             }
             if (req.method === "GET" && url.pathname === "/readyz") {
-                const checks = { passkeyStore: Boolean(app.passkeys && app.passkeys.filePath), webauthnChallenges: Boolean(app.webauthnChallenges && app.webauthnChallenges.filePath), loginTransactions: Boolean(app.loginTransactions && app.loginTransactions.filePath), passkeyUi: fs.existsSync(uiPath) && fs.existsSync(uiPolishPath) && fs.existsSync(centralUxPath), attestationBridge: fs.existsSync(bridgePath), attestationParser: true };
+                const checks = { passkeyStore: Boolean(app.passkeys && app.passkeys.filePath), webauthnChallenges: Boolean(app.webauthnChallenges && app.webauthnChallenges.filePath), loginTransactions: Boolean(app.loginTransactions && app.loginTransactions.filePath), passkeyUi: fs.existsSync(uiPath) && fs.existsSync(uiPolishPath) && fs.existsSync(operationsUiPath) && fs.existsSync(centralUxPath), attestationBridge: fs.existsSync(bridgePath), attestationParser: true };
                 const ok = Object.values(checks).every(Boolean);
                 return json(res, ok ? 200 : 503, { ok, version: VERSION, checks });
             }
