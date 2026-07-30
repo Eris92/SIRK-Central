@@ -60,14 +60,18 @@ jobs:
           const pkg = require('./package.json');
           const lock = require('./package-lock.json');
           if (pkg.version !== lock.version || pkg.version !== lock.packages[''].version) process.exit(1);
-          if (pkg.main !== 'src/server-v3.js' || !String(pkg.scripts.start).includes('server-v3.js')) process.exit(1);
+          if (pkg.main !== 'src/server-v5.js' || !String(pkg.scripts.start).includes('server-v5.js')) process.exit(1);
           const html = fs.readFileSync('public/index.html', 'utf8');
           const csrf = html.indexOf('/csrf-bootstrap.js');
           const app = html.indexOf('/app.js');
-          const mfa = html.indexOf('/break-glass-mfa.js');
-          if (csrf < 0 || app < 0 || mfa < 0 || csrf > app || mfa < app) process.exit(1);
+          const recovery = html.indexOf('/break-glass-mfa.js');
+          const passkey = html.indexOf('/passkey-ui.js');
+          const routing = html.indexOf('/workspace-routing.js');
+          if ([csrf, app, recovery, passkey, routing].some(index => index < 0)) process.exit(1);
+          if (!(csrf < app && app < passkey && passkey < routing)) process.exit(1);
+          if (!fs.existsSync('test/break-glass-passkey-http.test.js')) process.exit(1);
           NODE
-          grep -F 'CMD ["node", "src/server-v3.js"]' Dockerfile
+          grep -F 'CMD ["node", "src/server-v5.js"]' Dockerfile
 
       - name: Validate Docker Compose
         env:
