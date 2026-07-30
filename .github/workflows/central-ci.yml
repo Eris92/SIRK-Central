@@ -36,7 +36,35 @@ jobs:
 
       - name: Syntax validation
         run: |
-          find src updater scripts -type f -name '*.js' -print0 | xargs -0 -n1 node --check
+          find src updater scripts public -type f -name '*.js' -print0 | xargs -0 -n1 node --check
+
+      - name: Validate browser security bootstrap
+        run: |
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const html = fs.readFileSync('public/index.html', 'utf8');
+          const csrf = html.indexOf('src="/csrf-bootstrap.js"');
+          const app = html.indexOf('src="/app.js"');
+          if (csrf < 0 || app < 0 || csrf > app) {
+            throw new Error('CSRF bootstrap must load before app.js');
+          }
+          if (!html.includes('id="mfaRecoveryForm"')) {
+            throw new Error('BreakGlass MFA recovery form is missing');
+          }
+          NODE
+
+      - name: Validate package metadata
+        run: |
+          node - <<'NODE'
+          const pkg = require('./package.json');
+          const lock = require('./package-lock.json');
+          if (pkg.version !== lock.version || pkg.version !== lock.packages[''].version) {
+            throw new Error('package.json and package-lock.json versions differ');
+          }
+          if (pkg.main !== 'src/server-v2.js' || !pkg.scripts.start.includes('server-v2.js')) {
+            throw new Error('Production entry point is not server-v2.js');
+          }
+          NODE
 
       - name: Unit and regression tests
         run: npm test
