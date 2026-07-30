@@ -6,7 +6,7 @@ const path = require("node:path");
 const { loadConfig, createApp } = require("./server");
 
 const WORKSPACES = Object.freeze({
-    "/admin": "admin",
+    "/permissions": "admin",
     "/security": "security",
     "/settings": "settings",
     "/break-glass": "break-glass"
@@ -20,7 +20,7 @@ function allowedWorkspaces(identity) {
     if (!identity || !identity.ok) return ["portals"];
     if (isExactBreakGlass(identity)) return ["portals", "admin", "security", "settings", "break-glass"];
     const result = ["portals"];
-    if (identity.role === "Admin") result.push("admin", "settings");
+    if (identity.role === "Admin" || identity.role === "SysAdmin") result.push("admin", "settings");
     if (identity.role === "SecAdmin") result.push("security", "settings");
     return result;
 }
@@ -118,6 +118,10 @@ async function main() {
             const url = new URL(req.url, "http://central.local");
             const workspace = WORKSPACES[url.pathname];
             const headOnly = req.method === "HEAD";
+
+            if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/admin") {
+                return redirect(res, "/permissions" + url.search);
+            }
 
             if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/workspace-routing.js") {
                 res.writeHead(200, {
