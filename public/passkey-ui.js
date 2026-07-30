@@ -36,12 +36,11 @@
     function message(pl, en) { return language() === "en" ? en : pl; }
 
     function registrationOptions(publicKey) {
-        const copy = Object.assign({}, publicKey, {
+        return Object.assign({}, publicKey, {
             challenge: fromB64url(publicKey.challenge),
             user: Object.assign({}, publicKey.user, { id: fromB64url(publicKey.user.id) }),
             excludeCredentials: (publicKey.excludeCredentials || []).map(item => Object.assign({}, item, { id: fromB64url(item.id) }))
         });
-        return copy;
     }
 
     function authenticationOptions(publicKey) {
@@ -89,15 +88,91 @@
         const recoveryError = document.getElementById("mfaRecoveryError");
         const cancelButton = document.getElementById("cancelMfaButton");
         if (!loginForm || !recoveryForm || !recoveryCode || !cancelButton) return;
+
         let transactionToken = "";
         let expiresTimer = null;
         let methods = [];
 
+        const originalPrompt = recoveryForm.querySelector("p");
+        const recoveryLabel = recoveryForm.querySelector("label");
+        const submit = recoveryForm.querySelector('button[type="submit"]');
+        const actions = recoveryForm.querySelector(".mfa-actions");
+
+        const methodHeading = document.createElement("h2");
+        methodHeading.textContent = message("Wybierz metodę weryfikacji", "Choose a verification method");
+        methodHeading.hidden = true;
+
+        const methodDescription = document.createElement("p");
+        methodDescription.className = "muted";
+        methodDescription.textContent = message(
+            "Zaloguj się kluczem bezpieczeństwa albo użyj jednorazowego kodu odzyskiwania.",
+            "Sign in with a security key or use a one-time recovery code."
+        );
+        methodDescription.hidden = true;
+
+        const methodActions = document.createElement("div");
+        methodActions.className = "form-actions mfa-method-actions";
+        methodActions.hidden = true;
+
         const passkeyButton = document.createElement("button");
         passkeyButton.type = "button";
         passkeyButton.textContent = message("Użyj klucza bezpieczeństwa", "Use security key");
-        passkeyButton.hidden = true;
-        recoveryForm.insertBefore(passkeyButton, recoveryForm.querySelector(".mfa-actions"));
+
+        const recoveryChoiceButton = document.createElement("button");
+        recoveryChoiceButton.type = "button";
+        recoveryChoiceButton.className = "secondary";
+        recoveryChoiceButton.textContent = message("Użyj kodu odzyskiwania", "Use recovery code");
+
+        const backToMethodsButton = document.createElement("button");
+        backToMethodsButton.type = "button";
+        backToMethodsButton.className = "secondary";
+        backToMethodsButton.textContent = message("Wróć do wyboru metody", "Back to method selection");
+        backToMethodsButton.hidden = true;
+
+        methodActions.append(passkeyButton, recoveryChoiceButton);
+        recoveryForm.insertBefore(methodHeading, recoveryForm.firstChild);
+        recoveryForm.insertBefore(methodDescription, methodHeading.nextSibling);
+        recoveryForm.insertBefore(methodActions, methodDescription.nextSibling);
+        if (actions) actions.insertBefore(backToMethodsButton, cancelButton);
+
+        function supportsPasskey() {
+            return methods.includes("passkey") && Boolean(window.PublicKeyCredential && navigator.credentials);
+        }
+
+        function supportsRecoveryCode() {
+            return methods.includes("recovery-code");
+        }
+
+        function showMethodChoice() {
+            methodHeading.hidden = false;
+            methodDescription.hidden = false;
+            methodActions.hidden = false;
+            passkeyButton.hidden = !supportsPasskey();
+            recoveryChoiceButton.hidden = !supportsRecoveryCode();
+            if (originalPrompt) originalPrompt.hidden = true;
+            if (recoveryLabel) recoveryLabel.hidden = true;
+            if (submit) submit.hidden = true;
+            backToMethodsButton.hidden = true;
+            recoveryCode.value = "";
+            recoveryError.textContent = "";
+        }
+
+        function showRecoveryCode() {
+            methodHeading.hidden = true;
+            methodDescription.hidden = true;
+            methodActions.hidden = true;
+            if (originalPrompt) {
+                originalPrompt.textContent = message(
+                    "Kod odzyskiwania jest awaryjną, jednorazową metodą logowania Break-Glass.",
+                    "A recovery code is an emergency, one-time Break-Glass sign-in method."
+                );
+                originalPrompt.hidden = false;
+            }
+            if (recoveryLabel) recoveryLabel.hidden = false;
+            if (submit) submit.hidden = false;
+            backToMethodsButton.hidden = !(supportsPasskey() && supportsRecoveryCode());
+            recoveryCode.focus();
+        }
 
         function clearTransaction() {
             transactionToken = "";
@@ -106,7 +181,13 @@
             recoveryError.textContent = "";
             recoveryForm.hidden = true;
             loginForm.hidden = false;
-            passkeyButton.hidden = true;
+            methodHeading.hidden = true;
+            methodDescription.hidden = true;
+            methodActions.hidden = true;
+            backToMethodsButton.hidden = true;
+            if (originalPrompt) originalPrompt.hidden = false;
+            if (recoveryLabel) recoveryLabel.hidden = false;
+            if (submit) submit.hidden = false;
             if (expiresTimer) clearTimeout(expiresTimer);
             expiresTimer = null;
         }
@@ -117,12 +198,13 @@
             if (!transactionToken) throw new Error("Missing MFA transaction token.");
             loginForm.hidden = true;
             recoveryForm.hidden = false;
-            passkeyButton.hidden = !methods.includes("passkey") || !window.PublicKeyCredential;
-            const recoveryLabel = recoveryForm.querySelector("label");
-            if (recoveryLabel) recoveryLabel.hidden = !methods.includes("recovery-code");
-            const submit = recoveryForm.querySelector('button[type="submit"]');
-            if (submit) submit.hidden = !methods.includes("recovery-code");
             recoveryError.textContent = "";
+
+            if (supportsPasskey() && supportsRecoveryCode()) showMethodChoice();
+            else if (supportsPasskey()) showMethodChoice();
+            else if (supportsRecoveryCode()) showRecoveryCode();
+            else throw new Error(message("Brak dostępnej metody MFA.", "No MFA method is available."));
+
             const expiresAt = Date.parse(result.expiresAtUtc || "");
             expiresTimer = setTimeout(function () {
                 clearTransaction();
@@ -134,6 +216,7 @@
         async function usePasskey() {
             recoveryError.textContent = "";
             passkeyButton.disabled = true;
+            recoveryChoiceButton.disabled = true;
             try {
                 const begin = await request("/api/login/mfa/passkey/begin", { method: "POST", body: JSON.stringify({ transactionToken }) });
                 const credential = await navigator.credentials.get({ publicKey: authenticationOptions(begin.publicKey) });
@@ -143,9 +226,10 @@
                 location.reload();
             } catch (error) {
                 recoveryError.textContent = error.name === "NotAllowedError" ? message("Operacja klucza została anulowana lub przekroczono czas.", "The security-key operation was cancelled or timed out.") : error.message;
-                if (!methods.includes("recovery-code") && (error.status === 401 || error.status === 410)) clearTransaction();
+                if (!supportsRecoveryCode() && (error.status === 401 || error.status === 410)) clearTransaction();
             } finally {
                 passkeyButton.disabled = false;
+                recoveryChoiceButton.disabled = false;
             }
         }
 
@@ -165,8 +249,6 @@
                 document.getElementById("password").value = "";
                 if (response.status === 202 && result.mfaRequired) {
                     showMfa(result);
-                    if (result.preferredMethod === "passkey" && window.PublicKeyCredential) await usePasskey();
-                    else recoveryCode.focus();
                     return;
                 }
                 if (!response.ok) throw new Error(result.error || message("Logowanie nie powiodło się.", "Sign-in failed."));
@@ -194,6 +276,8 @@
         }, true);
 
         passkeyButton.addEventListener("click", usePasskey);
+        recoveryChoiceButton.addEventListener("click", showRecoveryCode);
+        backToMethodsButton.addEventListener("click", showMethodChoice);
         cancelButton.addEventListener("click", function (event) { event.stopImmediatePropagation(); clearTransaction(); }, true);
         addEventListener("pagehide", function () { transactionToken = ""; });
     }
