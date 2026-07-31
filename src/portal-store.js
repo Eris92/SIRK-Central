@@ -32,12 +32,23 @@ function create(options) {
         fs.renameSync(temporary, storePath);
     }
 
-    function list() {
-        return read().portals.map((item) => ({
+    function publicPortal(item) {
+        return item ? {
             id: item.id,
             name: item.name,
-            createdAtUtc: item.createdAtUtc
-        }));
+            createdAtUtc: item.createdAtUtc,
+            tokenRotatedAtUtc: item.tokenRotatedAtUtc || null
+        } : null;
+    }
+
+    function list() {
+        return read().portals.map(publicPortal);
+    }
+
+    function get(id) {
+        let portalId;
+        try { portalId = safePortalId(id); } catch (_) { return null; }
+        return publicPortal(read().portals.find(item => item.id === portalId));
     }
 
     function createPortal(input) {
@@ -47,14 +58,16 @@ function create(options) {
         const registry = read();
         if (registry.portals.some((item) => item.id === id)) throw new Error("Portal ID already exists.");
         const token = randomToken(32);
+        const createdAtUtc = new Date().toISOString();
         registry.portals.push({
             id,
             name,
             tokenHash: hashSecret(token),
-            createdAtUtc: new Date().toISOString()
+            createdAtUtc,
+            tokenRotatedAtUtc: createdAtUtc
         });
         write(registry);
-        return { id, name, token };
+        return { id, name, token, createdAtUtc };
     }
 
     function authenticate(id, token) {
@@ -62,12 +75,33 @@ function create(options) {
         try { portalId = safePortalId(id); } catch (_) { return null; }
         const portal = read().portals.find((item) => item.id === portalId);
         return portal && verifySecret(token, portal.tokenHash)
-            ? { id: portal.id, name: portal.name }
+            ? publicPortal(portal)
             : null;
     }
 
-    return { list, createPortal, authenticate };
+    function rotateToken(id) {
+        const portalId = safePortalId(id);
+        const registry = read();
+        const portal = registry.portals.find(item => item.id === portalId);
+        if (!portal) throw new Error("Portal was not found.");
+        const token = randomToken(32);
+        portal.tokenHash = hashSecret(token);
+        portal.tokenRotatedAtUtc = new Date().toISOString();
+        write(registry);
+        return Object.assign(publicPortal(portal), { token });
+    }
+
+    function remove(id) {
+        const portalId = safePortalId(id);
+        const registry = read();
+        const index = registry.portals.findIndex(item => item.id === portalId);
+        if (index < 0) return null;
+        const removed = registry.portals.splice(index, 1)[0];
+        write(registry);
+        return publicPortal(removed);
+    }
+
+    return { list, get, createPortal, authenticate, rotateToken, remove };
 }
 
 module.exports = { create, safePortalId };
-
