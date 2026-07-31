@@ -7,6 +7,7 @@ const path = require("node:path");
 const test = require("node:test");
 const approvalStore = require("../src/approval-store");
 const { canDecide, executeApproved } = require("../src/server-v13");
+const { approvedOperation } = require("../src/server-v14");
 
 function temporaryDirectory() { return fs.mkdtempSync(path.join(os.tmpdir(), "sirk-approval-")); }
 
@@ -56,4 +57,28 @@ test("approved role request executes exactly through user store", () => {
     assert.equal(calls.length, 1);
     assert.equal(calls[0].identity.source, "entra");
     assert.equal(calls[0].role, "Admin");
+});
+
+test("high-risk approval remains unused until the command subsystem consumes it", () => {
+    const store = approvalStore.create({ dataDir: temporaryDirectory(), randomId: () => "apr-high-risk" });
+    const submitted = store.submit({
+        type: "operation.high-risk",
+        title: "Restart Portal",
+        reason: "Controlled maintenance",
+        payload: { portalId: "portal-one", operation: "restart" },
+        scope: { portalId: "portal-one" }
+    }, requester);
+    const approved = store.decide(submitted.id, "approve", secAdmin, "approved");
+    const authorization = executeApproved({ approvals: store }, approved, secAdmin);
+
+    assert.equal(authorization.executed, false);
+    assert.equal(authorization.state, "authorized");
+    assert.equal(store.get(submitted.id).execution, null);
+
+    const match = approvedOperation({ approvals: store }, submitted.id, "portal-one", "restart");
+    assert.ok(match);
+    assert.equal(match.required, true);
+
+    store.markExecution(submitted.id, { state: "completed", commandId: "cmd-one" });
+    assert.equal(approvedOperation({ approvals: store }, submitted.id, "portal-one", "restart"), null);
 });
