@@ -11,9 +11,9 @@ const { approvedOperation } = require("../src/server-v14");
 
 function temporaryDirectory() { return fs.mkdtempSync(path.join(os.tmpdir(), "sirk-approval-")); }
 
-const requester = { username: "requester", identityKey: "tenant:user-a", role: "Admin", builtIn: false };
-const secAdmin = { username: "security", identityKey: "tenant:user-b", role: "SecAdmin", builtIn: false };
-const breakGlass = { username: "admin", role: "BreakGlass", builtIn: true };
+const requester = { username: "requester", identityKey: "tenant:user-a", role: "Admin", source: "entra", status: "active", builtIn: false };
+const secAdmin = { username: "security", identityKey: "tenant:user-b", role: "SecAdmin", source: "entra", status: "active", builtIn: false };
+const breakGlass = { username: "admin", identityKey: "breakglass:admin", role: "BreakGlass", source: "local", status: "active", builtIn: true };
 
 test("approval store enforces independent reviewers and persists execution", () => {
     const store = approvalStore.create({ dataDir: temporaryDirectory(), randomId: () => "apr-test" });
@@ -26,7 +26,7 @@ test("approval store enforces independent reviewers and persists execution", () 
     }, requester);
     assert.equal(request.state, "pending");
     assert.throws(() => store.decide(request.id, "approve", requester, "self"), /own request/i);
-    const approved = store.decide(request.id, "approve", secAdmin, "approved");
+    const approved = store.decide(request.id, "approve", breakGlass, "approved");
     assert.equal(approved.state, "approved");
     const execution = store.markExecution(request.id, { state: "completed", change: { role: "Admin" } });
     assert.equal(execution.state, "completed");
@@ -34,15 +34,20 @@ test("approval store enforces independent reviewers and persists execution", () 
     assert.deepEqual(store.markExecution(request.id, { state: "failed" }), execution);
 });
 
-test("privileged decisions require SecAdmin or BreakGlass and never the requester", () => {
-    const request = { requestedBy: requester.identityKey, payload: { role: "Admin" } };
-    assert.equal(canDecide(requester, request), false);
-    assert.equal(canDecide({ username: "auditor", role: "Auditor" }, request), false);
-    assert.equal(canDecide(secAdmin, request), true);
-    assert.equal(canDecide(breakGlass, request), true);
+test("privileged role decisions preserve Admin and SecAdmin separation", () => {
+    const adminRequest = { type: "role.assignment", requestedBy: requester.identityKey, payload: { role: "Admin" } };
+    const secAdminRequest = { type: "role.assignment", requestedBy: requester.identityKey, payload: { role: "SecAdmin" } };
+    const operationRequest = { type: "operation.high-risk", requestedBy: requester.identityKey, payload: { operation: "restart" } };
+    assert.equal(canDecide(requester, adminRequest), false);
+    assert.equal(canDecide({ username: "auditor", role: "Auditor", source: "entra", status: "active" }, adminRequest), false);
+    assert.equal(canDecide(secAdmin, adminRequest), false);
+    assert.equal(canDecide(breakGlass, adminRequest), true);
+    assert.equal(canDecide(secAdmin, secAdminRequest), true);
+    assert.equal(canDecide(secAdmin, operationRequest), true);
+    assert.equal(canDecide(secAdmin, Object.assign({}, secAdminRequest, { requestedBy: secAdmin.identityKey })), false);
 });
 
-test("approved role request executes exactly through user store", () => {
+test("approved Admin role request executes only through BreakGlass", () => {
     const calls = [];
     const app = {
         userStore: { updateRole(identity, role, actor) { calls.push({ identity, role, actor }); return { source: identity.source, key: identity.key, role }; } },
@@ -52,7 +57,8 @@ test("approved role request executes exactly through user store", () => {
         id: "apr-role", type: "role.assignment", state: "approved", requestedBy: requester.identityKey,
         payload: { identityKey: "00000000-0000-0000-0000-000000000001:00000000-0000-0000-0000-000000000002", role: "Admin" }
     };
-    const execution = executeApproved(app, request, secAdmin);
+    assert.throws(() => executeApproved(app, request, secAdmin), /not permitted/i);
+    const execution = executeApproved(app, request, breakGlass);
     assert.equal(execution.state, "completed");
     assert.equal(calls.length, 1);
     assert.equal(calls[0].identity.source, "entra");
