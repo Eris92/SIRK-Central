@@ -94,7 +94,7 @@ jobs:
           for (const file of [
             'src/server-v15.js','src/runtime-lock.js','src/portal-command-store-v2.js',
             'src/ticket-projection-store-v2.js','src/sso-callback-handler.js','src/central-operation-guard.js',
-            'auth/hardened-server.js','updater/gateway-server.js','updater/server.js',
+            'auth/hardened-server.js','updater/Dockerfile.gateway','updater/gateway-server.js','updater/server.js',
             'updater/backup-archive.js','updater/restore-transaction.js',
             'deploy/backup.sh','deploy/restore.sh','deploy/web-update.sh',
             'deploy/maintenance-up.sh','deploy/maintenance-down.sh','scripts/sync-main.sh'
@@ -104,6 +104,8 @@ jobs:
           for (const expected of ['runtimeLockFactory.acquire','SIRK_RUNTIME_LOCK_DISABLED','eventErrorResult']) {
             if (!runtime.includes(expected)) throw new Error('Runtime hardening missing: ' + expected);
           }
+          const gatewayDockerfile = fs.readFileSync('updater/Dockerfile.gateway', 'utf8');
+          if (!gatewayDockerfile.includes('USER node') || /docker-cli|\bgit\b|\btar\b/.test(gatewayDockerfile)) throw new Error('Gateway image is not minimal/non-root.');
           const gateway = fs.readFileSync('updater/gateway-server.js', 'utf8');
           for (const expected of ['UPDATER_MAINTENANCE_REQUIRED','pathAllowed','workerOrigin','AbortSignal.timeout']) {
             if (!gateway.includes(expected)) throw new Error('Gateway hardening missing: ' + expected);
@@ -112,16 +114,22 @@ jobs:
           for (const expected of [
             'SIRK_UPDATER_ORIGIN: http://updater-gateway:8092',
             'SIRK_UPDATER_ALLOWED_HOSTS: updater-gateway',
-            'user: node','profiles: ["maintenance"]','restart: "no"'
+            'dockerfile: updater/Dockerfile.gateway',
+            'profiles: ["maintenance"]','restart: "no"'
           ]) if (!compose.includes(expected)) throw new Error('Compose security boundary missing: ' + expected);
           const configure = fs.readFileSync('deploy/configure-and-start.sh', 'utf8');
           if (!configure.includes('SERVICES=(central auth updater-gateway backup-manager caddy)')) throw new Error('Installer service boundary is invalid.');
           const backup = fs.readFileSync('deploy/backup.sh', 'utf8');
           if (!backup.includes('SIRK_BACKUP_REQUIRE_ENCRYPTION:-auto')) throw new Error('Offline backup encryption is not fail-closed.');
           const restore = fs.readFileSync('deploy/restore.sh', 'utf8');
-          if (!restore.includes('validate-backup-archive.py') || !restore.includes('rollback')) throw new Error('Restore validation/rollback contract is missing.');
+          if (!restore.includes('validate-backup-archive.py') || !restore.includes('BASE_SERVICES=(central auth updater-gateway backup-manager caddy)')) throw new Error('Restore validation/gateway contract is missing.');
           const update = fs.readFileSync('deploy/web-update.sh', 'utf8');
-          if (!update.includes('central-data.tar.gz') || !update.includes('schedule_updater_recreate')) throw new Error('Update rollback contract is missing.');
+          for (const expected of [
+            'central-data.tar.gz',
+            'BASE_SERVICES=(central auth updater-gateway backup-manager caddy)',
+            'Close the maintenance window to remove the privileged updater worker.'
+          ]) if (!update.includes(expected)) throw new Error('Update rollback/maintenance contract is missing: ' + expected);
+          if (update.includes('schedule_updater_recreate')) throw new Error('Update must not recreate the privileged worker after success.');
           NODE
 
   codeql:
