@@ -1,8 +1,6 @@
 "use strict";
 
 (function () {
-    let currentIdentity = null;
-
     function lang() { return document.documentElement.lang === "en" ? "en" : "pl"; }
     function text(pl, en) { return lang() === "en" ? en : pl; }
 
@@ -11,6 +9,11 @@
         const body = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(body.error || text("Błąd żądania.", "Request failed."));
         return body;
+    }
+
+    function hideAudit() {
+        const view = document.getElementById("auditView");
+        if (view) view.hidden = true;
     }
 
     function ensureUi() {
@@ -76,6 +79,10 @@
             if (pageTitle) pageTitle.textContent = text("Centrum audytu", "Audit Center");
             await loadAudit();
         });
+        for (const id of ["backButton", "settingsButton", "accessButton", "breakGlassButton"]) {
+            const navigation = document.getElementById(id);
+            if (navigation) navigation.addEventListener("click", hideAudit, true);
+        }
         document.getElementById("auditRefresh").addEventListener("click", loadAudit);
         for (const id of ["auditCategory", "auditResult"]) document.getElementById(id).addEventListener("change", loadAudit);
         let timer = 0;
@@ -179,7 +186,6 @@
     async function initialize() {
         try {
             const session = await api("/api/session");
-            currentIdentity = session;
             if (!(session.builtIn || ["Admin", "SecAdmin", "Auditor"].includes(session.role))) return;
             ensureUi();
             new MutationObserver(applyLanguage).observe(document.documentElement, { attributes: true, attributeFilter: ["lang"] });
