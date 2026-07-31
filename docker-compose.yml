@@ -58,8 +58,8 @@ services:
       dockerfile: updater/Dockerfile.gateway
     restart: unless-stopped
     user: node
-    env_file: .env
     environment:
+      SIRK_UPDATER_TOKEN: ${SIRK_UPDATER_TOKEN}
       SIRK_UPDATER_GATEWAY_BIND_HOST: 0.0.0.0
       SIRK_UPDATER_GATEWAY_PORT: 8092
       SIRK_UPDATER_WORKER_ORIGIN: http://updater:8090
