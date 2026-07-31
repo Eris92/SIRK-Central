@@ -3,21 +3,27 @@ set -Eeuo pipefail
 umask 077
 
 INSTALL_DIR="${SIRK_INSTALL_DIR:-/opt/sirk-central}"
-COMPOSE_FILE="${SIRK_COMPOSE_FILE:-docker-compose.yml}"
+BASE_COMPOSE_FILE="${SIRK_COMPOSE_FILE:-docker-compose.yml}"
+RUNTIME_COMPOSE_FILE="${SIRK_RUNTIME_COMPOSE_FILE:-docker-compose.portal-runtime.yml}"
+PROFILE="${SIRK_COMPOSE_PROFILE:-auth}"
 
-[[ "$(id -u)" -eq 0 ]] || { echo "Run as root or through sudo." >&2; exit 1; }
-[[ -d "$INSTALL_DIR" ]] || { echo "Missing installation directory: $INSTALL_DIR" >&2; exit 1; }
+fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+require() { command -v "$1" >/dev/null 2>&1 || fail "Missing required command: $1"; }
+
+[[ "$(id -u)" -eq 0 ]] || fail "Run as root or through sudo."
+require docker
+[[ -d "$INSTALL_DIR" ]] || fail "Missing installation directory: $INSTALL_DIR"
 cd "$INSTALL_DIR"
 
-[[ -f "$COMPOSE_FILE" ]] || { echo "Missing Compose file: $INSTALL_DIR/$COMPOSE_FILE" >&2; exit 1; }
-if [[ -f compose.yaml && "$COMPOSE_FILE" != "compose.yaml" ]]; then
+[[ -f "$BASE_COMPOSE_FILE" ]] || fail "Missing Compose file: $INSTALL_DIR/$BASE_COMPOSE_FILE"
+[[ -f "$RUNTIME_COMPOSE_FILE" ]] || fail "Missing runtime overlay: $INSTALL_DIR/$RUNTIME_COMPOSE_FILE"
+if [[ -f compose.yaml && "$BASE_COMPOSE_FILE" != "compose.yaml" ]]; then
   echo "Disabling obsolete compose.yaml to prevent Docker Compose selecting the wrong stack."
   mv compose.yaml compose.yaml.disabled
 fi
 
 if [[ -f .env ]]; then
-  echo ".env already exists; refusing to replace production credentials." >&2
-  exit 1
+  fail ".env already exists; refusing to replace production credentials."
 fi
 
 read -r -p 'Website domain [sirkportal.com]: ' SIRK_WEBSITE_DOMAIN
@@ -34,6 +40,7 @@ SIRK_ADMIN_USERNAME="${SIRK_ADMIN_USERNAME:-admin}"
 : "${SIRK_SESSION_IDLE_MINUTES:=30}"
 : "${SIRK_SESSION_ABSOLUTE_HOURS:=8}"
 
+printf 'Building one-time configuration image...\n'
 docker build --tag sirk-central:setup .
 docker run --rm -it \
   --user 0:0 \
@@ -48,10 +55,22 @@ docker run --rm -it \
   --env "SIRK_SESSION_ABSOLUTE_HOURS=${SIRK_SESSION_ABSOLUTE_HOURS}" \
   sirk-central:setup node scripts/configure-production.js
 
-[[ -s .env ]] || { echo "Configuration file was not created." >&2; exit 1; }
+[[ -s .env ]] || fail "Configuration file was not created."
 chmod 0600 .env
 
-COMPOSE=(docker compose -f "$COMPOSE_FILE" --profile auth)
+COMPOSE=(docker compose -f "$BASE_COMPOSE_FILE" -f "$RUNTIME_COMPOSE_FILE" --profile "$PROFILE")
+SERVICES=(central auth updater backup-manager caddy)
+
+printf 'Validating canonical Compose stack...\n'
 "${COMPOSE[@]}" config >/dev/null
-"${COMPOSE[@]}" up -d --build --remove-orphans central auth caddy
-"${COMPOSE[@]}" ps
+
+printf 'Building and starting canonical v15 services...\n'
+"${COMPOSE[@]}" up -d --build --remove-orphans "${SERVICES[@]}"
+"${COMPOSE[@]}" ps "${SERVICES[@]}"
+
+for service in central auth updater backup-manager; do
+  container_id="$("${COMPOSE[@]}" ps -q "$service")"
+  [[ -n "$container_id" ]] || fail "Service $service was not created."
+done
+
+printf 'Configuration completed. Run deploy/acceptance-test.sh before production use.\n'
