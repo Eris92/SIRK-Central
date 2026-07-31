@@ -153,7 +153,12 @@ test("parallel ticket events do not lose projections", async t => {
 
 test("parallel command polling delivers one command only once within its lease", async t => {
     const h = await harness(t);
-    const command = h.app.portalCommands.enqueue(h.portal.id, "diagnostics.collect", { scope: "runtime" }, h.actor, { ttlSeconds: 600 });
+    const command = h.app.portalCommands.enqueue({
+        portalId: h.portal.id,
+        type: "diagnostics",
+        payload: { scope: "runtime" },
+        ttlMinutes: 10
+    }, h.actor);
     const results = await Promise.all(Array.from({ length: REQUESTS }, () => h.request("/api/portal/v1/commands/poll?limit=1", {
         headers: { Authorization: h.authorization }
     })));
@@ -166,18 +171,21 @@ test("parallel command polling delivers one command only once within its lease",
 
 test("parallel identical terminal acknowledgements are idempotent", async t => {
     const h = await harness(t);
-    const command = h.app.portalCommands.enqueue(h.portal.id, "diagnostics.collect", { scope: "runtime" }, h.actor, { ttlSeconds: 600 });
-    const delivery = h.app.portalCommands.poll(h.portal.id, { limit: 1 })[0];
+    const command = h.app.portalCommands.enqueue({
+        portalId: h.portal.id,
+        type: "diagnostics",
+        payload: { scope: "runtime" },
+        ttlMinutes: 10
+    }, h.actor);
+    const delivery = h.app.portalCommands.deliver(h.portal.id, 1)[0];
     h.app.portalCommands.acknowledge(h.portal.id, command.id, {
         state: "running",
-        leaseId: delivery.leaseId,
         progress: 10,
         message: "Started"
     });
 
     const payload = {
         state: "completed",
-        leaseId: delivery.leaseId,
         progress: 100,
         result: { ok: true, digest: "same-result" },
         message: "Completed"
@@ -188,6 +196,7 @@ test("parallel identical terminal acknowledgements are idempotent", async t => {
         body: JSON.stringify(payload)
     })));
 
+    assert.ok(delivery);
     assert.deepEqual(new Set(results.map(item => item.response.status)), new Set([200]));
     assert.equal(h.app.portalCommands.get(command.id).state, "completed");
 });
