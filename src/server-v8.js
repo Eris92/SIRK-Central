@@ -7,7 +7,7 @@ const { createRuntimeApp } = require("./server-v7");
 const { loadConfig } = require("./server-v1");
 const { hasPermission } = require("./rbac");
 
-const VERSION = "1.0.0-rc.14";
+const VERSION = "1.0.0-rc.20";
 
 function parseCookies(req) {
     const result = {};
@@ -38,45 +38,95 @@ function csrfAccepted(req, config) {
 }
 function json(res, status, body) {
     const data = Buffer.from(JSON.stringify(body));
-    res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Content-Length": String(data.length), "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY", "Referrer-Policy": "no-referrer" });
+    res.writeHead(status, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Content-Length": String(data.length),
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY",
+        "Referrer-Policy": "no-referrer"
+    });
     res.end(data);
 }
 function readBody(req, limit = 65536) {
     return new Promise((resolve, reject) => {
-        const chunks = []; let size = 0;
-        req.on("data", chunk => { size += chunk.length; if (size > limit) { reject(Object.assign(new Error("Request body is too large."), { statusCode: 413 })); req.destroy(); } else chunks.push(chunk); });
-        req.on("end", () => { try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}")); } catch (_) { reject(Object.assign(new Error("Invalid JSON body."), { statusCode: 400 })); } });
-        req.on("error", reject);
+        const chunks = [];
+        let size = 0;
+        let settled = false;
+        req.on("data", chunk => {
+            if (settled) return;
+            size += chunk.length;
+            if (size > limit) {
+                settled = true;
+                reject(Object.assign(new Error("Request body is too large."), { statusCode: 413 }));
+                req.resume();
+            } else chunks.push(chunk);
+        });
+        req.on("end", () => {
+            if (settled) return;
+            try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}")); }
+            catch (_) { reject(Object.assign(new Error("Invalid JSON body."), { statusCode: 400 })); }
+        });
+        req.on("error", error => { if (!settled) reject(error); });
     });
 }
 function providerAccess(app, req) {
     const actor = sessionActor(app, req);
     if (!actor) return { actor: null, editable: false, securityEditable: false };
-    return { actor, editable: hasPermission(actor, "identity.manage"), securityEditable: actor.builtIn === true || actor.role === "SecAdmin" };
+    return {
+        actor,
+        editable: hasPermission(actor, "identity.manage"),
+        securityEditable: actor.builtIn === true || actor.role === "SecAdmin"
+    };
 }
 async function testProvider(provider) {
-    if (!provider.clientId) throw new Error("Application Client ID is required.");
+    if (!provider.clientId) throw Object.assign(new Error("Application Client ID is required."), { statusCode: 400 });
     const tenant = String(provider.tenant || "organizations");
     const endpoint = "https://login.microsoftonline.com/" + encodeURIComponent(tenant) + "/v2.0/.well-known/openid-configuration";
     const response = await fetch(endpoint, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(15000) });
     const result = await response.json().catch(() => ({}));
-    if (!response.ok || !result.issuer || !result.authorization_endpoint || !result.token_endpoint) throw new Error("Microsoft Entra discovery failed: " + String(result.error_description || result.error || response.status));
+    if (!response.ok || !result.issuer || !result.authorization_endpoint || !result.token_endpoint) {
+        throw Object.assign(new Error("Microsoft Entra discovery failed."), { statusCode: 502, internalError: String(result.error_description || result.error || response.status) });
+    }
     return { issuer: result.issuer, authorizationEndpoint: result.authorization_endpoint, tokenEndpoint: result.token_endpoint };
 }
+function updaterOrigin(config) {
+    const value = String(config.env.SIRK_UPDATER_ORIGIN || "http://updater:8090").replace(/\/+$/, "");
+    let origin;
+    try { origin = new URL(value); }
+    catch (_) { throw Object.assign(new Error("Updater origin is invalid."), { statusCode: 503 }); }
+    const allowedHosts = new Set(String(config.env.SIRK_UPDATER_ALLOWED_HOSTS || "updater")
+        .split(",").map(item => item.trim().toLowerCase()).filter(Boolean));
+    if (!["http:", "https:"].includes(origin.protocol) || origin.username || origin.password || origin.pathname !== "/" || origin.search || origin.hash || !allowedHosts.has(origin.hostname.toLowerCase())) {
+        throw Object.assign(new Error("Updater origin is not allowed."), { statusCode: 503 });
+    }
+    return value;
+}
 async function updaterRequest(config, requestPath, options) {
-    const origin = String(config.env.SIRK_UPDATER_ORIGIN || "http://updater:8090").replace(/\/+$/, "");
+    if (!/^\/[a-z0-9/_-]+$/i.test(String(requestPath || ""))) {
+        throw Object.assign(new Error("Updater request path is invalid."), { statusCode: 500 });
+    }
+    const origin = updaterOrigin(config);
     const token = String(config.env.SIRK_UPDATER_TOKEN || "");
     if (token.length < 43) throw Object.assign(new Error("Updater is not configured."), { statusCode: 503 });
-    const response = await fetch(origin + requestPath, Object.assign({ headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" }, signal: AbortSignal.timeout(30000) }, options || {}));
+    const response = await fetch(origin + requestPath, Object.assign({
+        headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(30000)
+    }, options || {}));
     const body = await response.json().catch(() => ({}));
-    if (!response.ok) throw Object.assign(new Error(body.error || "Updater request failed."), { statusCode: response.status });
+    if (!response.ok) {
+        throw Object.assign(new Error(response.status >= 500 ? "Updater request failed." : body.error || "Updater request was rejected."), {
+            statusCode: response.status,
+            internalError: String(body.error || response.status)
+        });
+    }
     return body;
 }
 function operationsActor(app, req, write) {
     const actor = sessionActor(app, req);
     if (!actor) return null;
     if (actor.builtIn === true) return actor;
-    if (write) return actor.role === "Admin" || actor.role === "SecAdmin" ? actor : null;
+    if (write) return actor.role === "Admin" ? actor : null;
     return hasPermission(actor, "settings.read") ? actor : null;
 }
 function auditActor(app, req) {
@@ -220,8 +270,15 @@ function createContinuityApp(config) {
             }
             return inner(req, res);
         } catch (error) {
-            audit(app, req, { action: "request.failed", category: "system", result: "failure", details: { code: error.code || "REQUEST_REJECTED", error: error.message || "Request failed." } });
-            if (!res.headersSent) return json(res, error.statusCode || 400, { ok: false, code: error.code || "REQUEST_REJECTED", error: error.message || "Request failed." });
+            audit(app, req, {
+                action: "request.failed",
+                category: "system",
+                result: "failure",
+                details: { code: error.code || "REQUEST_REJECTED", error: error.internalError || error.message || "Request failed." }
+            });
+            const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+            const message = status >= 500 ? "Internal service error." : error.message || "Request failed.";
+            if (!res.headersSent) return json(res, status, { ok: false, code: error.code || (status >= 500 ? "INTERNAL_ERROR" : "REQUEST_REJECTED"), error: message });
             res.destroy(error);
         }
     });
@@ -234,4 +291,15 @@ if (require.main === module) {
     const app = createContinuityApp(config);
     app.server.listen(config.port, config.bindHost, () => process.stdout.write("SIRK Central v8 listening on " + config.bindHost + ":" + config.port + "\n"));
 }
-module.exports = { createContinuityApp, VERSION, parseCookies, breakGlassActor, csrfAccepted, providerAccess, testProvider };
+
+module.exports = {
+    createContinuityApp,
+    VERSION,
+    parseCookies,
+    breakGlassActor,
+    csrfAccepted,
+    providerAccess,
+    testProvider,
+    updaterOrigin,
+    operationsActor
+};
