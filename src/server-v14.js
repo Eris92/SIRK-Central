@@ -3,27 +3,31 @@
 const http = require("node:http");
 const { createApprovalRuntime } = require("./server-v13");
 const commandStoreFactory = require("./portal-command-store");
+const rateLimiterFactory = require("./request-rate-limiter");
+const { identityActive } = require("./rbac");
 const { loadConfig } = require("./server-v1");
 const { parseCookies } = require("./server-v8");
 
-const VERSION = "1.0.0-rc.20";
+const VERSION = "1.0.0-rc.21";
 const HIGH_RISK = new Set(["update", "restart", "diagnostics"]);
 
-function json(res, status, body) {
+function json(res, status, body, headers = {}) {
     const data = Buffer.from(JSON.stringify(body));
-    res.writeHead(status, {
+    res.writeHead(status, Object.assign({
         "Content-Type": "application/json; charset=utf-8",
         "Content-Length": String(data.length),
         "Cache-Control": "no-store",
         "X-Content-Type-Options": "nosniff",
         "X-Frame-Options": "DENY",
         "Referrer-Policy": "no-referrer"
-    });
+    }, headers));
     res.end(data);
 }
 function readBody(req, limit = 65536) {
     return new Promise((resolve, reject) => {
-        const chunks = []; let size = 0; let settled = false;
+        const chunks = [];
+        let size = 0;
+        let settled = false;
         req.on("data", chunk => {
             if (settled) return;
             size += chunk.length;
@@ -46,10 +50,10 @@ function actorFor(app, req) {
     return token && app.sessions ? app.sessions.get(token, true) : null;
 }
 function canRead(actor) {
-    return Boolean(actor && (actor.builtIn === true || ["Admin", "SecAdmin", "Auditor", "OperatorL1", "SupportL2", "EngineerL3"].includes(actor.role)));
+    return Boolean(identityActive(actor) && (actor.builtIn === true || ["Admin", "SecAdmin", "Auditor", "OperatorL1", "SupportL2", "EngineerL3"].includes(actor.role)));
 }
 function canWrite(actor) {
-    return Boolean(actor && (actor.builtIn === true || ["Admin", "SupportL2", "EngineerL3"].includes(actor.role)));
+    return Boolean(identityActive(actor) && (actor.builtIn === true || ["Admin", "SupportL2", "EngineerL3"].includes(actor.role)));
 }
 function csrfAccepted(req, config) {
     const cookies = parseCookies(req);
@@ -62,12 +66,15 @@ function csrfAccepted(req, config) {
     return !site || site === "same-origin" || site === "none";
 }
 function portalCredential(req) {
-    const match = String(req.headers.authorization || "").match(/^SIRK-Portal ([A-Za-z0-9_-]{8,8192})$/);
+    const authorization = String(req.headers.authorization || "");
+    if (authorization.length > 8192) return null;
+    const match = authorization.match(/^SIRK-Portal ([A-Za-z0-9_-]{8,8192})$/);
     if (!match) return null;
     try {
         const decoded = Buffer.from(match[1], "base64url").toString("utf8");
         const index = decoded.indexOf(":");
-        return index < 1 ? null : { id: decoded.slice(0, index), token: decoded.slice(index + 1) };
+        if (index < 1 || index > 128 || decoded.length - index - 1 < 16) return null;
+        return { id: decoded.slice(0, index), token: decoded.slice(index + 1) };
     } catch (_) { return null; }
 }
 function authenticatePortal(app, req) {
@@ -75,12 +82,39 @@ function authenticatePortal(app, req) {
     if (!credential || !app.portalRegistry || typeof app.portalRegistry.authenticate !== "function") return null;
     return app.portalRegistry.authenticate(credential.id, credential.token);
 }
-function audit(app, action, actor, req, details, result = "success", category = "operations") {
+function requestIp(req, config) {
+    if (config.trustProxy) {
+        const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
+        if (forwarded) return forwarded.slice(0, 128);
+    }
+    return String(req.socket && req.socket.remoteAddress || "unknown").slice(0, 128);
+}
+function consumeOrReject(res, limiter, key) {
+    const result = limiter.consume(key);
+    if (result.allowed) return true;
+    json(res, 429, { ok: false, code: "RATE_LIMITED", error: "Too many requests." }, { "Retry-After": String(result.retryAfterSeconds) });
+    return false;
+}
+function portalAllowed(app, actor, portalId) {
+    if (!identityActive(actor)) return false;
+    if (actor.builtIn === true) return true;
+    if (!app.accessStore || typeof app.accessStore.effective !== "function") return false;
+    try { return app.accessStore.effective(actor, portalId).allowed === true; }
+    catch (_) { return false; }
+}
+function visiblePortalIds(app, actor) {
+    const registry = app.portalRegistry && typeof app.portalRegistry.list === "function" ? app.portalRegistry.list() : [];
+    return registry.filter(portal => portalAllowed(app, actor, portal.id)).map(portal => portal.id);
+}
+function audit(app, action, actor, req, details, result = "success", category = "operations", config = {}) {
     if (!app.auditStore || typeof app.auditStore.append !== "function") return;
     app.auditStore.append({
-        action, category, result, actor,
+        action,
+        category,
+        result,
+        actor,
         request: {
-            ip: String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "").split(",")[0].trim(),
+            ip: requestIp(req, config),
             userAgent: String(req.headers["user-agent"] || ""),
             method: req.method,
             path: req.url
@@ -90,19 +124,18 @@ function audit(app, action, actor, req, details, result = "success", category = 
     });
 }
 function approvedOperation(app, approvalId, portalId, type) {
-    if (!HIGH_RISK.has(type)) return { required: false, request: null };
+    if (!HIGH_RISK.has(type)) return null;
     if (!approvalId || !app.approvals || typeof app.approvals.get !== "function") return null;
     const request = app.approvals.get(approvalId);
     if (!request || request.state !== "approved" || request.execution) return null;
     if (request.type !== "operation.high-risk") return null;
     const approvedPortal = String(request.scope && request.scope.portalId || request.payload && request.payload.portalId || "").toLowerCase();
     const approvedType = String(request.payload && (request.payload.operation || request.payload.type) || "");
-    if (!approvedPortal || !approvedType) return null;
-    if (approvedPortal !== portalId || approvedType !== type) return null;
+    if (!approvedPortal || !approvedType || approvedPortal !== portalId || approvedType !== type) return null;
     return { required: true, request };
 }
 function approvalAccepted(app, approvalId, portalId, type) {
-    return Boolean(approvedOperation(app, approvalId, portalId, type));
+    return !HIGH_RISK.has(type) || Boolean(approvedOperation(app, approvalId, portalId, type));
 }
 function consumeApproval(app, approvalId, command, actor, commands) {
     if (!approvalId || !app.approvals || typeof app.approvals.markExecution !== "function") return;
@@ -116,9 +149,15 @@ function consumeApproval(app, approvalId, command, actor, commands) {
             executedBy: actor.identityKey || actor.username || "system"
         });
     } catch (error) {
-        try { commands.cancel(command.id, { username: "approval-rollback", identityKey: "system:approval-rollback" }); } catch (_) { /* best effort */ }
+        try { commands.cancel(command.id, { username: "approval-rollback", identityKey: "system:approval-rollback" }); }
+        catch (_) { /* best effort */ }
         throw error;
     }
+}
+function validateFilter(filter, commands) {
+    if (filter.portalId && !/^[a-z0-9][a-z0-9-]{2,62}$/.test(filter.portalId)) throw Object.assign(new Error("Portal ID is invalid."), { statusCode: 400 });
+    if (filter.state && !commands.STATES.includes(filter.state)) throw Object.assign(new Error("Command state filter is invalid."), { statusCode: 400 });
+    if (filter.type && !commands.TYPES.includes(filter.type)) throw Object.assign(new Error("Command type filter is invalid."), { statusCode: 400 });
 }
 
 function createPortalOperationsRuntime(config) {
@@ -131,24 +170,38 @@ function createPortalOperationsRuntime(config) {
         maxActivePerPortal: Number(config.env.SIRK_PORTAL_COMMAND_MAX_ACTIVE || 50),
         deliveryLeaseMs: Number(config.env.SIRK_PORTAL_COMMAND_DELIVERY_LEASE_MS || 60000)
     });
+    const preAuthLimiter = rateLimiterFactory.create({
+        limit: Number(config.env.SIRK_PORTAL_AUTH_RATE_LIMIT || 120),
+        windowMs: Number(config.env.SIRK_PORTAL_AUTH_RATE_WINDOW_MS || 60000),
+        maxEntries: Number(config.env.SIRK_PORTAL_RATE_LIMIT_MAX_KEYS || 20000)
+    });
+    const portalLimiter = rateLimiterFactory.create({
+        limit: Number(config.env.SIRK_PORTAL_COMMAND_RATE_LIMIT || 180),
+        windowMs: Number(config.env.SIRK_PORTAL_COMMAND_RATE_WINDOW_MS || 60000),
+        maxEntries: Number(config.env.SIRK_PORTAL_RATE_LIMIT_MAX_KEYS || 20000)
+    });
 
     const server = http.createServer(async (req, res) => {
         try {
             const url = new URL(req.url, "http://central.local");
 
             if (req.method === "GET" && url.pathname === "/api/portal/v1/commands") {
+                if (!consumeOrReject(res, preAuthLimiter, "commands:ip:" + requestIp(req, config))) return;
                 const portal = authenticatePortal(app, req);
                 if (!portal) return json(res, 404, { ok: false, error: "Not found." });
+                if (!consumeOrReject(res, portalLimiter, "poll:" + portal.id)) return;
                 const items = commands.deliver(portal.id, Number(url.searchParams.get("limit") || 20));
-                if (items.length) audit(app, "portal.commands_delivered", { username: portal.id, source: "portal", role: "Portal" }, req, { portalId: portal.id, count: items.length, commandIds: items.map(item => item.id) });
+                if (items.length) audit(app, "portal.commands_delivered", { username: portal.id, source: "portal", role: "Portal", status: "active" }, req, { portalId: portal.id, count: items.length, commandIds: items.map(item => item.id) }, "success", "operations", config);
                 return json(res, 200, { ok: true, portalId: portal.id, commands: items, pollAfterSeconds: 15 });
             }
             const ackMatch = url.pathname.match(/^\/api\/portal\/v1\/commands\/(cmd-[a-z0-9_-]+)\/ack$/);
             if (req.method === "POST" && ackMatch) {
+                if (!consumeOrReject(res, preAuthLimiter, "ack:ip:" + requestIp(req, config))) return;
                 const portal = authenticatePortal(app, req);
                 if (!portal) return json(res, 404, { ok: false, error: "Not found." });
+                if (!consumeOrReject(res, portalLimiter, "ack:" + portal.id)) return;
                 const command = commands.acknowledge(portal.id, ackMatch[1], await readBody(req));
-                audit(app, "portal.command_acknowledged", { username: portal.id, source: "portal", role: "Portal" }, req, { portalId: portal.id, commandId: command.id, state: command.state, progress: command.progress }, command.state === "failed" ? "failure" : "success");
+                audit(app, "portal.command_acknowledged", { username: portal.id, source: "portal", role: "Portal", status: "active" }, req, { portalId: portal.id, commandId: command.id, state: command.state, progress: command.progress }, command.state === "failed" ? "failure" : "success", "operations", config);
                 return json(res, 200, { ok: true, command });
             }
 
@@ -158,13 +211,17 @@ function createPortalOperationsRuntime(config) {
 
             if (req.method === "GET" && url.pathname === "/api/portal-operations") {
                 if (!canRead(actor)) return json(res, 403, { ok: false, error: "Permission denied." });
+                const portalIds = visiblePortalIds(app, actor);
                 const filter = {
+                    portalIds,
                     portalId: url.searchParams.get("portalId") || undefined,
                     state: url.searchParams.get("state") || undefined,
                     type: url.searchParams.get("type") || undefined,
                     limit: Number(url.searchParams.get("limit") || 200)
                 };
-                return json(res, 200, { ok: true, commands: commands.list(filter), summary: commands.summary(), types: commands.TYPES, states: commands.STATES });
+                validateFilter(filter, commands);
+                if (filter.portalId && !portalIds.includes(filter.portalId)) return json(res, 403, { ok: false, error: "Permission denied." });
+                return json(res, 200, { ok: true, commands: commands.list(filter), summary: commands.summary(filter), types: commands.TYPES, states: commands.STATES });
             }
             if (req.method === "POST" && url.pathname === "/api/portal-operations") {
                 if (!canWrite(actor)) return json(res, 403, { ok: false, error: "Permission denied." });
@@ -172,42 +229,53 @@ function createPortalOperationsRuntime(config) {
                 const body = await readBody(req);
                 const portalId = String(body.portalId || "").toLowerCase();
                 const type = String(body.type || "");
-                const approval = approvedOperation(app, body.approvalId, portalId, type);
+                if (!portalAllowed(app, actor, portalId)) return json(res, 403, { ok: false, error: "Permission denied." });
+                if (!app.portalRegistry || !app.portalRegistry.list().some(item => item.id === portalId)) return json(res, 404, { ok: false, error: "Portal not found." });
+                const approval = HIGH_RISK.has(type) ? approvedOperation(app, body.approvalId, portalId, type) : null;
                 if (HIGH_RISK.has(type) && !approval) {
                     return json(res, 409, { ok: false, code: "APPROVAL_REQUIRED", error: "This operation requires a new, unused operation.high-risk approval matching the exact Portal and command type." });
                 }
-                if (app.portalRegistry && typeof app.portalRegistry.list === "function" && !app.portalRegistry.list().some(item => item.id === portalId)) {
-                    return json(res, 404, { ok: false, error: "Portal not found." });
-                }
-                const command = commands.enqueue(body, actor);
+                const command = commands.enqueue({
+                    portalId,
+                    type,
+                    payload: body.payload,
+                    ttlMinutes: body.ttlMinutes,
+                    approvalId: approval ? body.approvalId : ""
+                }, actor);
                 if (approval) consumeApproval(app, body.approvalId, command, actor, commands);
-                audit(app, "portal.command_queued", actor, req, { portalId: command.portalId, commandId: command.id, type: command.type, approvalId: command.approvalId });
+                audit(app, "portal.command_queued", actor, req, { portalId: command.portalId, commandId: command.id, type: command.type, approvalId: command.approvalId }, "success", "operations", config);
                 return json(res, 201, { ok: true, command });
             }
             const actionMatch = url.pathname.match(/^\/api\/portal-operations\/(cmd-[a-z0-9_-]+)\/(cancel|retry)$/);
             if (req.method === "POST" && actionMatch) {
                 if (!canWrite(actor)) return json(res, 403, { ok: false, error: "Permission denied." });
                 if (!csrfAccepted(req, config)) return json(res, 403, { ok: false, error: "CSRF validation failed." });
+                const source = commands.get(actionMatch[1]);
+                if (!source) return json(res, 404, { ok: false, error: "Command not found." });
+                if (!portalAllowed(app, actor, source.portalId)) return json(res, 403, { ok: false, error: "Permission denied." });
                 let command;
                 if (actionMatch[2] === "cancel") {
                     command = commands.cancel(actionMatch[1], actor);
                 } else {
-                    const source = commands.get(actionMatch[1]);
-                    if (!source) return json(res, 404, { ok: false, error: "Command not found." });
                     const body = await readBody(req, 16384);
-                    const approval = approvedOperation(app, body.approvalId, source.portalId, source.type);
+                    const approval = HIGH_RISK.has(source.type) ? approvedOperation(app, body.approvalId, source.portalId, source.type) : null;
                     if (HIGH_RISK.has(source.type) && !approval) {
                         return json(res, 409, { ok: false, code: "APPROVAL_REQUIRED", error: "Retrying this high-risk command requires a new, unused approval." });
                     }
-                    command = commands.retry(actionMatch[1], actor, { approvalId: approval ? body.approvalId : "", ttlMinutes: body.ttlMinutes });
+                    command = commands.retry(actionMatch[1], actor, {
+                        approvalId: approval ? body.approvalId : "",
+                        ttlMinutes: body.ttlMinutes
+                    });
                     if (approval) consumeApproval(app, body.approvalId, command, actor, commands);
                 }
-                audit(app, "portal.command_" + actionMatch[2], actor, req, { portalId: command.portalId, commandId: command.id, type: command.type, approvalId: command.approvalId });
+                audit(app, "portal.command_" + actionMatch[2], actor, req, { portalId: command.portalId, commandId: command.id, type: command.type, approvalId: command.approvalId }, "success", "operations", config);
                 return json(res, 200, { ok: true, command });
             }
             return json(res, 404, { ok: false, error: "Not found." });
         } catch (error) {
-            if (!res.headersSent) return json(res, error.statusCode || 400, { ok: false, code: error.code || "REQUEST_REJECTED", error: error.message || "Request failed." });
+            const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+            const message = status >= 500 ? "Internal server error." : error.message || "Request failed.";
+            if (!res.headersSent) return json(res, status, { ok: false, code: error.code || (status >= 500 ? "INTERNAL_ERROR" : "REQUEST_REJECTED"), error: message });
             res.destroy(error);
         }
     });
@@ -221,4 +289,15 @@ if (require.main === module) {
     app.server.listen(config.port, config.bindHost, () => process.stdout.write("SIRK Central v14 listening on " + config.bindHost + ":" + config.port + "\n"));
 }
 
-module.exports = { createPortalOperationsRuntime, VERSION, HIGH_RISK, approvedOperation, approvalAccepted, consumeApproval, canRead, canWrite };
+module.exports = {
+    createPortalOperationsRuntime,
+    VERSION,
+    HIGH_RISK,
+    approvedOperation,
+    approvalAccepted,
+    consumeApproval,
+    canRead,
+    canWrite,
+    portalAllowed,
+    visiblePortalIds
+};
