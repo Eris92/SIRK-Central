@@ -44,6 +44,15 @@ function cleanPayload(value, depth = 0) {
     }
     return clean(value, 200);
 }
+function portalSet(filter) {
+    return Array.isArray(filter && filter.portalIds) ? new Set(filter.portalIds.map(value => String(value).toLowerCase())) : null;
+}
+function matches(command, filter, allowedPortals) {
+    return (!allowedPortals || allowedPortals.has(command.portalId))
+        && (!filter.portalId || command.portalId === filter.portalId)
+        && (!filter.state || command.state === filter.state)
+        && (!filter.type || command.type === filter.type);
+}
 
 function create(options) {
     options = options || {};
@@ -99,7 +108,10 @@ function create(options) {
         const timestamp = now();
         const ttlMinutes = numeric(input && input.ttlMinutes, 60, 5, 1440);
         const command = {
-            id: nextId(), portalId, type, state: "queued",
+            id: nextId(),
+            portalId,
+            type,
+            state: "queued",
             payload: cleanPayload(input && input.payload || {}),
             requestedBy: clean(actor && (actor.identityKey || actor.username), 180) || "system",
             approvalId: clean(input && input.approvalId, 80),
@@ -110,7 +122,8 @@ function create(options) {
             message: ""
         };
         state.commands[command.id] = command;
-        trim(); persist();
+        trim();
+        persist();
         return clone(command);
     }
     function deliver(portalId, limit = 20) {
@@ -158,7 +171,9 @@ function create(options) {
         expire();
         const command = state.commands[String(commandId || "")];
         if (!command) throw storeError("Command not found.", "COMMAND_NOT_FOUND", 404);
-        if (!["queued", "delivered"].includes(command.state)) throw storeError("Only a queued or delivered command can be cancelled.", "COMMAND_CANCEL_INVALID", 409);
+        if (command.state !== "queued") {
+            throw storeError("Only a command that has not been delivered can be cancelled safely.", "COMMAND_CANCEL_INVALID", 409);
+        }
         command.state = "cancelled";
         command.cancelledAtUtc = new Date(now()).toISOString();
         command.cancelledBy = clean(actor && (actor.identityKey || actor.username), 180) || "system";
@@ -179,26 +194,34 @@ function create(options) {
             ttlMinutes: numeric(input.ttlMinutes, 60, 5, 1440)
         }, actor);
     }
-    function list(filter) {
-        expire(); filter = filter || {};
+    function list(filter = {}) {
+        expire();
+        const allowedPortals = portalSet(filter);
         return Object.values(state.commands)
-            .filter(item => !filter.portalId || item.portalId === filter.portalId)
-            .filter(item => !filter.state || item.state === filter.state)
-            .filter(item => !filter.type || item.type === filter.type)
+            .filter(item => matches(item, filter, allowedPortals))
             .sort((a, b) => b.createdAtUtc.localeCompare(a.createdAtUtc))
             .slice(0, Math.round(numeric(filter.limit, 200, 1, 1000)))
             .map(clone);
     }
-    function summary() {
+    function summary(filter = {}) {
         expire();
-        const counts = {};
-        for (const stateName of STATES) counts[stateName] = 0;
-        for (const command of Object.values(state.commands)) counts[command.state] = (counts[command.state] || 0) + 1;
-        return { counts, active: counts.queued + counts.delivered + counts.running, total: Object.keys(state.commands).length };
+        const allowedPortals = portalSet(filter);
+        const counts = Object.fromEntries(STATES.map(stateName => [stateName, 0]));
+        let total = 0;
+        for (const command of Object.values(state.commands)) {
+            if (!matches(command, filter, allowedPortals)) continue;
+            counts[command.state] = (counts[command.state] || 0) + 1;
+            total += 1;
+        }
+        return { counts, active: counts.queued + counts.delivered + counts.running, total };
     }
-    function get(commandId) { expire(); const value = state.commands[String(commandId || "")]; return value ? clone(value) : null; }
+    function get(commandId) {
+        expire();
+        const value = state.commands[String(commandId || "")];
+        return value ? clone(value) : null;
+    }
 
     return { enqueue, deliver, acknowledge, cancel, retry, list, get, summary, expire, filePath, TYPES, STATES };
 }
 
-module.exports = { create, TYPES, STATES, cleanPayload };
+module.exports = { create, TYPES, STATES, cleanPayload, matches };
