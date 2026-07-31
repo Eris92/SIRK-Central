@@ -17,15 +17,17 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
+
       - run: npm ci
 
       - name: Validate shell scripts
@@ -45,33 +47,88 @@ jobs:
           const lock = require('./package-lock.json');
           if (pkg.version !== lock.version || pkg.version !== lock.packages[''].version) throw new Error('Package versions differ.');
           if (pkg.main !== 'src/server-v15.js' || !String(pkg.scripts.start).includes('server-v15.js')) throw new Error('Canonical runtime is not v15.');
+
           for (const file of [
-            'src/server-v15.js','src/ticket-projection-store.js','src/ticket-projection-store-v2.js',
-            'src/portal-command-store.js','src/request-rate-limiter.js','src/approval-store.js',
-            'updater/backup-archive.js','updater/restore-transaction.js',
-            'public/approval-center-ui.js','public/portal-operations-ui.js','public/portal-monitoring-ui.js','public/portal-monitoring-ui.css',
-            'public/tickets-ui.js','public/tickets-ui.css',
-            'test/api-authorization.test.js','test/request-rate-limiter.test.js','test/ticket-projection-store.test.js',
-            'test/approval-workflow.test.js','test/portal-command-store.test.js','test/updater-client-security.test.js',
-            'test/e2e/ui-buttons.spec.js','deploy/smoke-test.sh','deploy/acceptance-test.sh','deploy/configure-and-start.sh'
-          ]) if (!fs.existsSync(file)) throw new Error('Missing required file: ' + file);
-          const dockerfile = fs.readFileSync('Dockerfile.portal-runtime', 'utf8');
-          if (!dockerfile.includes('CMD ["node", "src/server-v15.js"]')) throw new Error('Runtime Dockerfile is not v15.');
+            'src/server-v15.js',
+            'src/ticket-projection-store.js',
+            'src/ticket-projection-store-v2.js',
+            'src/portal-command-store.js',
+            'src/request-rate-limiter.js',
+            'src/approval-store.js',
+            'src/central-operation-guard.js',
+            'src/sso-replay-store.js',
+            'src/sso-callback-handler.js',
+            'auth/hardened-server.js',
+            'updater/backup-archive.js',
+            'updater/restore-transaction.js',
+            'public/approval-center-ui.js',
+            'public/portal-operations-ui.js',
+            'public/portal-monitoring-ui.js',
+            'public/portal-monitoring-ui.css',
+            'public/tickets-ui.js',
+            'public/tickets-ui.css',
+            'test/api-authorization.test.js',
+            'test/central-http-matrix.test.js',
+            'test/central-operation-guard-http.test.js',
+            'test/request-rate-limiter.test.js',
+            'test/ticket-projection-store.test.js',
+            'test/approval-workflow.test.js',
+            'test/portal-command-store.test.js',
+            'test/backup-archive.test.js',
+            'test/restore-transaction.test.js',
+            'test/sso-replay-store.test.js',
+            'test/sso-frontchannel-logout.test.js',
+            'test/session-store-hardening.test.js',
+            'test/user-role-boundaries.test.js',
+            'test/e2e/ui-buttons.spec.js',
+            'deploy/smoke-test.sh',
+            'deploy/acceptance-test.sh',
+            'deploy/configure-and-start.sh'
+          ]) {
+            if (!fs.existsSync(file)) throw new Error('Missing required file: ' + file);
+          }
+
+          for (const dockerfileName of ['Dockerfile', 'Dockerfile.portal-runtime']) {
+            const dockerfile = fs.readFileSync(dockerfileName, 'utf8');
+            if (!dockerfile.includes('CMD ["node", "src/server-v15.js"]')) throw new Error(dockerfileName + ' is not v15.');
+          }
+
+          const compose = fs.readFileSync('docker-compose.yml', 'utf8');
+          if (!compose.includes('command: ["node", "auth/hardened-server.js"]')) throw new Error('Auth hardened runtime is not configured.');
+          if (!compose.includes('SIRK_CENTRAL_INTERNAL_ORIGIN: http://central:8080')) throw new Error('Auth front-channel logout relay is not wired to Central.');
+
           const restore = fs.readFileSync('deploy/restore.sh', 'utf8');
           if (!restore.includes('/readyz') || restore.includes('/healthz')) throw new Error('Restore readiness contract is invalid.');
+
           const bundle = fs.readFileSync('src/server-v7.js', 'utf8');
           for (const asset of ['approval-center-ui.js','portal-operations-ui.js','portal-monitoring-ui.js','portal-monitoring-ui.css','tickets-ui.js','tickets-ui.css']) {
             if (!bundle.includes(asset)) throw new Error('Production UI bundle misses ' + asset);
           }
+
           const runtime = fs.readFileSync('src/server-v15.js', 'utf8');
-          for (const route of ['/api/portal/v1/ticket-policy','/api/portal/v1/tickets/snapshot','/api/portal/v1/tickets/events','/api/tickets']) {
-            if (!runtime.includes(route)) throw new Error('Ticket API misses ' + route);
+          for (const expected of [
+            '/api/portal/v1/ticket-policy',
+            '/api/portal/v1/tickets/snapshot',
+            '/api/portal/v1/tickets/events',
+            '/api/tickets',
+            'centralOperationGuard.evaluate',
+            'ssoCallback.handler'
+          ]) {
+            if (!runtime.includes(expected)) throw new Error('Runtime misses contract: ' + expected);
           }
+
+          const auth = fs.readFileSync('auth/hardened-server.js', 'utf8');
+          for (const expected of ['__Host-sirk_auth_flow', 'relayFrontchannelLogout', 'SIRK-Logout']) {
+            if (!auth.includes(expected)) throw new Error('Auth hardening misses: ' + expected);
+          }
+
           const html = fs.readFileSync('public/index.html', 'utf8');
           const order = ['/csrf-bootstrap.js','/app.js','/passkey-ui.js','/workspace-routing.js'].map(item => html.indexOf(item));
           if (order.some(index => index < 0) || order.some((value, index) => index && value <= order[index - 1])) throw new Error('Browser bootstrap order is invalid.');
+
           const configure = fs.readFileSync('deploy/configure-and-start.sh', 'utf8');
           if (!configure.includes('docker-compose.portal-runtime.yml') || !configure.includes('backup-manager')) throw new Error('Installer does not start the canonical overlay stack.');
+
           const acceptance = fs.readFileSync('deploy/acceptance-test.sh', 'utf8');
           for (const expected of ['src/server-v15.js','backup-manager','Updater Docker socket access','Manual blockers remain']) {
             if (!acceptance.includes(expected)) throw new Error('Acceptance test misses: ' + expected);
@@ -110,6 +167,7 @@ jobs:
           if (compose.services['backup-manager'].ports && compose.services['backup-manager'].ports.length) throw new Error('Backup manager must not publish host ports.');
           if (!compose.services.updater.healthcheck) throw new Error('Updater healthcheck is missing.');
           if (!compose.services.central.build || !String(compose.services.central.build.dockerfile || '').includes('Dockerfile.portal-runtime')) throw new Error('Central overlay does not select Dockerfile.portal-runtime.');
+          if (compose.services.auth.environment.SIRK_CENTRAL_INTERNAL_ORIGIN !== 'http://central:8080') throw new Error('Auth internal Central origin is invalid.');
           NODE
 
       - name: Build application images
@@ -126,8 +184,8 @@ jobs:
           for image in "$central_image" "$auth_image" "$updater_image" "$backup_image"; do test -n "$image"; done
           test "$(docker image inspect "$central_image" --format '{{.Config.User}}')" = node
           test "$(docker image inspect "$auth_image" --format '{{.Config.User}}')" = node
-          test "$(docker image inspect "$updater_image" --format '{{.Config.User}}')" = node
-          test "$(docker image inspect "$backup_image" --format '{{.Config.User}}')" = node
+          test "$(docker image inspect "$updater_image" --format '{{.Config.User}}')" = root
+          test "$(docker image inspect "$backup_image" --format '{{.Config.User}}')" = root
           docker run --rm --entrypoint node "$central_image" --check src/server-v15.js
           docker run --rm --entrypoint node "$auth_image" --check auth/hardened-server.js
           docker run --rm --entrypoint node "$updater_image" --check /app/server.js
