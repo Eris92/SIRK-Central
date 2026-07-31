@@ -20,14 +20,14 @@ trap 'on_error "$LINENO" "$BASH_COMMAND"' ERR
 
 usage() {
   cat <<'EOF'
-SIRK Central v2 clean installer
+SIRK Central canonical v15 clean installer
 
 Usage:
   sudo bash install.sh [--force] [--no-ufw]
 
-This installer creates a clean deployment. It does not import sessions or data
-from an older test installation. With --force, the old installation directory
-is archived before the new clone is created.
+The installer creates a clean deployment using docker-compose.yml together with
+docker-compose.portal-runtime.yml. The privileged updater worker is not started;
+only the unprivileged updater gateway is part of the base stack.
 
 Optional environment variables:
   SIRK_REPO_URL                    Git repository URL
@@ -35,6 +35,7 @@ Optional environment variables:
   SIRK_INSTALL_DIR                 Installation path, default: /opt/sirk-central
   SIRK_WEBSITE_DOMAIN              Public website domain
   SIRK_CENTRAL_DOMAIN              SIRK Central domain
+  SIRK_AUTH_DOMAIN                 SIRK Auth domain
   SIRK_ACME_EMAIL                  Let's Encrypt contact address
   SIRK_ADMIN_USERNAME              Initial break-glass username
   SIRK_SESSION_IDLE_MINUTES        Idle timeout, 5-1440, default: 30
@@ -65,11 +66,11 @@ prompt_default() {
   read -r -p "${prompt} [${default_value}]: " entered
   printf -v "$variable_name" '%s' "${entered:-$default_value}"
 }
-
 valid_domain() { [[ "$1" =~ ^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,63}$ ]]; }
 
 prompt_default SIRK_WEBSITE_DOMAIN "Public website domain" "sirkportal.com"
 prompt_default SIRK_CENTRAL_DOMAIN "SIRK Central domain" "central.${SIRK_WEBSITE_DOMAIN}"
+prompt_default SIRK_AUTH_DOMAIN "SIRK Auth domain" "auth.${SIRK_WEBSITE_DOMAIN}"
 prompt_default SIRK_ACME_EMAIL "Let's Encrypt email" "admin@${SIRK_WEBSITE_DOMAIN}"
 prompt_default SIRK_ADMIN_USERNAME "Initial break-glass username" "admin"
 prompt_default SIRK_SESSION_IDLE_MINUTES "Session idle timeout in minutes" "30"
@@ -77,6 +78,7 @@ prompt_default SIRK_SESSION_ABSOLUTE_HOURS "Absolute session lifetime in hours" 
 
 valid_domain "$SIRK_WEBSITE_DOMAIN" || die "invalid website domain: $SIRK_WEBSITE_DOMAIN"
 valid_domain "$SIRK_CENTRAL_DOMAIN" || die "invalid Central domain: $SIRK_CENTRAL_DOMAIN"
+valid_domain "$SIRK_AUTH_DOMAIN" || die "invalid Auth domain: $SIRK_AUTH_DOMAIN"
 [[ "$SIRK_ACME_EMAIL" =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]] || die "invalid ACME email"
 [[ "$SIRK_ADMIN_USERNAME" =~ ^[A-Za-z0-9._-]{3,64}$ ]] || die "administrator username must use 3-64 letters, digits, dots, underscores or hyphens"
 [[ "$SIRK_SESSION_IDLE_MINUTES" =~ ^[0-9]+$ ]] || die "idle timeout must be numeric"
@@ -117,8 +119,12 @@ timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 if [[ -e "$INSTALL_DIR" ]]; then
   [[ "$FORCE_INSTALL" == "1" ]] || die "$INSTALL_DIR already exists; use --force or SIRK_FORCE=1 to archive it"
   backup_dir="${INSTALL_DIR}.backup-${timestamp}"
-  log "Stopping and archiving existing test installation to ${backup_dir}"
-  if [[ -f "${INSTALL_DIR}/compose.yaml" || -f "${INSTALL_DIR}/docker-compose.yml" ]]; then
+  log "Stopping and archiving existing installation to ${backup_dir}"
+  if [[ -f "${INSTALL_DIR}/docker-compose.yml" ]]; then
+    old_compose=(docker compose -f "${INSTALL_DIR}/docker-compose.yml")
+    [[ -f "${INSTALL_DIR}/docker-compose.portal-runtime.yml" ]] && old_compose+=(-f "${INSTALL_DIR}/docker-compose.portal-runtime.yml")
+    "${old_compose[@]}" --profile auth --profile maintenance down --remove-orphans || true
+  elif [[ -f "${INSTALL_DIR}/compose.yaml" ]]; then
     (cd "$INSTALL_DIR" && docker compose down --remove-orphans) || true
   fi
   mv "$INSTALL_DIR" "$backup_dir"
@@ -128,6 +134,9 @@ log "Cloning ${REPO_URL} (${REPO_REF}) into ${INSTALL_DIR}"
 install -d -m 0755 "$(dirname "$INSTALL_DIR")"
 git clone --branch "$REPO_REF" --single-branch "$REPO_URL" "$INSTALL_DIR"
 cd "$INSTALL_DIR"
+
+[[ -f docker-compose.yml && -f docker-compose.portal-runtime.yml ]] || die "canonical Compose files are missing"
+[[ -f Dockerfile.portal-runtime ]] || die "canonical runtime Dockerfile is missing"
 
 log "Building setup image"
 docker build --tag sirk-central:setup .
@@ -139,13 +148,14 @@ docker run --rm -it \
   --env SIRK_CONFIG_TARGET=/config \
   --env "SIRK_WEBSITE_DOMAIN=${SIRK_WEBSITE_DOMAIN}" \
   --env "SIRK_CENTRAL_DOMAIN=${SIRK_CENTRAL_DOMAIN}" \
+  --env "SIRK_AUTH_DOMAIN=${SIRK_AUTH_DOMAIN}" \
   --env "SIRK_ACME_EMAIL=${SIRK_ACME_EMAIL}" \
   --env "SIRK_ADMIN_USERNAME=${SIRK_ADMIN_USERNAME}" \
   --env "SIRK_SESSION_IDLE_MINUTES=${SIRK_SESSION_IDLE_MINUTES}" \
   --env "SIRK_SESSION_ABSOLUTE_HOURS=${SIRK_SESSION_ABSOLUTE_HOURS}" \
   sirk-central:setup node scripts/configure-production.js
 
-test -s .env || die "configuration file was not created"
+[[ -s .env ]] || die "configuration file was not created"
 chmod 0600 .env
 
 if [[ "$CONFIGURE_UFW" == "1" ]]; then
@@ -160,13 +170,22 @@ if [[ "$CONFIGURE_UFW" == "1" ]]; then
   ufw status | grep -q '^Status: active' || ufw --force enable
 fi
 
-log "Validating Docker Compose configuration"
-docker compose config >/dev/null
+COMPOSE=(docker compose -f docker-compose.yml -f docker-compose.portal-runtime.yml --profile auth)
+MAINTENANCE_COMPOSE=(docker compose -f docker-compose.yml -f docker-compose.portal-runtime.yml --profile auth --profile maintenance)
+SERVICES=(central auth updater-gateway backup-manager caddy)
 
-log "Starting SIRK Central v2"
-docker compose up -d --build --remove-orphans
+log "Validating canonical Docker Compose configuration"
+"${COMPOSE[@]}" config >/dev/null
+mapfile -t active_services < <("${COMPOSE[@]}" config --services)
+printf '%s\n' "${active_services[@]}" >/tmp/sirk-install-services.txt
+for service in "${SERVICES[@]}"; do grep -qx "$service" /tmp/sirk-install-services.txt || die "missing base service: $service"; done
+if grep -qx updater /tmp/sirk-install-services.txt; then die "privileged updater worker is active in the base profile"; fi
 
-log "Waiting for readiness"
+log "Starting canonical SIRK Central v15 stack"
+"${COMPOSE[@]}" up -d --build --remove-orphans "${SERVICES[@]}"
+[[ -z "$("${MAINTENANCE_COMPOSE[@]}" ps -q updater)" ]] || die "privileged updater worker started outside maintenance window"
+
+log "Waiting for public readiness"
 ready=0
 for _ in $(seq 1 90); do
   if curl -fsS --max-time 5 "https://${SIRK_CENTRAL_DOMAIN}/readyz" >/dev/null 2>&1; then
@@ -177,16 +196,20 @@ for _ in $(seq 1 90); do
 done
 
 if [[ "$ready" != "1" ]]; then
-  docker compose ps >&2 || true
-  docker compose logs --tail=200 central caddy >&2 || true
+  "${COMPOSE[@]}" ps >&2 || true
+  "${COMPOSE[@]}" logs --tail=200 central auth updater-gateway backup-manager caddy >&2 || true
   die "SIRK Central did not become ready"
 fi
 
-docker compose ps
-printf '\nSIRK Central v2 clean installation completed.\n\n'
+"${COMPOSE[@]}" ps "${SERVICES[@]}"
+printf '\nSIRK Central v15 clean installation completed.\n\n'
 printf 'Website:      https://%s\n' "$SIRK_WEBSITE_DOMAIN"
 printf 'Central:      https://%s\n' "$SIRK_CENTRAL_DOMAIN"
+printf 'Auth:         https://%s\n' "$SIRK_AUTH_DOMAIN"
 printf 'Readiness:    https://%s/readyz\n' "$SIRK_CENTRAL_DOMAIN"
 printf 'Username:     %s\n\n' "$SIRK_ADMIN_USERNAME"
 printf 'The one-time Access URL was displayed by the configuration step above.\n'
-printf 'No sessions or application data were imported from an older installation.\n'
+printf 'Updater gateway is active without Docker socket; the privileged worker is disabled.\n'
+printf 'Open maintenance only when required: sudo bash %s/deploy/maintenance-up.sh\n' "$INSTALL_DIR"
+printf 'Close it immediately afterward: sudo bash %s/deploy/maintenance-down.sh\n' "$INSTALL_DIR"
+printf 'Run acceptance before production use: sudo bash %s/deploy/acceptance-test.sh\n' "$INSTALL_DIR"
