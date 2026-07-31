@@ -35,7 +35,6 @@ test("stale runtime lock is quarantined and recovered", () => {
         staleMs: 30000,
         heartbeatMs: 5000
     });
-    clearInterval();
     timestamp += 30001;
 
     const recovered = runtimeLock.acquire({
@@ -47,6 +46,32 @@ test("stale runtime lock is quarantined and recovered", () => {
     });
     assert.equal(recovered.snapshot().instanceId, "recovered");
     assert.equal(stale.release(), false);
+    recovered.release();
+});
+
+test("fresh malformed lock remains fail-closed", () => {
+    const dataDir = dir();
+    const lockDir = path.join(dataDir, ".sirk-central-runtime.lock");
+    fs.mkdirSync(lockDir, { recursive: true });
+    fs.writeFileSync(path.join(lockDir, "owner.json"), "not-json");
+
+    assert.throws(
+        () => runtimeLock.acquire({ dataDir, instanceId: "replacement", staleMs: 30000 }),
+        error => error && error.code === "RUNTIME_STORAGE_LOCKED" && error.owner === null
+    );
+    fs.rmSync(lockDir, { recursive: true, force: true });
+});
+
+test("stale malformed lock is recovered using directory mtime", () => {
+    const dataDir = dir();
+    const lockDir = path.join(dataDir, ".sirk-central-runtime.lock");
+    fs.mkdirSync(lockDir, { recursive: true });
+    fs.writeFileSync(path.join(lockDir, "owner.json"), "not-json");
+    const old = new Date(Date.now() - 60000);
+    fs.utimesSync(lockDir, old, old);
+
+    const recovered = runtimeLock.acquire({ dataDir, instanceId: "replacement", staleMs: 30000 });
+    assert.equal(recovered.snapshot().instanceId, "replacement");
     recovered.release();
 });
 
