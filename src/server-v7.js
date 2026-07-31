@@ -21,42 +21,36 @@ function createRuntimeApp(config) {
     const app = createAttestationApp(config);
     const inner = app.server.listeners("request")[0];
     if (typeof inner !== "function") throw new Error("SIRK Central v6 request handler is unavailable.");
-    const bridgePath = path.join(__dirname, "..", "public", "passkey-attestation-bridge.js");
-    const uiPath = path.join(__dirname, "..", "public", "passkey-ui.js");
-    const uiPolishPath = path.join(__dirname, "..", "public", "passkey-ui-polish.js");
-    const passkeyCleanupPath = path.join(__dirname, "..", "public", "passkey-list-cleanup.js");
-    const operationsUiPath = path.join(__dirname, "..", "public", "operations-ui.js");
-    const operationsActionsPath = path.join(__dirname, "..", "public", "operations-actions.js");
-    const centralUxPath = path.join(__dirname, "..", "public", "central-ux.js");
-    const operationsBootstrapPath = path.join(__dirname, "..", "public", "operations-bootstrap.js");
-    const updateStatusResiliencePath = path.join(__dirname, "..", "public", "update-status-resilience.js");
-    const auditUiPath = path.join(__dirname, "..", "public", "audit-ui.js");
-    const dashboardCssLoaderPath = path.join(__dirname, "..", "public", "dashboard-css-loader.js");
-    const dashboardUiPath = path.join(__dirname, "..", "public", "dashboard-ui.js");
-    const adminToolsCssLoaderPath = path.join(__dirname, "..", "public", "admin-tools-css-loader.js");
-    const adminToolsUiPath = path.join(__dirname, "..", "public", "admin-tools-ui.js");
-    const dashboardStylePath = path.join(__dirname, "..", "public", "dashboard-ui.css");
-    const adminToolsStylePath = path.join(__dirname, "..", "public", "admin-tools-ui.css");
+    const publicPath = name => path.join(__dirname, "..", "public", name);
+    const bridgePath = publicPath("passkey-attestation-bridge.js");
+    const scriptPaths = [
+        publicPath("passkey-ui.js"),
+        publicPath("passkey-ui-polish.js"),
+        publicPath("passkey-list-cleanup.js"),
+        publicPath("operations-ui.js"),
+        publicPath("operations-actions.js"),
+        publicPath("central-ux.js"),
+        publicPath("operations-bootstrap.js"),
+        publicPath("update-status-resilience.js"),
+        publicPath("audit-ui.js"),
+        publicPath("dashboard-css-loader.js"),
+        publicPath("dashboard-ui.js"),
+        publicPath("admin-tools-css-loader.js"),
+        publicPath("admin-tools-ui.js"),
+        publicPath("security-sessions-ui.js")
+    ];
+    const dashboardStylePath = publicPath("dashboard-ui.css");
+    const adminToolsStylePath = publicPath("admin-tools-ui.css");
     const server = http.createServer((req, res) => {
         try {
             const url = new URL(req.url, "http://central.local");
             if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/passkey-ui.js") {
-                const data = Buffer.concat([
-                    fs.readFileSync(bridgePath), Buffer.from("\n"),
-                    fs.readFileSync(uiPath), Buffer.from("\n"),
-                    fs.readFileSync(uiPolishPath), Buffer.from("\n"),
-                    fs.readFileSync(passkeyCleanupPath), Buffer.from("\n"),
-                    fs.readFileSync(operationsUiPath), Buffer.from("\n"),
-                    fs.readFileSync(operationsActionsPath), Buffer.from("\n"),
-                    fs.readFileSync(centralUxPath), Buffer.from("\n"),
-                    fs.readFileSync(operationsBootstrapPath), Buffer.from("\n"),
-                    fs.readFileSync(updateStatusResiliencePath), Buffer.from("\n"),
-                    fs.readFileSync(auditUiPath), Buffer.from("\n"),
-                    fs.readFileSync(dashboardCssLoaderPath), Buffer.from("\n"),
-                    fs.readFileSync(dashboardUiPath), Buffer.from("\n"),
-                    fs.readFileSync(adminToolsCssLoaderPath), Buffer.from("\n"),
-                    fs.readFileSync(adminToolsUiPath)
-                ]);
+                const chunks = [];
+                for (const filePath of [bridgePath, ...scriptPaths]) {
+                    if (chunks.length) chunks.push(Buffer.from("\n"));
+                    chunks.push(fs.readFileSync(filePath));
+                }
+                const data = Buffer.concat(chunks);
                 res.writeHead(200, Object.assign(securityHeaders(), { "Content-Type": "text/javascript; charset=utf-8", "Content-Length": String(data.length), "Cache-Control": "no-store" }));
                 return res.end(req.method === "HEAD" ? undefined : data);
             }
@@ -70,7 +64,7 @@ function createRuntimeApp(config) {
                     passkeyStore: Boolean(app.passkeys && app.passkeys.filePath),
                     webauthnChallenges: Boolean(app.webauthnChallenges && app.webauthnChallenges.filePath),
                     loginTransactions: Boolean(app.loginTransactions && app.loginTransactions.filePath),
-                    passkeyUi: [uiPath, uiPolishPath, passkeyCleanupPath, operationsUiPath, operationsActionsPath, centralUxPath, operationsBootstrapPath, updateStatusResiliencePath, auditUiPath, dashboardCssLoaderPath, dashboardUiPath, adminToolsCssLoaderPath, adminToolsUiPath].every(fs.existsSync),
+                    passkeyUi: [bridgePath, ...scriptPaths].every(fs.existsSync),
                     dashboardStyle: fs.existsSync(dashboardStylePath),
                     adminToolsStyle: fs.existsSync(adminToolsStylePath),
                     attestationBridge: fs.existsSync(bridgePath),
