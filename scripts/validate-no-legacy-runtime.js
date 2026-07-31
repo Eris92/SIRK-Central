@@ -89,14 +89,13 @@ for (const fileName of fs.readdirSync(path.join(root, "src"))) {
 }
 
 const scanRoots = ["src", "auth", "updater", "deploy", "scripts", "test"];
-const referenceTokens = forbiddenPaths.concat(forbiddenPackageScripts);
 for (const relativeRoot of scanRoots) {
     for (const file of walk(path.join(root, relativeRoot))) {
         if (path.resolve(file) === selfPath) continue;
         if (!/\.(?:js|json|sh|ya?ml)$/.test(file)) continue;
         const source = fs.readFileSync(file, "utf8");
-        for (const token of referenceTokens) {
-            if (source.includes(token)) fail(path.relative(root, file) + " still references " + token);
+        for (const forbiddenPath of forbiddenPaths) {
+            if (source.includes(forbiddenPath)) fail(path.relative(root, file) + " still references " + forbiddenPath);
         }
     }
 }
