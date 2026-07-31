@@ -8,23 +8,16 @@ Dokument opisuje kontrakt przygotowany po stronie Central. Repozytorium SIRK Por
 Authorization: SIRK-Portal <base64url(portalId:token)>
 ```
 
-Token musi być traktowany jako sekret. Nie wolno umieszczać go w URL, logach ani telemetryce.
+Token jest sekretem. Nie wolno umieszczać go w URL, logach ani telemetryce.
 
-## Konfiguracja
-
-```text
-GET /api/portal/v1/config
-```
-
-Zwraca między innymi czas serwera oraz parametry heartbeat.
-
-## Heartbeat
+## Konfiguracja i heartbeat
 
 ```text
+GET  /api/portal/v1/config
 POST /api/portal/v1/heartbeat
 ```
 
-Nagłówki:
+Heartbeat wymaga:
 
 ```text
 X-SIRK-Timestamp: <unix milliseconds>
@@ -32,41 +25,11 @@ X-SIRK-Nonce: <unikalny nonce>
 X-SIRK-Signature: <HMAC podpis body i metadanych>
 ```
 
-Central kontroluje:
-
-- poświadczenie Portalu,
-- podpis,
-- clock skew,
-- nonce/replay,
-- limit body,
-- strukturę telemetryki.
-
-Przykładowe obszary danych:
-
-```json
-{
-  "portalVersion": "1.0.0",
-  "commit": "abcdef1",
-  "health": "ok",
-  "agentCount": 40,
-  "onlineAgents": 37,
-  "resources": {
-    "cpuPercent": 12,
-    "memoryMb": 640
-  },
-  "backup": {
-    "status": "ok",
-    "lastSuccessAtUtc": "2026-07-31T10:00:00Z"
-  },
-  "update": {
-    "availableVersion": null
-  }
-}
-```
+Central sprawdza credential, HMAC, clock skew, nonce replay, body limit, schema telemetryki i rate limits.
 
 ## Polecenia
 
-### Pobranie
+### Polling
 
 ```text
 GET /api/portal/v1/commands?limit=20
@@ -83,13 +46,25 @@ sync
 diagnostics
 ```
 
-### Potwierdzenie
+Stany:
+
+```text
+queued
+delivered
+running
+cancel_requested
+completed
+failed
+cancelled
+expired
+```
+
+### Standardowy ACK
 
 ```text
 POST /api/portal/v1/commands/:commandId/ack
+Content-Type: application/json
 ```
-
-Przykład:
 
 ```json
 {
@@ -111,33 +86,70 @@ Końcowy ACK:
 }
 ```
 
-Dozwolone stany kolejki:
+Terminalne ACK są idempotentne wyłącznie dla tego samego stanu. Próba zmiany `completed` na `failed` zwraca `409 COMMAND_ACK_CONFLICT`.
+
+## Cooperative cancellation
+
+Anulowanie queued command jest natychmiastowe. Dla `delivered` lub `running` Central nie udaje, że proces został zatrzymany. Komenda przechodzi w:
 
 ```text
-queued
-delivered
-running
-completed
-failed
-cancelled
-expired
+cancel_requested
 ```
+
+Portal dostaje ją ponownie podczas pollingu:
+
+```json
+{
+  "id": "cmd-...",
+  "state": "cancel_requested",
+  "control": "cancel",
+  "cancelRequestedAtUtc": "2026-07-31T14:00:00.000Z"
+}
+```
+
+Wymagany algorytm Portalu:
+
+1. odszukaj lokalną operację po `commandId`;
+2. rozpocznij bezpieczne zatrzymanie;
+3. jeżeli zatrzymanie trwa, możesz wysłać ACK `running` z aktualnym postępem — Central utrzyma `cancel_requested`;
+4. po faktycznym zatrzymaniu wyślij ACK `cancelled`;
+5. jeżeli operacja zakończyła się przed anulowaniem, wyślij rzeczywisty `completed` lub `failed`.
+
+ACK anulowania:
+
+```json
+{
+  "state": "cancelled",
+  "progress": 55,
+  "message": "Stopped safely",
+  "result": {
+    "rollback": "completed"
+  }
+}
+```
+
+Portal nie może wysłać `cancelled`, jeżeli Central nie ustawił `cancel_requested`; taka próba zwraca `409 COMMAND_CANCEL_NOT_REQUESTED`.
+
+Control message ma lease i jest ponawiany, dlatego implementacja Portalu musi być idempotentna.
 
 ## Zgłoszenia
 
-### Pobranie polityki
+### Polityka
 
 ```text
 GET /api/portal/v1/ticket-policy
 ```
 
-Polityka określa między innymi:
+Domyślna polityka jest fail-closed:
 
-- czy publikować zgłoszenia,
-- które statusy i priorytety,
-- czy przesyłać opis,
-- czy przesyłać dane zgłaszającego,
-- czy Central może koordynować status i przypisanie.
+```json
+{
+  "mode": "none",
+  "includeDescription": false,
+  "includeRequester": false,
+  "allowCentralChanges": false
+}
+```
 
 ### Snapshot
 
@@ -145,40 +157,92 @@ Polityka określa między innymi:
 POST /api/portal/v1/tickets/snapshot
 ```
 
-Snapshot powinien być ograniczony do zgłoszeń zgodnych z polityką Portalu.
+Snapshot może zawierać maksymalnie 5000 zgłoszeń. `generatedAtUtc` i `cursor` są używane do ochrony kolejności i replay.
 
-Przykład:
+### Pojedynczy event
+
+```text
+POST /api/portal/v1/tickets/events
+```
+
+Body jest bezpośrednio eventem:
 
 ```json
 {
-  "generatedAtUtc": "2026-07-31T12:00:00Z",
-  "tickets": [
+  "eventId": "evt-1001",
+  "type": "ticket.status_changed",
+  "occurredAtUtc": "2026-07-31T12:10:00Z",
+  "ticket": {
+    "ticketId": "tck-1001",
+    "status": "waiting_for_user",
+    "updatedAtUtc": "2026-07-31T12:10:00Z"
+  }
+}
+```
+
+Odpowiedzi pojedynczego eventu zachowują właściwy status HTTP:
+
+```text
+202 accepted/duplicate/stale/skipped
+400 invalid event/schema
+409 replay conflict lub ordering conflict
+429 rate limit
+5xx transient server error
+```
+
+Przykład konfliktu replay:
+
+```json
+{
+  "ok": false,
+  "code": "TICKET_EVENT_REPLAY_CONFLICT",
+  "error": "Event ID was already used with a different payload.",
+  "retryable": false
+}
+```
+
+### Batch eventów
+
+Jawny batch wymaga tablicy:
+
+```json
+{
+  "events": [
     {
-      "ticketId": "tck-1001",
-      "externalSystem": "jira",
-      "externalId": "IT-4182",
-      "title": "Brak dostępu do ERP",
-      "status": "in_progress",
-      "priority": "high",
-      "updatedAtUtc": "2026-07-31T11:55:00Z",
-      "sla": {
-        "breached": false
-      },
-      "sync": {
-        "state": "synchronized"
+      "eventId": "evt-1001",
+      "type": "ticket.created",
+      "occurredAtUtc": "2026-07-31T12:10:00Z",
+      "ticket": {
+        "ticketId": "tck-1001",
+        "title": "Brak dostępu",
+        "status": "new",
+        "priority": "high",
+        "createdAtUtc": "2026-07-31T12:10:00Z",
+        "updatedAtUtc": "2026-07-31T12:10:00Z"
       }
     }
   ]
 }
 ```
 
-### Zdarzenia
+`events` o innym typie niż tablica zwraca `400 TICKET_EVENTS_INVALID`. Maksymalny batch to 500 elementów.
 
-```text
-POST /api/portal/v1/tickets/events
+HTTP `207 Multi-Status` jest używany wyłącznie, gdy jawny batch zawiera co najmniej jeden odrzucony element. Każdy wynik ma:
+
+```json
+{
+  "index": 1,
+  "rejected": true,
+  "status": 409,
+  "retryable": false,
+  "code": "TICKET_EVENT_REPLAY_CONFLICT",
+  "error": "Event ID was already used with a different payload."
+}
 ```
 
-Typy:
+Portal powinien ponawiać wyłącznie elementy z `retryable: true`. Nie wolno ponawiać całego batcha bez sprawdzenia wyników, ponieważ poprawne elementy mogły zostać zapisane.
+
+## Typy eventów
 
 ```text
 ticket.created
@@ -191,26 +255,7 @@ ticket.closed
 ticket.sync_failed
 ```
 
-Przykład:
-
-```json
-{
-  "events": [
-    {
-      "eventId": "evt-1001",
-      "type": "ticket.status_changed",
-      "occurredAtUtc": "2026-07-31T12:10:00Z",
-      "ticket": {
-        "ticketId": "tck-1001",
-        "status": "waiting_for_user",
-        "updatedAtUtc": "2026-07-31T12:10:00Z"
-      }
-    }
-  ]
-}
-```
-
-## Znormalizowane statusy zgłoszeń
+## Statusy i priorytety
 
 ```text
 new
@@ -223,8 +268,6 @@ closed
 cancelled
 ```
 
-## Znormalizowane priorytety
-
 ```text
 low
 normal
@@ -234,34 +277,22 @@ critical
 
 ## Synchronizacja i konflikty
 
-Portal pozostaje właścicielem integracji z systemem zewnętrznym. Central przechowuje projekcję. Portal powinien przekazywać:
+Portal pozostaje właścicielem connectora do systemu zewnętrznego. Central przechowuje projekcję. Klucz projekcji to `portalId + ticketId`.
 
-- `updatedAtUtc`,
-- stan synchronizacji,
-- identyfikator zewnętrzny,
-- informację o konflikcie lub błędzie.
+- starsza aktualizacja nie nadpisuje nowszej;
+- ten sam timestamp z innym payloadem jest konfliktem;
+- ten sam `eventId` lub `cursor` z innym payloadem jest konfliktem replay;
+- Tenant/Customer/Site pochodzą z assignment Central, nie z body Portalu;
+- Portal nie może modyfikować metadanych `central`.
 
-Starsza aktualizacja nie może nadpisywać nowszej projekcji.
+## Wymagania przyszłej implementacji Portalu
 
-## Symulator
-
-```bash
-export SIRK_SIMULATOR_ORIGIN='https://central.sirkportal.com'
-export SIRK_SIMULATOR_PORTAL_ID='<PORTAL_ID>'
-export SIRK_SIMULATOR_PORTAL_TOKEN='<PORTAL_TOKEN>'
-
-node scripts/portal-simulator.js
-```
-
-Symulator sprawdza heartbeat, konfigurację, politykę zgłoszeń, snapshot, zdarzenia, pobranie komend i ACK.
-
-## Wymagania bezpieczeństwa dla przyszłej implementacji Portalu
-
-- token przechowywany w chronionym magazynie,
-- podpis heartbeat z ochroną replay,
-- idempotentne ACK,
-- trwała lokalna kolejka przy braku Central,
-- ograniczenie rozmiaru snapshotów,
-- brak sekretów connectorów w danych przesyłanych do Central,
-- redakcja opisów i danych osobowych zgodnie z polityką,
-- wersjonowanie protokołu i obsługa `minimumSupportedVersion`.
+- chroniony storage tokenu;
+- podpis heartbeat i ochrona replay;
+- trwała lokalna kolejka commands i ACK;
+- idempotentne wykonanie `commandId`;
+- cooperative cancellation zgodne z powyższym kontraktem;
+- per-item retry dla HTTP 207;
+- brak sekretów connectorów w danych przesyłanych do Central;
+- redakcja PII zgodnie z ticket policy;
+- wersjonowanie protokołu i `minimumSupportedVersion`.
