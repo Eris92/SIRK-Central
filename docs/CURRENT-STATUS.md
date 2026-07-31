@@ -10,151 +10,131 @@ Branch: feat/central-production-hardening
 PR: #45
 PR state: draft
 Runtime: src/server-v15.js
-Version: 1.0.0-rc.21
+Version: 1.0.0-rc.24
 ```
 
-Nie modyfikować repozytorium SIRK Portal. Integracja jest testowana wyłącznie przez `scripts/portal-simulator.js` i runtime SIRK Central.
+Nie modyfikować repozytorium SIRK Portal. Integracja pozostaje testowana przez runtime Central i `scripts/portal-simulator.js`.
 
-## Wykonane w ostatnim audycie
+## Zamknięte problemy techniczne
 
-### Runtime i CI
+### Storage i concurrency
 
-- package, lock, Docker runtime, CI i acceptance wskazują `src/server-v15.js`;
-- usunięto zduplikowany workflow `central-ci.yml`, który wcześniej driftował do v2;
-- `security-audit.yml` został przełączony z v14 na v15;
-- CI sprawdza pełny Compose, obrazy, users, overlay i nowe testy;
-- package version została ujednolicona na `1.0.0-rc.21`.
-
-### RBAC
-
-- centralne `identityActive()` blokuje `pending`, `conflict` i `disabled`;
-- BreakGlass jest ważny wyłącznie jako lokalna built-in identity;
-- pełna macierz obejmuje:
-  - brak sesji,
-  - Pending,
-  - OperatorL1,
-  - SupportL2,
-  - EngineerL3,
-  - Auditor,
-  - Admin,
-  - SecAdmin,
-  - BreakGlass;
-- Admin i SecAdmin mają rozdzielone obowiązki;
-- SecAdmin nie wykonuje update, restore, Portal commands ani ticket changes.
-
-### Approval Center
-
-- naprawiono high-risk approval zużywany przed operacją;
-- approval jest exact-scope i single-use;
-- retry wymaga nowej zgody;
-- legacy `/api/approvals` jest read-only/deprecated, mutations zwracają `410`;
-- Auditor i nieaktywne identities nie mogą składać wniosków;
-- self-approval pozostaje zabronione.
+- aktywny runtime posiada fail-fast single-writer lease w `/var/lib/sirk-central/.sirk-central-runtime.lock`;
+- drugi proces korzystający z tego samego storage kończy start kodem `RUNTIME_STORAGE_LOCKED`;
+- lease ma heartbeat, owner identity i kontrolowane odzyskanie stale lock;
+- uszkodzony świeży lock pozostaje fail-closed;
+- uszkodzony stary lock jest odzyskiwany na podstawie `mtime`;
+- graceful SIGTERM/SIGINT zwalnia lock po zamknięciu serwera;
+- aktywne-active na file-backed JSON jest świadomie blokowane zamiast dopuszczać silent corruption.
 
 ### Portal commands
 
-- delivery lease i kontrolowana redelivery;
-- ACK ordering i terminal-state conflict;
-- payload/result secret redaction;
-- prototype pollution keys są odrzucane;
-- limit aktywnych poleceń per Portal;
-- list/create/cancel/retry respektują access scope;
-- cancel tylko przed delivery;
-- poll i ACK mają rate limiting.
-
-### Heartbeat i telemetry
-
-- rate limiting per IP i Portal;
-- podpis HMAC, timestamp i nonce replay protection;
-- aktywne nonce nie są wyrzucane przy capacity;
-- telemetry URL dopuszcza tylko HTTPS;
-- wartości agents/RAM/CPU są walidowane i ograniczane;
-- telemetry UI używa aktualnego flat schema;
-- Central pokazuje wyłącznie Portale dostępne przez `accessStore`.
+- cooperative cancellation jest częścią protokołu;
+- queued command jest anulowany natychmiast;
+- delivered/running przechodzi w `cancel_requested`;
+- Portal dostaje control message `control: cancel` z lease i redelivery;
+- Portal potwierdza `cancelled` dopiero po faktycznym zatrzymaniu operacji;
+- Portal nie może samodzielnie ustawić `cancelled` bez żądania Central;
+- `completed` lub `failed` może bezpiecznie wygrać race z anulowaniem;
+- terminal ACK pozostaje idempotentny.
 
 ### Tickets
 
-- hardened projection store schema v2;
-- fail-closed default policy `none`;
-- Tenant/Customer/Site pochodzą wyłącznie z Portal assignment;
-- Portal nie może modyfikować `central`;
-- snapshot/event ID są związane z SHA-256 payloadu;
-- conflict przy tym samym timestampie i innej treści;
-- full snapshot usuwa nieobecne projekcje zamiast fabrykować `closed`;
-- policy tightening usuwa lub redaguje już zapisane dane;
-- capacity jest fail-closed, bez silent eviction;
-- Central read/write respektuje Portal access scope;
-- event batches zwracają partial result przez HTTP 207;
-- Portal ingestion ma rate limits.
+- pojedynczy błędny event zwraca właściwe `400`, `409`, `429` lub `5xx`;
+- HTTP `207` jest używany wyłącznie dla jawnego batcha z częściowym wynikiem;
+- każdy element batcha zawiera `status`, `code` i `retryable`;
+- replay ID z innym payloadem zwraca `409 TICKET_EVENT_REPLAY_CONFLICT`;
+- `events` musi być tablicą, gdy pole jest obecne;
+- fail-closed policy, canonical Portal assignment, redakcja i capacity protection pozostają aktywne.
 
-### Auth i updater
+### Updater i Docker socket
 
-- Entra broker ma rate limits, bounded pending OAuth state i timeouty;
-- upstream Entra errors nie są zwracane klientowi;
-- updater origin i path mają dokładną allowlistę;
-- instalator uruchamia pełny stack z overlayem v15;
-- updater jest jawną privileged trust boundary z Docker socket;
-- updater nie publikuje portu hosta i działa wyłącznie w sieci internal;
-- acceptance sprawdza Docker socket, healthchecks, users i ports.
+- updater ma profil Compose `maintenance`;
+- normalny runtime nie tworzy kontenera updatera i nie montuje Docker socket;
+- updater ma `restart: "no"`;
+- `deploy/maintenance-up.sh` otwiera jawne maintenance window;
+- `deploy/maintenance-down.sh` zatrzymuje i usuwa kontener po operacji;
+- `backup-manager` działa stale bez Docker socket;
+- acceptance test sprawdza zamknięte okno, otwarcie, dostęp socket/API i ponowne zamknięcie.
 
-### Testy przygotowane
+### Testy
 
-- unit/regression stores;
-- rzeczywiste HTTP tests runtime v15;
-- pełna macierz RBAC;
-- Portal heartbeat replay/rate limit;
-- ticket snapshot/event replay;
-- approval exact-scope/single-use;
-- command poll/ACK ordering;
-- updater path/SSRF;
-- Playwright z console/page/HTTP error detection;
-- Compose build/runtime/user validation;
-- CodeQL, npm audit i secret scan.
+Dodano automatyczne testy:
 
-## Rzeczywisty stan wykonania
+```text
+test/runtime-lock.test.js
+test/portal-command-cancellation.test.js
+test/ticket-event-http-semantics.test.js
+test/protocol-concurrency.test.js
+```
 
-Nie uzyskano jeszcze wyniku testów dla aktualnego HEAD:
+Concurrency suite obejmuje równoległe heartbeat, ticket events, command polling i terminal ACK.
 
-- GitHub connector nie zwraca status checks ani workflow runs;
-- lokalny runner nie może rozwiązać `github.com` i nie klonuje repozytorium;
-- nie ma podstaw do oznaczenia testów jako zielone.
+### Synchronizacja z main
 
-## Otwarte zadania automatyczne
+Na branch przywrócono pliki compatibility dodane później na `main`:
 
-1. Uzyskać rzeczywisty wynik wszystkich GitHub Actions.
-2. Naprawić ewentualne syntax/unit/HTTP/Docker/Playwright failures.
-3. Uruchomić pełny `deploy/acceptance-test.sh` na VPS.
-4. Uruchomić Portal simulator z testowym Portal tokenem i jawnie włączoną ticket policy.
-5. Wykonać load/concurrency tests dla heartbeat, commands i ticket ingestion.
-6. Zweryfikować partial-event batch retry po stronie przyszłego Portalu.
+```text
+src/persistent-session-map.js
+src/preload-hardening.js
+src/server-hardened.js
+src/server-production.js
+test/persistent-session-map.test.js
+```
 
-## Blockery manualne
+Kanoniczny runtime pozostaje `src/server-v15.js`; powyższe pliki są zachowane wyłącznie dla zgodności i bezpiecznego merge.
 
-1. Backup/restore drill z kontrolą integralności danych.
-2. Update/rollback drill, w tym awaria po checkout/build/start.
-3. YubiKey w Edge i Chrome.
-4. Entra: pending, approved, rejected, conflict i disabled.
-5. Caddy/TLS/CSP/security headers z zewnętrznego klienta.
-6. PL/EN.
-7. Mobile, tablet i desktop visual review.
-8. Test odzyskiwania przez recovery codes.
-9. Weryfikacja storage permissions i retencji backupów na docelowym VPS.
+## Stan wykonania
+
+Nie ma jeszcze potwierdzonego zielonego wyniku dla aktualnego HEAD:
+
+- connector GitHub nie zwraca PR workflow runs;
+- PR nadal raportuje `mergeable: false`;
+- lokalny runner nie rozwiązuje `github.com`, więc nie może wykonać `git fetch/merge` ani pełnego `npm ci`;
+- branch i `main` modyfikują `package.json`, dlatego wymagany jest standardowy merge commit rozwiązujący ten jeden wspólny plik.
+
+## Pozostały blocker Git
+
+Na runnerze z działającym DNS wykonać:
+
+```bash
+cd /opt/sirk-central
+git fetch origin
+git checkout feat/central-production-hardening
+git merge --no-ff origin/main
+```
+
+Przy konflikcie `package.json`/`package-lock.json` zachować wersję brancha:
+
+```bash
+git checkout --ours package.json package-lock.json
+git add package.json package-lock.json
+git commit
+npm ci
+npm test
+```
+
+Nie używać `git reset --hard origin/main`, rebase ani force push bez kopii brancha.
+
+## Blockery środowiskowe
+
+Tych punktów nie da się wiarygodnie zamknąć statycznie ani bez dostępu do środowiska/hardware:
+
+1. pełny `deploy/acceptance-test.sh` na nieprodukcyjnym VPS;
+2. destructive backup/restore drill z rollbackiem;
+3. update/rollback drill, w tym awaria build/start i updater self-recreate;
+4. realny YubiKey w Edge i Chrome;
+5. Entra pending/approved/rejected/conflict/disabled oraz front-channel logout;
+6. external Caddy/TLS/CSP/security headers;
+7. Portal simulator z prawdziwym testowym tokenem;
+8. PL/EN i responsive visual review.
 
 ## Residual risks
 
-- updater z Docker socket jest root-equivalent względem hosta;
-- file-backed stores nie obsługują multi-instance HA;
-- cooperative cancellation po delivery nie jest jeszcze częścią protokołu;
-- pełne HA wymaga bazy transakcyjnej i distributed locks;
-- Portal-side connector do Jira/ServiceDesk/GLPI nie jest jeszcze implementowany w SIRK Portal.
+- file-backed stores są bezpieczne tylko jako single-writer; produkcyjne active-active HA wymaga transakcyjnej bazy danych i distributed locking;
+- updater podczas otwartego maintenance window nadal jest root-equivalent przez Docker socket, lecz nie działa stale;
+- Portal-side connector Jira/ServiceDesk/GLPI nie jest implementowany w repo SIRK Central i wymaga późniejszej pracy w SIRK Portal.
 
 ## Kryterium gotowości
 
-PR pozostaje draftem do czasu, gdy:
-
-- wszystkie workflow są zielone na bieżącym HEAD;
-- VPS acceptance przejdzie bez wyjątków;
-- High/Critical nie pozostają otwarte;
-- backup/restore i update/rollback zostaną wykonane;
-- YubiKey i Entra zostaną sprawdzone;
-- wyniki, logi i ograniczenia zostaną zapisane w dokumentacji.
+PR pozostaje draftem do czasu, gdy merge conflict zostanie rozwiązany, wszystkie workflow będą zielone na bieżącym HEAD, acceptance przejdzie bez wyjątków oraz zostaną wykonane testy VPS, YubiKey, Entra, backup/restore i update/rollback.
