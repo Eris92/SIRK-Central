@@ -39,6 +39,14 @@
         for (const panel of panels.querySelectorAll(":scope > .settings-tab-panel")) panel.hidden = panel.id !== selected;
     }
 
+    function keepOperationsTabsVisible(updatesTab, backupTab) {
+        for (const tab of [updatesTab, backupTab]) {
+            if (tab.hasAttribute("hidden")) tab.removeAttribute("hidden");
+            if (tab.style.display === "none") tab.style.removeProperty("display");
+            tab.setAttribute("aria-hidden", "false");
+        }
+    }
+
     function mount() {
         const settings = document.getElementById("settingsView");
         if (!settings) return;
@@ -66,6 +74,8 @@
             nav.append(backupTab);
         }
 
+        keepOperationsTabsVisible(updatesTab, backupTab);
+
         let updatesPanel = document.getElementById("settingsTabUpdates");
         if (!updatesPanel) {
             updatesPanel = document.createElement("section");
@@ -87,6 +97,7 @@
         }
 
         function labels() {
+            keepOperationsTabsVisible(updatesTab, backupTab);
             updatesTab.textContent = text("Aktualizacje", "Updates");
             backupTab.textContent = "Backup";
             document.getElementById("updatesTitle").textContent = text("Aktualizacja SIRK Central", "SIRK Central update");
@@ -112,6 +123,11 @@
 
         labels();
         new MutationObserver(labels).observe(document.documentElement, { attributes: true, attributeFilter: ["lang"] });
+        new MutationObserver(function () { keepOperationsTabsVisible(updatesTab, backupTab); }).observe(nav, {
+            subtree: true,
+            attributes: true,
+            attributeFilter: ["hidden", "style", "aria-hidden"]
+        });
     }
 
     if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", mount, { once: true });
