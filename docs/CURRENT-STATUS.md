@@ -2,114 +2,159 @@
 
 Data aktualizacji: 2026-07-31
 
-## Repozytorium i gałąź
+## Repozytorium
 
 ```text
 Repo: Eris92/SIRK-Central
 Branch: feat/central-production-hardening
 PR: #45
+PR state: draft
 Runtime: src/server-v15.js
+Version: 1.0.0-rc.21
 ```
 
-PR pozostaje draftem. Nie wolno scalać ani wdrażać produkcyjnie przed zakończeniem CI i testów akceptacyjnych.
+Nie modyfikować repozytorium SIRK Portal. Integracja jest testowana wyłącznie przez `scripts/portal-simulator.js` i runtime SIRK Central.
 
-## Zakres ukończony po stronie Central
+## Wykonane w ostatnim audycie
 
-### Bezpieczeństwo i tożsamość
+### Runtime i CI
 
-- trwałe hashowane sesje,
-- idle i absolute timeout,
-- CSRF dla operacji modyfikujących,
-- Entra ID,
-- lokalny Break-Glass,
-- Access URL,
-- passkeys/WebAuthn,
-- recovery codes,
-- ciągłość MFA,
-- aktywne sesje i revoke,
-- audyt bezpieczeństwa.
+- package, lock, Docker runtime, CI i acceptance wskazują `src/server-v15.js`;
+- usunięto zduplikowany workflow `central-ci.yml`, który wcześniej driftował do v2;
+- `security-audit.yml` został przełączony z v14 na v15;
+- CI sprawdza pełny Compose, obrazy, users, overlay i nowe testy;
+- package version została ujednolicona na `1.0.0-rc.21`.
 
-### Operacje administracyjne
+### RBAC
 
-- dashboard operacyjny,
-- alerty bazowe,
-- backup i retencja,
-- restore,
-- update i rollback,
-- eksport audytu,
-- historia operacji.
+- centralne `identityActive()` blokuje `pending`, `conflict` i `disabled`;
+- BreakGlass jest ważny wyłącznie jako lokalna built-in identity;
+- pełna macierz obejmuje:
+  - brak sesji,
+  - Pending,
+  - OperatorL1,
+  - SupportL2,
+  - EngineerL3,
+  - Auditor,
+  - Admin,
+  - SecAdmin,
+  - BreakGlass;
+- Admin i SecAdmin mają rozdzielone obowiązki;
+- SecAdmin nie wykonuje update, restore, Portal commands ani ticket changes.
 
-### Centrum Akceptacji
+### Approval Center
 
-- wnioski, decyzje, komentarze,
-- jedna lub dwie akceptacje,
-- zakaz self-approval,
-- wygaśnięcie i anulowanie,
-- wykonanie zatwierdzonej zmiany roli,
-- jednorazowe zgody wysokiego ryzyka.
+- naprawiono high-risk approval zużywany przed operacją;
+- approval jest exact-scope i single-use;
+- retry wymaga nowej zgody;
+- legacy `/api/approvals` jest read-only/deprecated, mutations zwracają `410`;
+- Auditor i nieaktywne identities nie mogą składać wniosków;
+- self-approval pozostaje zabronione.
 
-### Portale
+### Portal commands
 
-- rejestr Portali,
-- uwierzytelnienie Portalu,
-- podpisany heartbeat,
-- telemetryka,
-- stan online/offline/never,
-- kolejka poleceń,
-- potwierdzanie, postęp, wynik, timeout, retry i cancel,
-- UI monitoringu i operacji.
+- delivery lease i kontrolowana redelivery;
+- ACK ordering i terminal-state conflict;
+- payload/result secret redaction;
+- prototype pollution keys są odrzucane;
+- limit aktywnych poleceń per Portal;
+- list/create/cancel/retry respektują access scope;
+- cancel tylko przed delivery;
+- poll i ACK mają rate limiting.
 
-### Zgłoszenia
+### Heartbeat i telemetry
 
-- wspólny model niezależny od systemu zewnętrznego,
-- snapshot i event ingestion,
-- trwała projekcja,
-- statusy, priorytety, SLA i synchronizacja,
-- polityki publikacji per Portal,
-- zagregowany workspace Central,
-- zmiany statusu/przypisania, gdy polityka zezwala,
-- symulator protokołu.
+- rate limiting per IP i Portal;
+- podpis HMAC, timestamp i nonce replay protection;
+- aktywne nonce nie są wyrzucane przy capacity;
+- telemetry URL dopuszcza tylko HTTPS;
+- wartości agents/RAM/CPU są walidowane i ograniczane;
+- telemetry UI używa aktualnego flat schema;
+- Central pokazuje wyłącznie Portale dostępne przez `accessStore`.
+
+### Tickets
+
+- hardened projection store schema v2;
+- fail-closed default policy `none`;
+- Tenant/Customer/Site pochodzą wyłącznie z Portal assignment;
+- Portal nie może modyfikować `central`;
+- snapshot/event ID są związane z SHA-256 payloadu;
+- conflict przy tym samym timestampie i innej treści;
+- full snapshot usuwa nieobecne projekcje zamiast fabrykować `closed`;
+- policy tightening usuwa lub redaguje już zapisane dane;
+- capacity jest fail-closed, bez silent eviction;
+- Central read/write respektuje Portal access scope;
+- event batches zwracają partial result przez HTTP 207;
+- Portal ingestion ma rate limits.
+
+### Auth i updater
+
+- Entra broker ma rate limits, bounded pending OAuth state i timeouty;
+- upstream Entra errors nie są zwracane klientowi;
+- updater origin i path mają dokładną allowlistę;
+- instalator uruchamia pełny stack z overlayem v15;
+- updater jest jawną privileged trust boundary z Docker socket;
+- updater nie publikuje portu hosta i działa wyłącznie w sieci internal;
+- acceptance sprawdza Docker socket, healthchecks, users i ports.
 
 ### Testy przygotowane
 
-- testy jednostkowe i regresyjne,
-- testy HTTP,
-- testy store dla akceptacji, komend i zgłoszeń,
-- Playwright Chromium,
-- kontrola błędów konsoli, page errors i HTTP 5xx,
-- CI build obrazów,
-- Compose validation,
-- CodeQL,
-- npm audit,
-- skan sekretów,
-- skrypt pełnej akceptacji na VPS.
+- unit/regression stores;
+- rzeczywiste HTTP tests runtime v15;
+- pełna macierz RBAC;
+- Portal heartbeat replay/rate limit;
+- ticket snapshot/event replay;
+- approval exact-scope/single-use;
+- command poll/ACK ordering;
+- updater path/SSRF;
+- Playwright z console/page/HTTP error detection;
+- Compose build/runtime/user validation;
+- CodeQL, npm audit i secret scan.
 
-## Niezmienna zasada
+## Rzeczywisty stan wykonania
 
-Nie modyfikować repozytorium SIRK Portal. Znajdują się tam niezakończone i niewypchnięte zmiany z wcześniejszej pracy. Wszystkie mechanizmy są obecnie przygotowywane po stronie Central i testowane symulatorem.
+Nie uzyskano jeszcze wyniku testów dla aktualnego HEAD:
 
-## Co nadal wymaga wykonania
+- GitHub connector nie zwraca status checks ani workflow runs;
+- lokalny runner nie może rozwiązać `github.com` i nie klonuje repozytorium;
+- nie ma podstaw do oznaczenia testów jako zielone.
 
-1. Uruchomić i przeanalizować wszystkie GitHub Actions dla aktualnego HEAD.
-2. Naprawić każdy błąd CI, testów, Docker build i Playwright.
-3. Uruchomić `deploy/acceptance-test.sh` na nieprodukcyjnym VPS.
-4. Wykonać prawdziwy backup/restore drill.
-5. Wykonać update/rollback drill.
-6. Przetestować YubiKey w Edge i Chrome.
-7. Przetestować Entra ID i role pending/approved/rejected.
-8. Uruchomić symulator Portalu z prawdziwym tokenem testowego Portalu.
-9. Przejść macierz RBAC dla wszystkich endpointów.
-10. Przejrzeć UI PL/EN, mobile, tablet i desktop.
-11. Zweryfikować Caddy, TLS, CSP i nagłówki z zewnętrznego klienta.
-12. Zaktualizować raport audytu po uzyskaniu rzeczywistych wyników.
+## Otwarte zadania automatyczne
 
-## Kryterium gotowości do merge
+1. Uzyskać rzeczywisty wynik wszystkich GitHub Actions.
+2. Naprawić ewentualne syntax/unit/HTTP/Docker/Playwright failures.
+3. Uruchomić pełny `deploy/acceptance-test.sh` na VPS.
+4. Uruchomić Portal simulator z testowym Portal tokenem i jawnie włączoną ticket policy.
+5. Wykonać load/concurrency tests dla heartbeat, commands i ticket ingestion.
+6. Zweryfikować partial-event batch retry po stronie przyszłego Portalu.
 
-PR można oznaczyć jako ready dopiero, gdy:
+## Blockery manualne
 
-- wszystkie wymagane workflow są zielone,
-- acceptance test przechodzi,
-- nie ma otwartych podatności High/Critical,
-- backup/restore i update/rollback zostały wykonane,
-- Break-Glass oraz YubiKey zostały sprawdzone,
-- wyniki testów i ograniczenia są opisane w dokumentacji.
+1. Backup/restore drill z kontrolą integralności danych.
+2. Update/rollback drill, w tym awaria po checkout/build/start.
+3. YubiKey w Edge i Chrome.
+4. Entra: pending, approved, rejected, conflict i disabled.
+5. Caddy/TLS/CSP/security headers z zewnętrznego klienta.
+6. PL/EN.
+7. Mobile, tablet i desktop visual review.
+8. Test odzyskiwania przez recovery codes.
+9. Weryfikacja storage permissions i retencji backupów na docelowym VPS.
+
+## Residual risks
+
+- updater z Docker socket jest root-equivalent względem hosta;
+- file-backed stores nie obsługują multi-instance HA;
+- cooperative cancellation po delivery nie jest jeszcze częścią protokołu;
+- pełne HA wymaga bazy transakcyjnej i distributed locks;
+- Portal-side connector do Jira/ServiceDesk/GLPI nie jest jeszcze implementowany w SIRK Portal.
+
+## Kryterium gotowości
+
+PR pozostaje draftem do czasu, gdy:
+
+- wszystkie workflow są zielone na bieżącym HEAD;
+- VPS acceptance przejdzie bez wyjątków;
+- High/Critical nie pozostają otwarte;
+- backup/restore i update/rollback zostaną wykonane;
+- YubiKey i Entra zostaną sprawdzone;
+- wyniki, logi i ograniczenia zostaną zapisane w dokumentacji.
