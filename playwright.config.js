@@ -4,10 +4,11 @@ const { defineConfig, devices } = require("@playwright/test");
 
 module.exports = defineConfig({
     testDir: "./test/e2e",
-    timeout: 90_000,
+    globalTimeout: 180_000,
+    timeout: 60_000,
     expect: { timeout: 8_000 },
     fullyParallel: false,
-    retries: process.env.CI ? 1 : 0,
+    retries: 0,
     workers: 1,
     reporter: [["line"], ["html", { open: "never" }]],
     use: {
