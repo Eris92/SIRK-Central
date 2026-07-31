@@ -2,6 +2,7 @@
 
 const crypto = require("node:crypto");
 const http = require("node:http");
+const { sign } = require("../src/sso-ticket");
 
 const FLOW_COOKIE = "__Host-sirk_auth_flow";
 
@@ -72,9 +73,9 @@ function patchResponse(res, mode) {
     };
 }
 
-function rejectFlow(res) {
-    const data = Buffer.from("authentication request failed\n", "utf8");
-    res.writeHead(400, {
+function plain(res, status, body) {
+    const data = Buffer.from(String(body), "utf8");
+    res.writeHead(status, {
         "Content-Type": "text/plain; charset=utf-8",
         "Content-Length": String(data.length),
         "Cache-Control": "no-store",
@@ -82,10 +83,62 @@ function rejectFlow(res) {
         "X-Content-Type-Options": "nosniff",
         "X-Frame-Options": "DENY",
         "Referrer-Policy": "no-referrer",
-        "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
-        "Set-Cookie": clearFlowCookie()
+        "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
     });
     res.end(data);
+}
+
+function rejectFlow(res) {
+    plain(res, 400, "authentication request failed\n");
+}
+
+function internalCentralOrigin(config) {
+    const value = String(config.env.SIRK_CENTRAL_INTERNAL_ORIGIN || config.centralOrigin || "").replace(/\/+$/, "");
+    let url;
+    try { url = new URL(value); }
+    catch (_) { throw new Error("SIRK_CENTRAL_INTERNAL_ORIGIN is invalid."); }
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.pathname !== "/" || url.search || url.hash) {
+        throw new Error("SIRK_CENTRAL_INTERNAL_ORIGIN must be an HTTP(S) origin without credentials, path, query or fragment.");
+    }
+    return url.origin;
+}
+
+function normalizeFrontchannel(url) {
+    const sid = String(url.searchParams.get("sid") || "");
+    const issuer = String(url.searchParams.get("iss") || "");
+    if (!/^[A-Za-z0-9._~-]{8,512}$/.test(sid)) throw new Error("Front-channel logout sid is invalid.");
+    let parsed;
+    try { parsed = new URL(issuer); }
+    catch (_) { throw new Error("Front-channel logout issuer is invalid."); }
+    if (parsed.protocol !== "https:" || parsed.hostname !== "login.microsoftonline.com"
+        || !/^\/[0-9a-f-]{36}\/v2\.0\/?$/i.test(parsed.pathname)
+        || parsed.username || parsed.password || parsed.search || parsed.hash) {
+        throw new Error("Front-channel logout issuer is invalid.");
+    }
+    return { sid, issuer: parsed.origin + parsed.pathname.replace(/\/$/, "") };
+}
+
+async function relayFrontchannelLogout(config, url) {
+    const input = normalizeFrontchannel(url);
+    const now = Math.floor(Date.now() / 1000);
+    const ticket = sign({
+        v: 1,
+        typ: "logout",
+        iss: config.authOrigin,
+        aud: config.centralOrigin,
+        iat: now,
+        exp: now + 60,
+        jti: crypto.randomBytes(24).toString("base64url"),
+        sid: input.sid,
+        providerIssuer: input.issuer
+    }, config.sharedSecret);
+    const response = await fetch(internalCentralOrigin(config) + "/auth/sso/frontchannel-logout", {
+        method: "POST",
+        headers: { Authorization: "SIRK-Logout " + ticket, "Content-Length": "0" },
+        signal: AbortSignal.timeout(10000)
+    });
+    if (!response.ok) throw new Error("Central rejected front-channel logout with HTTP " + response.status + ".");
+    return response.json().catch(() => ({ ok: true }));
 }
 
 function createHardenedAuthServer(config, createInner) {
@@ -94,19 +147,28 @@ function createHardenedAuthServer(config, createInner) {
     const innerHandler = inner.listeners("request")[0];
     if (typeof innerHandler !== "function") throw new Error("SIRK Auth request handler is unavailable.");
 
-    const server = http.createServer((req, res) => {
-        const url = new URL(req.url, "http://auth.local");
-        if (req.method === "GET" && url.pathname === "/login") {
-            patchResponse(res, "login");
+    const server = http.createServer(async (req, res) => {
+        try {
+            const url = new URL(req.url, "http://auth.local");
+            if (req.method === "GET" && url.pathname === "/login") {
+                patchResponse(res, "login");
+                return innerHandler(req, res);
+            }
+            if (req.method === "GET" && url.pathname === "/auth/entra/callback") {
+                const state = String(url.searchParams.get("state") || "");
+                if (!flowMatches(req, state)) return rejectFlow(res);
+                patchResponse(res, "callback");
+                return innerHandler(req, res);
+            }
+            if ((req.method === "GET" || req.method === "POST") && url.pathname === "/auth/entra/frontchannel-logout") {
+                const result = await relayFrontchannelLogout(config, url);
+                return plain(res, 200, "signed out; revoked sessions=" + Number(result.revokedSessions || 0) + "\n");
+            }
             return innerHandler(req, res);
+        } catch (error) {
+            process.stderr.write("[auth-hardened] " + String(error.stack || error) + "\n");
+            return plain(res, 503, "authentication service error\n");
         }
-        if (req.method === "GET" && url.pathname === "/auth/entra/callback") {
-            const state = String(url.searchParams.get("state") || "");
-            if (!flowMatches(req, state)) return rejectFlow(res);
-            patchResponse(res, "callback");
-            return innerHandler(req, res);
-        }
-        return innerHandler(req, res);
     });
     server.requestTimeout = inner.requestTimeout;
     server.headersTimeout = inner.headersTimeout;
@@ -128,5 +190,8 @@ module.exports = {
     flowCookie,
     clearFlowCookie,
     flowMatches,
+    internalCentralOrigin,
+    normalizeFrontchannel,
+    relayFrontchannelLogout,
     createHardenedAuthServer
 };
