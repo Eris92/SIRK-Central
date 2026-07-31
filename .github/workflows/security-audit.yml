@@ -18,18 +18,37 @@ concurrency:
 jobs:
   dependency-and-source-audit:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
+
       - run: npm ci
+
+      - name: Shell JavaScript and Python syntax
+        run: |
+          find deploy -maxdepth 1 -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
+          npm run check:syntax
+
       - name: Production dependency audit
         run: npm audit --omit=dev --audit-level=high
+
+      - name: Generate production SBOM
+        run: npm sbom --omit=dev --sbom-format spdx > sirk-central-sbom.spdx.json
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sirk-central-sbom
+          path: sirk-central-sbom.spdx.json
+          retention-days: 30
+
       - name: Reject committed private keys and obvious secrets
         shell: bash
         run: |
@@ -41,14 +60,21 @@ jobs:
             echo 'Potential committed secret detected.' >&2
             exit 1
           fi
+
       - name: Security-sensitive pattern review
         shell: bash
         run: |
           set -euo pipefail
-          ! git grep -nE '\beval\s*\(|new Function\s*\(|child_process\.(exec|execSync)\s*\(' -- 'src/**' 'updater/**' 'public/**' || {
+          ! git grep -nE '\beval\s*\(|new Function\s*\(|child_process\.(exec|execSync)\s*\(|\bshell[[:space:]]*:[[:space:]]*true' -- \
+            'src/**' 'auth/**' 'updater/**' 'public/**' || {
             echo 'Dynamic execution requires explicit review.' >&2
             exit 1
           }
+          ! git grep -nE 'curl[^|]*\|[[:space:]]*(sudo[[:space:]]+)?(bash|sh)' -- 'deploy/**' 'README.md' 'docs/**' || {
+            echo 'Piped remote shell execution is forbidden.' >&2
+            exit 1
+          }
+
       - name: Validate runtime and security contracts
         shell: bash
         run: |
@@ -60,8 +86,10 @@ jobs:
           if (pkg.version !== lock.version || pkg.version !== lock.packages[''].version) throw new Error('Package versions differ.');
           if (pkg.main !== 'src/server-v15.js') throw new Error('Canonical runtime is not v15.');
           if (!String(pkg.scripts.start).includes('server-v15.js')) throw new Error('Start script is not v15.');
-          const dockerfile = fs.readFileSync('Dockerfile.portal-runtime', 'utf8');
-          if (!dockerfile.includes('CMD ["node", "src/server-v15.js"]')) throw new Error('Portal runtime image is not v15.');
+          for (const dockerfileName of ['Dockerfile','Dockerfile.portal-runtime']) {
+            const dockerfile = fs.readFileSync(dockerfileName, 'utf8');
+            if (!dockerfile.includes('CMD ["node", "src/server-v15.js"]')) throw new Error(dockerfileName + ' is not v15.');
+          }
           for (const file of [
             'src/server-v15.js',
             'src/ticket-projection-store.js',
@@ -69,8 +97,16 @@ jobs:
             'src/portal-command-store.js',
             'src/request-rate-limiter.js',
             'src/approval-store.js',
+            'src/central-operation-guard.js',
+            'src/sso-replay-store.js',
+            'src/sso-callback-handler.js',
+            'auth/hardened-server.js',
             'updater/backup-archive.js',
             'updater/restore-transaction.js',
+            'scripts/validate-backup-archive.py',
+            'deploy/backup.sh',
+            'deploy/restore.sh',
+            'deploy/web-update.sh',
             'public/approval-center-ui.js',
             'public/portal-operations-ui.js',
             'public/portal-monitoring-ui.js',
@@ -78,15 +114,43 @@ jobs:
             'public/tickets-ui.js',
             'public/tickets-ui.css',
             'test/api-authorization.test.js',
+            'test/central-http-matrix.test.js',
+            'test/central-operation-guard-http.test.js',
             'test/request-rate-limiter.test.js',
             'test/ticket-projection-store.test.js',
-            'test/updater-client-security.test.js'
+            'test/updater-client-security.test.js',
+            'test/sso-frontchannel-logout.test.js',
+            'test/sso-replay-store.test.js',
+            'test/session-store-hardening.test.js',
+            'test/backup-archive.test.js',
+            'test/restore-transaction.test.js',
+            'test/user-role-boundaries.test.js'
           ]) if (!fs.existsSync(file)) throw new Error('Missing required file: ' + file);
+
+          const runtime = fs.readFileSync('src/server-v15.js', 'utf8');
+          for (const expected of ['centralOperationGuard.evaluate','ssoCallback.handler','/api/portal/v1/tickets/snapshot','/api/portal/v1/tickets/events']) {
+            if (!runtime.includes(expected)) throw new Error('Runtime hardening contract missing: ' + expected);
+          }
+          const auth = fs.readFileSync('auth/hardened-server.js', 'utf8');
+          for (const expected of ['__Host-sirk_auth_flow','relayFrontchannelLogout','SIRK-Logout']) {
+            if (!auth.includes(expected)) throw new Error('Auth hardening contract missing: ' + expected);
+          }
+          const compose = fs.readFileSync('docker-compose.yml', 'utf8');
+          if (!compose.includes('SIRK_CENTRAL_INTERNAL_ORIGIN: http://central:8080')) throw new Error('Internal logout relay is not configured.');
+          if (!compose.includes('SIRK_UPDATER_ALLOWED_HOSTS: updater')) throw new Error('Updater SSRF allowlist is not configured.');
+          const caddy = fs.readFileSync('deploy/Caddyfile', 'utf8');
+          if (!caddy.includes('respond @internalSsoLogout 404')) throw new Error('Internal logout endpoint is not hidden publicly.');
+          const backup = fs.readFileSync('deploy/backup.sh', 'utf8');
+          if (!backup.includes('SIRK_BACKUP_REQUIRE_ENCRYPTION:-auto')) throw new Error('Production offline backup encryption is not fail-closed.');
+          const restore = fs.readFileSync('deploy/restore.sh', 'utf8');
+          if (!restore.includes('validate-backup-archive.py') || !restore.includes('rollback')) throw new Error('Offline restore is not transactional and validated.');
+          const update = fs.readFileSync('deploy/web-update.sh', 'utf8');
+          if (!update.includes('central-data.tar.gz') || !update.includes('schedule_updater_recreate')) throw new Error('Web update lacks data rollback or updater self-recreate.');
           NODE
 
   codeql:
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: github/codeql-action/init@v3
