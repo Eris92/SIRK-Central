@@ -55,10 +55,9 @@ services:
   updater-gateway:
     build:
       context: .
-      dockerfile: updater/Dockerfile
+      dockerfile: updater/Dockerfile.gateway
     restart: unless-stopped
     user: node
-    command: ["node", "/app/gateway-server.js"]
     env_file: .env
     environment:
       SIRK_UPDATER_GATEWAY_BIND_HOST: 0.0.0.0
