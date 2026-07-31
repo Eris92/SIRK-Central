@@ -1,166 +1,140 @@
 # SIRK Central
 
-SIRK Central jest centralnym panelem zarządzania wieloma instalacjami **SIRK Portal**. Odpowiada za tożsamość, RBAC, Tenant → Customer → Site, rejestrację i monitoring Portali, Centrum Akceptacji, audyt, backup/update/restore, operacje zdalne oraz zagregowany widok zgłoszeń.
+SIRK Central jest centralnym, wielotenantowym panelem zarządzania instalacjami SIRK Portal.
 
-> Status: aktywna gałąź rozwojowa `feat/central-production-hardening`, PR #45 pozostaje draftem do czasu zaliczenia CI i testów akceptacyjnych na VPS.
+```text
+Branch: feat/central-production-hardening
+PR: #45 (draft)
+Runtime: src/server-v15.js
+Version: 1.0.0-rc.21
+```
+
+PR nie może zostać oznaczony jako ready ani scalony przed zielonym CI, VPS acceptance, backup/restore, update/rollback, YubiKey i Entra tests.
 
 ## Dokumentacja
 
-- [Bieżący stan i lista otwartych prac](docs/CURRENT-STATUS.md)
+- [Bieżący stan](docs/CURRENT-STATUS.md)
 - [Architektura](docs/ARCHITECTURE.md)
 - [Protokół Central ↔ Portal](docs/PORTAL-PROTOCOL.md)
-- [Testy i wieczorna procedura akceptacyjna](docs/TESTING.md)
+- [Testy](docs/TESTING.md)
 - [Audyt bezpieczeństwa](docs/SECURITY-AUDIT-2026-07-31.md)
-- [Polecenie wznowienia w nowym czacie](docs/RESUME-PROMPT.md)
+- [Polecenie wznowienia](docs/RESUME-PROMPT.md)
 
-## Aktywny runtime
-
-Kanonicznym punktem wejścia jest:
+## Kanoniczny runtime
 
 ```text
 src/server-v15.js
 ```
 
-Ten sam runtime jest wskazany przez:
+Ten sam runtime jest wymagany przez:
 
-- `package.json` (`main`, `start`, `dev`),
-- `Dockerfile.portal-runtime`,
-- GitHub Actions CI,
+- `package.json` i `package-lock.json`;
+- `Dockerfile.portal-runtime`;
+- `.github/workflows/ci.yml`;
+- `.github/workflows/security-audit.yml`;
 - `deploy/acceptance-test.sh`.
 
-Runtime v15 rozszerza wcześniejsze warstwy:
+Warstwy wcześniejszych runtime są częścią kompozycji. Nie przełączaj kontenera na niższy numer.
 
-```text
-v15  projekcja i koordynacja zgłoszeń
-v14  kolejka operacji Portali
-v13  Centrum Akceptacji i wykonanie zatwierdzonych zmian
-v12  aktywne sesje i ich unieważnianie
-v11  backup policy, eksport audytu i informacje systemowe
-v10  heartbeat i telemetryka Portali
-v9   restore
-v8   MFA, passkeys, update i backup
-```
+## Funkcje
 
-Pliki wcześniejszych runtime pozostają częścią łańcucha kompozycji. Nie należy samodzielnie przełączać kontenera na niższy numer runtime.
+### Identity i bezpieczeństwo
+
+- Entra ID Authorization Code + PKCE;
+- lokalny BreakGlass;
+- ukryty Access URL;
+- passkeys/WebAuthn i YubiKey;
+- recovery codes;
+- trwałe sesje z idle i absolute timeout;
+- globalny browser CSRF;
+- active session management;
+- tamper-evident audit;
+- centralne blokowanie `pending`, `conflict` i `disabled`;
+- rozdzielenie Admin/SecAdmin.
+
+### Approval Center
+
+- jedna lub dwie niezależne decyzje;
+- self-approval protection;
+- exact-scope i single-use;
+- trwały execution state;
+- high-risk approval zużywany dopiero przy utworzeniu command;
+- retry wysokiego ryzyka wymaga nowej zgody;
+- legacy approval mutations są wyłączone.
+
+### Portal monitoring i operations
+
+- signed heartbeat HMAC;
+- nonce replay protection;
+- rate limiting per IP i Portal;
+- telemetry health/version/CPU/RAM/agents/backup/update;
+- access-scope filtering;
+- trwała kolejka commands;
+- delivery lease, ACK, progress, result i timeout;
+- secret redaction;
+- bezpieczny cancel wyłącznie przed delivery;
+- exact-scope approvals dla `update`, `restart`, `diagnostics`.
+
+### Tickets
+
+Central przechowuje projekcje niezależne od providera. Jira, ServiceDesk, GLPI i inne systemy będą integrowane lokalnie przez SIRK Portal.
+
+- snapshot i event ingestion;
+- schema v2;
+- assignment-bound Tenant/Customer/Site;
+- fail-closed default policy `none`;
+- description/requester publikowane wyłącznie po jawnej zgodzie;
+- replay digest i version conflict detection;
+- full snapshot usuwa nieobecne projekcje;
+- policy tightening usuwa lub redaguje zapisane dane;
+- fail-closed capacity;
+- Central-side coordination tylko przy `allowCentralChanges=true`;
+- access-scope filtering.
+
+## RBAC
+
+- `BreakGlass` — lokalny awaryjny globalny dostęp;
+- `SecAdmin` — bezpieczeństwo, sessions, privileged approvals i audit;
+- `Admin` — organization, Portals, updater operations i operational execution;
+- `Auditor` — read-only;
+- `OperatorL1`, `SupportL2`, `EngineerL3` — role operacyjne.
+
+Role określają typ operacji, a `accessStore` określa widoczne Portale.
 
 ## Usługi
 
-Projekt działa przez Docker Compose:
-
-- `central` — aplikacja, API i UI,
-- `auth` — opcjonalny broker Entra ID,
-- `updater` — backup, update, rollback i operacje administracyjne,
-- `caddy` — TLS, reverse proxy i publiczne strony statyczne.
+Projekt używa dwóch plików Compose:
 
 ```text
-Internet
-   |
-   v
-Caddy :80/:443
-   |-- sirkportal.com          -> strona produktu
-   |-- central.sirkportal.com  -> SIRK Central
-   |-- auth.sirkportal.com     -> SIRK Auth (opcjonalnie)
-   |-- sir-k.pl                -> strona firmowa
-   `-- www.sir-k.pl            -> redirect
+docker-compose.yml
+docker-compose.portal-runtime.yml
 ```
 
-Port aplikacji `8080` nie jest publikowany bezpośrednio do Internetu.
+Pełny stack:
 
-## Główne funkcje
+- `central` — canonical v15 API/UI, `USER node`;
+- `auth` — Entra broker, `USER node`;
+- `backup-manager` — scheduler/read-only data access, `USER node`;
+- `updater` — privileged deployment/restore boundary;
+- `caddy` — TLS i reverse proxy.
 
-### Tożsamość i bezpieczeństwo
+### Updater trust boundary
 
-- Entra ID jako podstawowy login,
-- lokalne konto Break-Glass,
-- ukryty Access URL,
-- passkeys/WebAuthn ES256 P-256,
-- YubiKey jako preferowany authenticator,
-- jednorazowe recovery codes przechowywane jako hashe scrypt,
-- trwałe sesje z idle i absolute timeout,
-- globalny CSRF,
-- aktywne sesje i ich unieważnianie,
-- tamper-evident audit trail,
-- rozdzielenie ról `Admin` i `SecAdmin`.
+Updater ma Docker socket i RW do repo/danych, więc jest root-equivalent względem hosta. Compose jawnie ustawia:
 
-### Centrum Akceptacji
-
-Obsługiwane typy:
-
-```text
-role.assignment
-tenant.activation
-portal.enrollment
-operation.high-risk
-credential.use
+```yaml
+user: "0:0"
 ```
 
-Właściwości:
+Kompensacje:
 
-- jedna lub dwie niezależne akceptacje,
-- zakaz zatwierdzania własnego wniosku,
-- komentarze, odrzucenie, anulowanie i wygaśnięcie,
-- trwały wynik wykonania,
-- jednorazowe użycie zgody wysokiego ryzyka,
-- dokładne powiązanie zgody z Portalem i typem operacji.
-
-### Monitoring i operacje Portali
-
-Central przechowuje heartbeat i telemetrykę:
-
-- online/offline/never,
-- wersja i commit,
-- health,
-- CPU i RAM,
-- liczba Agentów,
-- backup,
-- dostępna aktualizacja.
-
-Kolejka operacji obsługuje:
-
-```text
-backup
-update
-restart
-reconnect
-sync
-diagnostics
-```
-
-Stany:
-
-```text
-queued
-delivered
-running
-completed
-failed
-cancelled
-expired
-```
-
-Operacje `update`, `restart` i `diagnostics` wymagają zatwierdzonego `operation.high-risk`.
-
-### Zgłoszenia
-
-Central nie integruje się bezpośrednio z Jira, ServiceDesk, GLPI ani innymi systemami. Każdy Portal będzie lokalnym punktem integracji, a Central korzysta ze wspólnego modelu projekcji zgłoszeń.
-
-Central obsługuje:
-
-- snapshoty i zdarzenia z Portali,
-- znormalizowane statusy i priorytety,
-- SLA,
-- stan synchronizacji,
-- filtrowanie wielu Tenantów i Portali,
-- polityki publikacji per Portal,
-- koordynację statusu i przypisania, jeśli Portal na to zezwala.
-
-## Role
-
-- `BreakGlass` — awaryjne zarządzanie i pierwsza konfiguracja,
-- `SecAdmin` — bezpieczeństwo i akceptacje uprzywilejowane,
-- `Admin` — administracja organizacją i Portalami,
-- `Auditor` — odczyt i audyt,
-- `OperatorL1`, `SupportL2`, `EngineerL3` — role operacyjne.
+- internal network;
+- brak host port;
+- bearer token;
+- exact host/path allowlist;
+- checksums/manifest/tar validation;
+- transactional restore i rollback;
+- `no-new-privileges` i `cap_drop: ALL`.
 
 ## Publiczne adresy
 
@@ -168,8 +142,10 @@ Central obsługuje:
 |---|---|
 | `https://sirkportal.com` | strona produktu |
 | `https://central.sirkportal.com` | SIRK Central |
-| `https://auth.sirkportal.com` | opcjonalny broker Entra ID |
+| `https://auth.sirkportal.com` | broker Entra |
 | `https://sir-k.pl` | strona firmowa |
+
+Porty Central/Auth/Updater/Backup Manager nie są publikowane bezpośrednio do Internetu.
 
 ## Instalacja
 
@@ -190,23 +166,42 @@ sudo bash /tmp/install-sirk-central.sh --force
 
 Nie używaj `curl | sudo bash`.
 
-## Najważniejsze zmienne `.env`
+Instalator uruchamia pełny stack przez bazowy Compose i overlay v15.
 
-| Zmienna | Znaczenie |
-|---|---|
-| `NODE_ENV=production` | tryb produkcyjny |
-| `SIRK_CENTRAL_DOMAIN` | domena Central |
-| `SIRK_AUTH_ORIGIN` | adres Auth lub puste |
-| `SIRK_SSO_SHARED_SECRET` | sekret Central↔Auth |
-| `SIRK_ADMIN_USERNAME` | konto Break-Glass |
-| `SIRK_ADMIN_PASSWORD_HASH` | hash hasła Break-Glass |
-| `SIRK_ACCESS_KEY_HASH` | hash Access URL |
-| `SIRK_SESSION_IDLE_MINUTES` | idle timeout |
-| `SIRK_SESSION_ABSOLUTE_HOURS` | maksymalny czas sesji |
-| `SIRK_TRUST_PROXY=true` | użycie nagłówków Caddy |
-| `SIRK_UPDATER_TOKEN` | sekret Central↔Updater |
+## Testy
 
-Sekretów nie wolno commitować.
+```bash
+npm ci
+npm run check:syntax
+npm test
+```
+
+Playwright:
+
+```bash
+npm install --no-save @playwright/test@1.58.2
+npx playwright install --with-deps chromium
+npx playwright test
+```
+
+VPS acceptance:
+
+```bash
+cd /opt/sirk-central
+export SIRK_ACCEPTANCE_PUBLIC_URL='https://central.sirkportal.com'
+bash deploy/acceptance-test.sh
+```
+
+Portal simulator:
+
+```bash
+export SIRK_SIMULATOR_ORIGIN='https://central.sirkportal.com'
+export SIRK_SIMULATOR_PORTAL_ID='portal-test'
+export SIRK_SIMULATOR_PORTAL_TOKEN='<TOKEN>'
+node scripts/portal-simulator.js
+```
+
+Portal wymaga assignment i ticket policy innej niż `none`.
 
 ## Backup i restore
 
@@ -220,26 +215,12 @@ sudo SIRK_RESTORE_CONFIRM='RESTORE SIRK CENTRAL' \
   /var/backups/sirk-central/sirk-central-<DATA>.tar.gz
 ```
 
-## Testy
+Restore produkcyjny wymaga osobnego drill na nieprodukcyjnym VPS.
 
-Podstawowe:
+## Stan testów
 
-```bash
-npm ci
-npm run check:syntax
-npm test
-```
-
-Pełna procedura na VPS:
-
-```bash
-cd /opt/sirk-central
-export SIRK_ACCEPTANCE_PUBLIC_URL='https://central.sirkportal.com'
-bash deploy/acceptance-test.sh
-```
-
-Szczegóły, symulator Portalu i lista testów manualnych znajdują się w [docs/TESTING.md](docs/TESTING.md).
+Testy i workflow są przygotowane, ale nie są uznane za zaliczone bez rzeczywistego wyniku GitHub Actions/VPS. Aktualny szczegółowy stan znajduje się w [docs/CURRENT-STATUS.md](docs/CURRENT-STATUS.md).
 
 ## Zasada dotycząca SIRK Portal
 
-Aktualna praca dotyczy wyłącznie repozytorium **SIRK Central**. Repozytorium SIRK Portal posiada niezakończone i niewypchnięte zmiany, dlatego nie należy go modyfikować ani zakładać, że nowe API jest już przez Portal używane. Central zawiera kontrakty, kolejki, projekcje i symulator przygotowujący późniejszą integrację.
+Nie modyfikować repozytorium SIRK Portal. Repo zawiera niezakończone, niewypchnięte zmiany. Integracja Central↔Portal jest obecnie weryfikowana wyłącznie przez symulator i testy HTTP w SIRK Central.
