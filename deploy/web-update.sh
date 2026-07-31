@@ -15,26 +15,31 @@ REQUIRE_SIGNED_COMMIT="${SIRK_UPDATE_REQUIRE_SIGNED_COMMIT:-false}"
 CURRENT_COMMIT=""
 TARGET_COMMIT=""
 BACKUP_DIR=""
-DEPLOY_STARTED=0
 ROLLBACK_RUNNING=0
-SELF_RESTART_SCHEDULED=0
 
 IFS=':' read -r -a COMPOSE_FILE_PATHS <<< "${SIRK_COMPOSE_FILES:-${INSTALL_DIR}/docker-compose.yml:${INSTALL_DIR}/docker-compose.portal-runtime.yml}"
 COMPOSE_ARGS=()
 for compose_file in "${COMPOSE_FILE_PATHS[@]}"; do
-  [[ -n "${compose_file}" ]] || continue
-  COMPOSE_ARGS+=( -f "${compose_file}" )
+  [[ -n "$compose_file" ]] || continue
+  COMPOSE_ARGS+=( -f "$compose_file" )
 done
-PROFILE_ARGS=(--profile auth)
+PROFILE_ARGS=()
+IFS=',' read -r -a COMPOSE_PROFILE_NAMES <<< "${SIRK_COMPOSE_PROFILES:-auth,maintenance}"
+for profile in "${COMPOSE_PROFILE_NAMES[@]}"; do
+  profile="${profile//[[:space:]]/}"
+  [[ -n "$profile" ]] && PROFILE_ARGS+=( --profile "$profile" )
+done
+BASE_SERVICES=(central auth updater-gateway backup-manager caddy)
+BUILD_SERVICES=(central auth updater-gateway updater backup-manager)
 
-mkdir -p "${STATE_DIR}"
-chmod 0700 "${STATE_DIR}"
+mkdir -p "$STATE_DIR"
+chmod 0700 "$STATE_DIR"
 
 write_status() {
-  local state="$1" message="$2" commit="${3:-}" restart_scheduled="${4:-false}"
-  python3 - "$STATUS_FILE" "$state" "$message" "$STARTED_AT" "$REQUESTED_BY" "$LOG_FILE" "$commit" "$CURRENT_COMMIT" "$TARGET_COMMIT" "$restart_scheduled" <<'PY'
+  local state="$1" message="$2" commit="${3:-}"
+  python3 - "$STATUS_FILE" "$state" "$message" "$STARTED_AT" "$REQUESTED_BY" "$LOG_FILE" "$commit" "$CURRENT_COMMIT" "$TARGET_COMMIT" <<'PY'
 import datetime, json, os, sys, tempfile
-path,state,message,started,requested,log,commit,previous,target,restart_scheduled=sys.argv[1:]
+path,state,message,started,requested,log,commit,previous,target=sys.argv[1:]
 data={
   "state":state,
   "running":state in ("starting","running","rollback"),
@@ -42,7 +47,7 @@ data={
   "startedAtUtc":started,
   "requestedBy":requested,
   "logFile":log,
-  "updaterRestartScheduled":restart_scheduled.lower()=="true"
+  "updaterRestartScheduled":False
 }
 if commit: data["commit"]=commit
 if previous: data["previousCommit"]=previous
@@ -65,27 +70,23 @@ except Exception:
   raise
 PY
 }
-
-compose() {
-  docker compose "${COMPOSE_ARGS[@]}" "${PROFILE_ARGS[@]}" "$@"
-}
+compose() { docker compose "${COMPOSE_ARGS[@]}" "${PROFILE_ARGS[@]}" "$@"; }
 
 central_healthy() {
   local container_id state
   container_id="$(compose ps -q central)"
-  [[ -n "${container_id}" ]] || return 1
+  [[ -n "$container_id" ]] || return 1
   for _ in $(seq 1 60); do
-    state="$(docker inspect "${container_id}" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' 2>/dev/null || true)"
-    [[ "${state}" == "healthy" ]] && return 0
-    [[ "${state}" == "unhealthy" || "${state}" == "exited" || "${state}" == "dead" ]] && return 1
+    state="$(docker inspect "$container_id" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' 2>/dev/null || true)"
+    [[ "$state" == "healthy" ]] && return 0
+    [[ "$state" == "unhealthy" || "$state" == "exited" || "$state" == "dead" ]] && return 1
     sleep 2
   done
   return 1
 }
-
 validate_data_archive() {
   local archive="$1"
-  node - "${archive}" <<'NODE'
+  node - "$archive" <<'NODE'
 const archive = require('./updater/backup-archive');
 archive.validateArchive(process.argv[2], {
   requireChecksum: true,
@@ -94,109 +95,79 @@ archive.validateArchive(process.argv[2], {
 });
 NODE
 }
-
 restore_data_archive() {
   local archive="$1"
-  validate_data_archive "${archive}"
+  validate_data_archive "$archive"
   find /var/lib/sirk-central -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
-  tar --extract --gzip --file "${archive}" --directory /var/lib/sirk-central \
+  tar --extract --gzip --file "$archive" --directory /var/lib/sirk-central \
     --no-same-owner --no-same-permissions --delay-directory-restore
   chown -R 1000:1000 /var/lib/sirk-central
   find /var/lib/sirk-central -type d -exec chmod 0700 {} +
   find /var/lib/sirk-central -type f -exec chmod 0600 {} +
 }
-
 capture_safety_data() {
   BACKUP_DIR="${STATE_DIR}/backups/sirk-central-update-$(date -u +%Y%m%dT%H%M%SZ)"
-  mkdir -p "${BACKUP_DIR}"
-  chmod 0700 "${STATE_DIR}/backups" "${BACKUP_DIR}"
-  cp --preserve=mode,timestamps .env "${BACKUP_DIR}/.env"
-  git rev-parse HEAD > "${BACKUP_DIR}/previous-commit.txt"
-  printf '%s\n' "${REPO_REF}" > "${BACKUP_DIR}/repository-ref.txt"
-  compose config > "${BACKUP_DIR}/compose-before.yml"
-  tar --format=pax -czf "${BACKUP_DIR}/central-data.tar.gz.partial" -C /var/lib/sirk-central .
-  mv -- "${BACKUP_DIR}/central-data.tar.gz.partial" "${BACKUP_DIR}/central-data.tar.gz"
-  node - "${BACKUP_DIR}/central-data.tar.gz" <<'NODE'
+  mkdir -p "$BACKUP_DIR"
+  chmod 0700 "${STATE_DIR}/backups" "$BACKUP_DIR"
+  cp --preserve=mode,timestamps .env "$BACKUP_DIR/.env"
+  git rev-parse HEAD > "$BACKUP_DIR/previous-commit.txt"
+  printf '%s\n' "$REPO_REF" > "$BACKUP_DIR/repository-ref.txt"
+  compose config > "$BACKUP_DIR/compose-before.yml"
+  tar --format=pax -czf "$BACKUP_DIR/central-data.tar.gz.partial" -C /var/lib/sirk-central .
+  mv -- "$BACKUP_DIR/central-data.tar.gz.partial" "$BACKUP_DIR/central-data.tar.gz"
+  node - "$BACKUP_DIR/central-data.tar.gz" <<'NODE'
 const archive = require('./updater/backup-archive');
 archive.writeChecksum(process.argv[2]);
 archive.validateArchive(process.argv[2], { requireChecksum: true });
 NODE
-  chmod 0600 "${BACKUP_DIR}/central-data.tar.gz" "${BACKUP_DIR}/central-data.tar.gz.sha256"
+  chmod 0600 "$BACKUP_DIR/central-data.tar.gz" "$BACKUP_DIR/central-data.tar.gz.sha256"
 }
-
 rollback() {
   local original_code="$1"
-  [[ "${ROLLBACK_RUNNING}" -eq 0 ]] || exit "${original_code}"
+  [[ "$ROLLBACK_RUNNING" -eq 0 ]] || exit "$original_code"
   ROLLBACK_RUNNING=1
   trap - ERR
-  write_status rollback "Update failed. Restoring repository, configuration and Central data." "${CURRENT_COMMIT:-}" false || true
+  write_status rollback "Update failed. Restoring repository, configuration and Central data." "${CURRENT_COMMIT:-}" || true
 
   local rollback_ok=0
-  if [[ -n "${CURRENT_COMMIT}" && -d "${INSTALL_DIR}/.git" && -n "${BACKUP_DIR}" ]]; then
-    cd "${INSTALL_DIR}"
-    compose stop central auth backup-manager >/dev/null 2>&1 || true
-    if git reset --hard "${CURRENT_COMMIT}" \
-      && cp -- "${BACKUP_DIR}/.env" .env \
+  if [[ -n "$CURRENT_COMMIT" && -d "$INSTALL_DIR/.git" && -n "$BACKUP_DIR" ]]; then
+    cd "$INSTALL_DIR"
+    compose stop central auth updater-gateway backup-manager >/dev/null 2>&1 || true
+    if git reset --hard "$CURRENT_COMMIT" \
+      && cp -- "$BACKUP_DIR/.env" .env \
       && chmod 0600 .env \
       && compose config >/dev/null \
-      && compose build central auth backup-manager \
-      && restore_data_archive "${BACKUP_DIR}/central-data.tar.gz" \
-      && compose up -d --force-recreate --remove-orphans central auth backup-manager caddy \
+      && compose build central auth updater-gateway backup-manager \
+      && restore_data_archive "$BACKUP_DIR/central-data.tar.gz" \
+      && compose up -d --force-recreate --remove-orphans "${BASE_SERVICES[@]}" \
       && central_healthy; then
       rollback_ok=1
     fi
   fi
 
-  if [[ "${rollback_ok}" -eq 1 ]]; then
-    write_status rollback_completed "Update failed, but the previous repository, configuration and data were restored." "${CURRENT_COMMIT:-}" false || true
+  if [[ "$rollback_ok" -eq 1 ]]; then
+    write_status rollback_completed "Update failed, but the previous repository, configuration and data were restored." "${CURRENT_COMMIT:-}" || true
   else
-    write_status failed "Update failed and automatic rollback could not be confirmed healthy. Preserve the updater log and safety backup." "${CURRENT_COMMIT:-}" false || true
+    write_status failed "Update failed and automatic rollback could not be confirmed healthy. Preserve the updater log and safety backup." "${CURRENT_COMMIT:-}" || true
   fi
-  exit "${original_code}"
+  exit "$original_code"
 }
-
-fail() {
-  local code=$?
-  rollback "${code}"
-}
+fail() { local code=$?; rollback "$code"; }
 trap fail ERR
 
 acquire_lock() {
-  if mkdir "${LOCK_DIR}" 2>/dev/null; then
-    printf '%s\n' "$$" > "${LOCK_PID_FILE}"
-    chmod 0600 "${LOCK_PID_FILE}"
+  if mkdir "$LOCK_DIR" 2>/dev/null; then
+    printf '%s\n' "$$" > "$LOCK_PID_FILE"
+    chmod 0600 "$LOCK_PID_FILE"
     return 0
   fi
-
   local existing_pid=""
-  [[ -f "${LOCK_PID_FILE}" ]] && existing_pid="$(cat "${LOCK_PID_FILE}" 2>/dev/null || true)"
-  if [[ "${existing_pid}" =~ ^[0-9]+$ ]] && kill -0 "${existing_pid}" 2>/dev/null; then
-    return 1
-  fi
-
-  rm -rf -- "${LOCK_DIR}"
-  mkdir "${LOCK_DIR}"
-  printf '%s\n' "$$" > "${LOCK_PID_FILE}"
-  chmod 0600 "${LOCK_PID_FILE}"
-}
-
-schedule_updater_recreate() {
-  local updater_image helper_name command
-  updater_image="$(compose images -q updater)"
-  [[ -n "${updater_image}" ]]
-  helper_name="sirk-updater-recreate-$(date -u +%Y%m%dT%H%M%SZ)-$$"
-  command="sleep 5; cd $(printf '%q' "${INSTALL_DIR}"); docker compose"
-  local argument
-  for argument in "${COMPOSE_ARGS[@]}" "${PROFILE_ARGS[@]}"; do
-    command+=" $(printf '%q' "${argument}")"
-  done
-  command+=" up -d --force-recreate updater"
-  docker run --rm -d --name "${helper_name}" \
-    -v /var/run/docker.sock:/var/run/docker.sock \
-    -v "${INSTALL_DIR}:${INSTALL_DIR}" \
-    -w "${INSTALL_DIR}" \
-    "${updater_image}" /bin/sh -ec "${command}" >/dev/null
-  SELF_RESTART_SCHEDULED=1
+  [[ -f "$LOCK_PID_FILE" ]] && existing_pid="$(cat "$LOCK_PID_FILE" 2>/dev/null || true)"
+  if [[ "$existing_pid" =~ ^[0-9]+$ ]] && kill -0 "$existing_pid" 2>/dev/null; then return 1; fi
+  rm -rf -- "$LOCK_DIR"
+  mkdir "$LOCK_DIR"
+  printf '%s\n' "$$" > "$LOCK_PID_FILE"
+  chmod 0600 "$LOCK_PID_FILE"
 }
 
 if ! acquire_lock; then
@@ -205,65 +176,59 @@ if ! acquire_lock; then
 fi
 trap 'rm -rf -- "$LOCK_DIR"' EXIT
 
-: > "${LOG_FILE}"
-chmod 0600 "${LOG_FILE}"
-exec > >(tee -a "${LOG_FILE}") 2>&1
+: > "$LOG_FILE"
+chmod 0600 "$LOG_FILE"
+exec > >(tee -a "$LOG_FILE") 2>&1
 write_status running "Preparing update."
 
-[[ -d "${INSTALL_DIR}/.git" ]]
-[[ -f "${INSTALL_DIR}/.env" ]]
+[[ -d "$INSTALL_DIR/.git" ]]
+[[ -f "$INSTALL_DIR/.env" ]]
 [[ "${#COMPOSE_ARGS[@]}" -ge 4 ]]
-command -v python3 >/dev/null 2>&1
-command -v node >/dev/null 2>&1
-command -v npm >/dev/null 2>&1
-command -v docker >/dev/null 2>&1
-cd "${INSTALL_DIR}"
+for command in python3 node npm docker git curl tar; do command -v "$command" >/dev/null 2>&1; done
+cd "$INSTALL_DIR"
 
 CURRENT_COMMIT="$(git rev-parse HEAD)"
-if [[ -z "${REPO_REF}" ]]; then
-  REPO_REF="$(git branch --show-current)"
-fi
-[[ -n "${REPO_REF}" ]]
-git check-ref-format --branch "${REPO_REF}" >/dev/null
+[[ -n "$REPO_REF" ]] || REPO_REF="$(git branch --show-current)"
+[[ -n "$REPO_REF" ]]
+git check-ref-format --branch "$REPO_REF" >/dev/null
 if [[ -n "$(git status --porcelain=v1 --untracked-files=no)" ]]; then
-  write_status failed "Deployment repository contains tracked local changes. Refusing destructive update." "${CURRENT_COMMIT}"
+  write_status failed "Deployment repository contains tracked local changes. Refusing destructive update." "$CURRENT_COMMIT"
   exit 1
 fi
 
-write_status running "Fetching deployment source from ${REPO_REF}." "${CURRENT_COMMIT}"
+write_status running "Fetching deployment source from ${REPO_REF}." "$CURRENT_COMMIT"
 git fetch --prune origin "+refs/heads/${REPO_REF}:refs/remotes/origin/${REPO_REF}"
 TARGET_COMMIT="$(git rev-parse "origin/${REPO_REF}")"
-[[ "${TARGET_COMMIT}" =~ ^[0-9a-f]{40}$ ]]
-for required_path in Dockerfile.portal-runtime docker-compose.yml docker-compose.portal-runtime.yml src/server-v15.js updater/backup-archive.js updater/restore-transaction.js; do
+[[ "$TARGET_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+for required_path in \
+  Dockerfile.portal-runtime docker-compose.yml docker-compose.portal-runtime.yml \
+  src/server-v15.js updater/Dockerfile.gateway updater/gateway-server.js \
+  updater/backup-archive.js updater/restore-transaction.js; do
   git cat-file -e "${TARGET_COMMIT}:${required_path}"
 done
-if [[ "${REQUIRE_SIGNED_COMMIT}" == "true" ]]; then
-  git verify-commit "${TARGET_COMMIT}"
-fi
+if [[ "$REQUIRE_SIGNED_COMMIT" == "true" ]]; then git verify-commit "$TARGET_COMMIT"; fi
 
-write_status running "Creating pre-update repository and data safety backup." "${CURRENT_COMMIT}"
+write_status running "Creating pre-update repository and data safety backup." "$CURRENT_COMMIT"
 capture_safety_data
 
-git checkout -B "${REPO_REF}" "origin/${REPO_REF}"
-git reset --hard "${TARGET_COMMIT}"
+git checkout -B "$REPO_REF" "origin/$REPO_REF"
+git reset --hard "$TARGET_COMMIT"
 
-write_status running "Running syntax, tests, dependency audit and Compose validation." "${TARGET_COMMIT}"
+write_status running "Running syntax, tests, dependency audit and Compose validation." "$TARGET_COMMIT"
 npm ci
 npm run check:syntax
-npm test
+SIRK_CONCURRENCY_TEST_REQUESTS="${SIRK_CONCURRENCY_TEST_REQUESTS:-24}" npm test
 npm audit --omit=dev --audit-level=high
 compose config >/dev/null
 
-write_status running "Building updated Central, Auth, updater and backup-manager images." "${TARGET_COMMIT}"
-compose build --pull central auth updater backup-manager
+write_status running "Building Central, Auth, gateway, worker and backup-manager images." "$TARGET_COMMIT"
+compose build --pull "${BUILD_SERVICES[@]}"
 
-write_status running "Deploying application services." "${TARGET_COMMIT}"
-DEPLOY_STARTED=1
-compose up -d --force-recreate --remove-orphans central auth backup-manager caddy
+write_status running "Deploying the non-privileged base stack." "$TARGET_COMMIT"
+compose up -d --force-recreate --remove-orphans "${BASE_SERVICES[@]}"
 central_healthy
 
 CENTRAL_DOMAIN="${SIRK_CENTRAL_DOMAIN:-central.sirkportal.com}"
 curl -fsS --max-time 15 "https://${CENTRAL_DOMAIN}/readyz" >/dev/null
 
-write_status completed "Update completed successfully. The updater self-recreate helper was scheduled." "${TARGET_COMMIT}" true
-schedule_updater_recreate
+write_status completed "Update completed. Close the maintenance window to remove the privileged updater worker." "$TARGET_COMMIT"
