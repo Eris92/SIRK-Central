@@ -13,27 +13,34 @@ function create(options = {}) {
     const maxEntries = finiteInteger(options.maxEntries, 10000, 100, 1000000);
     const entries = new Map();
 
-    function prune(timestamp = now()) {
+    function prune(timestamp = now(), reserve = 0) {
         for (const [key, value] of entries) {
             if (value.resetAt <= timestamp) entries.delete(key);
         }
-        if (entries.size <= maxEntries) return;
-        const ordered = [...entries.entries()].sort((left, right) => left[1].resetAt - right[1].resetAt);
-        for (const [key] of ordered.slice(0, entries.size - maxEntries)) entries.delete(key);
+        const target = Math.max(0, maxEntries - finiteInteger(reserve, 0, 0, maxEntries));
+        if (entries.size <= target) return;
+        const ordered = [...entries.entries()].sort((left, right) => {
+            const resetDifference = left[1].resetAt - right[1].resetAt;
+            return resetDifference || left[1].lastSeenAt - right[1].lastSeenAt;
+        });
+        for (const [key] of ordered.slice(0, entries.size - target)) entries.delete(key);
     }
 
     function consume(rawKey, cost = 1) {
         const timestamp = now();
         const key = String(rawKey || "unknown").slice(0, 512);
         const requestCost = finiteInteger(cost, 1, 1, limit);
-        if (entries.size >= maxEntries) prune(timestamp);
+        const exists = entries.has(key);
+        if (!exists && entries.size >= maxEntries) prune(timestamp, 1);
         let entry = entries.get(key);
         if (!entry || entry.resetAt <= timestamp) {
-            entry = { used: 0, resetAt: timestamp + windowMs };
+            entry = { used: 0, resetAt: timestamp + windowMs, lastSeenAt: timestamp };
         }
         const allowed = entry.used + requestCost <= limit;
         if (allowed) entry.used += requestCost;
+        entry.lastSeenAt = timestamp;
         entries.set(key, entry);
+        if (entries.size > maxEntries) prune(timestamp);
         return {
             allowed,
             limit,
