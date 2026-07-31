@@ -2,42 +2,99 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const rbac = require("../src/rbac");
 const organizationApi = require("../src/organization-api");
 const approvalApi = require("../src/approval-api");
 const portalAssignmentApi = require("../src/portal-assignment-api");
+const approvalCenter = require("../src/server-v13");
+const portalOperations = require("../src/server-v14");
+const ticketApi = require("../src/server-v15");
 
-const identities = {
+function identity(role, overrides = {}) {
+    return Object.assign({
+        ok: true,
+        username: role.toLowerCase(),
+        identityKey: "tenant:" + role.toLowerCase(),
+        role,
+        source: "entra",
+        status: "active",
+        builtIn: false
+    }, overrides);
+}
+
+const identities = Object.freeze({
     anonymous: null,
-    auditor: { ok: true, role: "Auditor", builtIn: false },
-    operator: { ok: true, role: "OperatorL1", builtIn: false },
-    admin: { ok: true, role: "Admin", builtIn: false },
-    secadmin: { ok: true, role: "SecAdmin", builtIn: false },
-    breakglass: { ok: true, role: "BreakGlass", source: "local", builtIn: true }
-};
-
-test("organization authorization separates read and management", () => {
-    assert.equal(organizationApi.canRead(identities.auditor), true);
-    assert.equal(organizationApi.canRead(identities.operator), false);
-    assert.equal(organizationApi.canManage(identities.admin), true);
-    assert.equal(organizationApi.canManage(identities.secadmin), false);
-    assert.equal(organizationApi.canManage(identities.breakglass), true);
-    assert.equal(organizationApi.canManage(identities.anonymous), false);
+    pending: identity("Admin", { username: "pending", identityKey: "tenant:pending", status: "pending" }),
+    operator: identity("OperatorL1"),
+    support: identity("SupportL2"),
+    engineer: identity("EngineerL3"),
+    auditor: identity("Auditor"),
+    admin: identity("Admin"),
+    secadmin: identity("SecAdmin"),
+    breakglass: identity("BreakGlass", { username: "admin", identityKey: "breakglass:admin", source: "local", builtIn: true })
 });
 
-test("approval authorization separates submission from decision", () => {
-    assert.equal(approvalApi.canRead(identities.auditor), true);
-    assert.equal(approvalApi.canSubmit(identities.operator), true);
-    assert.equal(approvalApi.canSubmit(identities.auditor), false);
-    assert.equal(approvalApi.canDecide(identities.admin), false);
-    assert.equal(approvalApi.canDecide(identities.secadmin), true);
-    assert.equal(approvalApi.canDecide(identities.breakglass), true);
+const matrix = [
+    { name: "anonymous", actor: identities.anonymous, active: false, organizationRead: false, organizationManage: false, approvalRead: false, approvalSubmit: false, approvalDecide: false, operationsRead: false, operationsWrite: false, ticketsRead: false, ticketsWrite: false },
+    { name: "Pending", actor: identities.pending, active: false, organizationRead: false, organizationManage: false, approvalRead: false, approvalSubmit: false, approvalDecide: false, operationsRead: false, operationsWrite: false, ticketsRead: false, ticketsWrite: false },
+    { name: "OperatorL1", actor: identities.operator, active: true, organizationRead: false, organizationManage: false, approvalRead: false, approvalSubmit: true, approvalDecide: false, operationsRead: true, operationsWrite: false, ticketsRead: true, ticketsWrite: false },
+    { name: "SupportL2", actor: identities.support, active: true, organizationRead: false, organizationManage: false, approvalRead: false, approvalSubmit: true, approvalDecide: false, operationsRead: true, operationsWrite: true, ticketsRead: true, ticketsWrite: true },
+    { name: "EngineerL3", actor: identities.engineer, active: true, organizationRead: false, organizationManage: false, approvalRead: false, approvalSubmit: true, approvalDecide: false, operationsRead: true, operationsWrite: true, ticketsRead: true, ticketsWrite: true },
+    { name: "Auditor", actor: identities.auditor, active: true, organizationRead: true, organizationManage: false, approvalRead: true, approvalSubmit: false, approvalDecide: false, operationsRead: true, operationsWrite: false, ticketsRead: true, ticketsWrite: false },
+    { name: "Admin", actor: identities.admin, active: true, organizationRead: true, organizationManage: true, approvalRead: true, approvalSubmit: true, approvalDecide: false, operationsRead: true, operationsWrite: true, ticketsRead: true, ticketsWrite: true },
+    { name: "SecAdmin", actor: identities.secadmin, active: true, organizationRead: true, organizationManage: false, approvalRead: true, approvalSubmit: true, approvalDecide: true, operationsRead: true, operationsWrite: false, ticketsRead: true, ticketsWrite: false },
+    { name: "BreakGlass", actor: identities.breakglass, active: true, organizationRead: true, organizationManage: true, approvalRead: true, approvalSubmit: true, approvalDecide: true, operationsRead: true, operationsWrite: true, ticketsRead: true, ticketsWrite: true }
+];
+
+test("complete RBAC matrix is consistent across organization approvals operations and tickets", () => {
+    const independentRequest = { requestedBy: "tenant:requester", payload: { role: "Admin" } };
+    for (const row of matrix) {
+        assert.equal(rbac.identityActive(row.actor), row.active, row.name + " active");
+        assert.equal(organizationApi.canRead(row.actor), row.organizationRead, row.name + " organization read");
+        assert.equal(organizationApi.canManage(row.actor), row.organizationManage, row.name + " organization manage");
+        assert.equal(portalAssignmentApi.canRead(row.actor), row.organizationRead, row.name + " assignment read");
+        assert.equal(portalAssignmentApi.canManage(row.actor), row.organizationManage, row.name + " assignment manage");
+        assert.equal(approvalApi.canRead(row.actor), row.approvalRead, row.name + " legacy approval read");
+        assert.equal(approvalApi.canSubmit(row.actor), row.approvalSubmit, row.name + " legacy approval submit policy");
+        assert.equal(approvalApi.canDecide(row.actor), row.approvalDecide, row.name + " legacy approval decide policy");
+        assert.equal(approvalCenter.canRead(row.actor), row.approvalRead, row.name + " approval center read");
+        assert.equal(approvalCenter.canSubmit(row.actor), row.approvalSubmit, row.name + " approval center submit");
+        assert.equal(approvalCenter.canDecide(row.actor, independentRequest), row.approvalDecide, row.name + " approval center decide");
+        assert.equal(portalOperations.canRead(row.actor), row.operationsRead, row.name + " operations read");
+        assert.equal(portalOperations.canWrite(row.actor), row.operationsWrite, row.name + " operations write");
+        assert.equal(ticketApi.canRead(row.actor), row.ticketsRead, row.name + " tickets read");
+        assert.equal(ticketApi.canWrite(row.actor), row.ticketsWrite, row.name + " tickets write");
+    }
 });
 
-test("Portal assignment authorization is Admin-managed and security-readable", () => {
-    assert.equal(portalAssignmentApi.canRead(identities.auditor), true);
-    assert.equal(portalAssignmentApi.canRead(identities.secadmin), true);
-    assert.equal(portalAssignmentApi.canRead(identities.operator), false);
-    assert.equal(portalAssignmentApi.canManage(identities.admin), true);
-    assert.equal(portalAssignmentApi.canManage(identities.secadmin), false);
-    assert.equal(portalAssignmentApi.canManage(identities.breakglass), true);
+test("non-active identities are denied regardless of retained role", () => {
+    for (const status of ["pending", "conflict", "disabled"]) {
+        for (const role of ["OperatorL1", "SupportL2", "EngineerL3", "Auditor", "Admin", "SecAdmin"]) {
+            const actor = identity(role, { status });
+            assert.equal(rbac.identityActive(actor), false, status + " " + role);
+            assert.equal(rbac.hasPermission(actor, "portals.read"), false, status + " " + role + " permissions");
+            assert.equal(approvalCenter.canSubmit(actor), false, status + " " + role + " submit");
+            assert.equal(portalOperations.canRead(actor), false, status + " " + role + " operations");
+            assert.equal(ticketApi.canRead(actor), false, status + " " + role + " tickets");
+        }
+    }
+});
+
+test("SecAdmin decision must be independent and BreakGlass identity must be local", () => {
+    const selfRequest = { requestedBy: identities.secadmin.identityKey, payload: { role: "Admin" } };
+    assert.equal(approvalCenter.canDecide(identities.secadmin, selfRequest), false);
+    assert.equal(approvalCenter.canDecide(identities.breakglass, selfRequest), true);
+    assert.equal(rbac.identityActive(identity("BreakGlass", { builtIn: true, source: "entra" })), false);
+    assert.equal(rbac.identityActive(identity("Admin", { builtIn: true, source: "local" })), false);
+});
+
+test("Admin and SecAdmin separation of duties remains explicit", () => {
+    assert.equal(rbac.hasPermission(identities.admin, "settings.manage"), true);
+    assert.equal(rbac.hasPermission(identities.admin, "security.manage"), false);
+    assert.equal(rbac.hasPermission(identities.secadmin, "security.manage"), true);
+    assert.equal(rbac.hasPermission(identities.secadmin, "settings.manage"), false);
+    assert.equal(portalOperations.canWrite(identities.admin), true);
+    assert.equal(portalOperations.canWrite(identities.secadmin), false);
+    assert.equal(ticketApi.canWrite(identities.admin), true);
+    assert.equal(ticketApi.canWrite(identities.secadmin), false);
 });
