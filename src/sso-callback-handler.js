@@ -41,6 +41,21 @@ function requestIp(req, config) {
     return String(req.socket && req.socket.remoteAddress || "unknown").slice(0, 128);
 }
 
+function verifyAuthTicket(rawTicket, config, type) {
+    try {
+        return verifySsoTicket(rawTicket, config.ssoSharedSecret, {
+            issuer: config.authOrigin,
+            audience: config.publicOrigin,
+            type
+        });
+    } catch (_) {
+        throw Object.assign(new Error(type === "logout" ? "Invalid SSO logout ticket." : "Invalid SSO ticket."), {
+            statusCode: 401,
+            code: type === "logout" ? "SSO_LOGOUT_INVALID" : "SSO_TICKET_INVALID"
+        });
+    }
+}
+
 function create(options) {
     const app = options.app;
     const config = options.config;
@@ -58,11 +73,7 @@ function create(options) {
             if (authorization.length > 32768) throw Object.assign(new Error("Invalid SSO logout authorization."), { statusCode: 401, code: "SSO_LOGOUT_INVALID" });
             const match = authorization.match(/^SIRK-Logout ([A-Za-z0-9_.-]+)$/);
             if (!match) throw Object.assign(new Error("Invalid SSO logout authorization."), { statusCode: 401, code: "SSO_LOGOUT_INVALID" });
-            const ticket = verifySsoTicket(match[1], config.ssoSharedSecret, {
-                issuer: config.authOrigin,
-                audience: config.publicOrigin,
-                type: "logout"
-            });
+            const ticket = verifyAuthTicket(match[1], config, "logout");
             if (!replay.consume(ticket.jti, ticket.exp * 1000)) {
                 throw Object.assign(new Error("SSO logout ticket was already used."), { statusCode: 409, code: "SSO_LOGOUT_REPLAY" });
             }
@@ -90,11 +101,7 @@ function create(options) {
         if (!rawTicket || rawTicket.length > 32768) {
             throw Object.assign(new Error("Invalid SSO ticket."), { statusCode: 401, code: "SSO_TICKET_INVALID" });
         }
-        const ticket = verifySsoTicket(rawTicket, config.ssoSharedSecret, {
-            issuer: config.authOrigin,
-            audience: config.publicOrigin,
-            type: "login"
-        });
+        const ticket = verifyAuthTicket(rawTicket, config, "login");
         if (!replay.consume(ticket.jti, ticket.exp * 1000)) {
             throw Object.assign(new Error("SSO ticket was already used."), { statusCode: 401, code: "SSO_TICKET_REPLAY" });
         }
@@ -139,4 +146,4 @@ function create(options) {
     return { handler, replay };
 }
 
-module.exports = { create, sessionCookie, requestIp };
+module.exports = { create, sessionCookie, requestIp, verifyAuthTicket };
