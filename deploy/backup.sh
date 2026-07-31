@@ -5,7 +5,7 @@ umask 077
 INSTALL_DIR="${SIRK_INSTALL_DIR:-/opt/sirk-central}"
 BACKUP_ROOT="${SIRK_BACKUP_ROOT:-/var/backups/sirk-central}"
 RETENTION_DAYS="${SIRK_BACKUP_RETENTION_DAYS:-30}"
-REQUIRE_ENCRYPTION="${SIRK_BACKUP_REQUIRE_ENCRYPTION:-false}"
+REQUIRE_ENCRYPTION="${SIRK_BACKUP_REQUIRE_ENCRYPTION:-auto}"
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 TARGET="${BACKUP_ROOT}/${TIMESTAMP}"
 ARCHIVE="${BACKUP_ROOT}/sirk-central-${TIMESTAMP}.tar.gz"
@@ -14,6 +14,7 @@ COMPOSE=(docker compose -f docker-compose.yml -f docker-compose.portal-runtime.y
 cleanup() {
   [[ -d "${TARGET}" ]] && rm -rf -- "${TARGET}"
   [[ -f "${ARCHIVE}.partial" ]] && rm -f -- "${ARCHIVE}.partial"
+  [[ -f "${ARCHIVE}.age.partial" ]] && rm -f -- "${ARCHIVE}.age.partial"
 }
 trap cleanup EXIT
 
@@ -23,8 +24,17 @@ trap cleanup EXIT
 command -v python3 >/dev/null 2>&1 || { echo "python3 is required." >&2; exit 1; }
 command -v sha256sum >/dev/null 2>&1 || { echo "sha256sum is required." >&2; exit 1; }
 [[ "${RETENTION_DAYS}" =~ ^[0-9]+$ ]] || { echo "SIRK_BACKUP_RETENTION_DAYS must be an integer." >&2; exit 1; }
+[[ "${REQUIRE_ENCRYPTION}" =~ ^(auto|true|false)$ ]] || { echo "SIRK_BACKUP_REQUIRE_ENCRYPTION must be auto, true or false." >&2; exit 1; }
+
+if [[ "${REQUIRE_ENCRYPTION}" == "auto" ]]; then
+  if grep -Eq '^[[:space:]]*NODE_ENV[[:space:]]*=[[:space:]]*["'"']?production["'"']?[[:space:]]*$' "${INSTALL_DIR}/.env"; then
+    REQUIRE_ENCRYPTION=true
+  else
+    REQUIRE_ENCRYPTION=false
+  fi
+fi
 if [[ "${REQUIRE_ENCRYPTION}" == "true" && -z "${SIRK_BACKUP_AGE_RECIPIENT:-}" ]]; then
-  echo "Encrypted offline backup is required. Set SIRK_BACKUP_AGE_RECIPIENT or explicitly set SIRK_BACKUP_REQUIRE_ENCRYPTION=false." >&2
+  echo "Encrypted offline backup is required. Set SIRK_BACKUP_AGE_RECIPIENT. Use SIRK_BACKUP_REQUIRE_ENCRYPTION=false only for an explicitly accepted non-production exception." >&2
   exit 1
 fi
 
