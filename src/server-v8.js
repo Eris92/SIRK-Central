@@ -6,7 +6,7 @@ const { createRuntimeApp } = require("./server-v7");
 const { loadConfig } = require("./server-v1");
 const { hasPermission } = require("./rbac");
 
-const VERSION = "1.0.0-rc.12";
+const VERSION = "1.0.0-rc.13";
 
 function parseCookies(req) {
     const result = {};
@@ -62,11 +62,11 @@ async function testProvider(provider) {
     if (!response.ok || !result.issuer || !result.authorization_endpoint || !result.token_endpoint) throw new Error("Microsoft Entra discovery failed: " + String(result.error_description || result.error || response.status));
     return { issuer: result.issuer, authorizationEndpoint: result.authorization_endpoint, tokenEndpoint: result.token_endpoint };
 }
-async function updaterRequest(config, path, options) {
+async function updaterRequest(config, requestPath, options) {
     const origin = String(config.env.SIRK_UPDATER_ORIGIN || "http://updater:8090").replace(/\/+$/, "");
     const token = String(config.env.SIRK_UPDATER_TOKEN || "");
     if (token.length < 43) throw Object.assign(new Error("Updater is not configured."), { statusCode: 503 });
-    const response = await fetch(origin + path, Object.assign({ headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" }, signal: AbortSignal.timeout(30000) }, options || {}));
+    const response = await fetch(origin + requestPath, Object.assign({ headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" }, signal: AbortSignal.timeout(30000) }, options || {}));
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw Object.assign(new Error(body.error || "Updater request failed."), { statusCode: response.status });
     return body;
@@ -88,6 +88,7 @@ function createContinuityApp(config) {
             const url = new URL(req.url, "http://central.local");
             const passkeyDelete = url.pathname.match(/^\/api\/break-glass\/passkeys\/([A-Za-z0-9_-]{16,512})$/);
             const recoveryDelete = url.pathname === "/api/break-glass/mfa/recovery-codes";
+            const backupDelete = url.pathname.match(/^\/api\/settings\/backup\/([^/]+)$/);
 
             if (req.method === "GET" && url.pathname === "/api/settings/identity-provider") {
                 const access = providerAccess(app, req);
@@ -131,6 +132,17 @@ function createContinuityApp(config) {
                 if (!csrfAccepted(req, config)) return json(res, 403, { ok: false, error: "CSRF validation failed." });
                 if (!operationsActor(app, req, true)) return json(res, 403, { ok: false, error: "Permission denied." });
                 return json(res, 201, await updaterRequest(config, "/backup/run", { method: "POST", body: JSON.stringify(await readBody(req)) }));
+            }
+            if (req.method === "POST" && url.pathname === "/api/settings/backup/restore") {
+                if (!csrfAccepted(req, config)) return json(res, 403, { ok: false, error: "CSRF validation failed." });
+                if (!operationsActor(app, req, true)) return json(res, 403, { ok: false, error: "Permission denied." });
+                return json(res, 202, await updaterRequest(config, "/backup/restore", { method: "POST", body: JSON.stringify(await readBody(req)) }));
+            }
+            if (req.method === "DELETE" && backupDelete) {
+                if (!csrfAccepted(req, config)) return json(res, 403, { ok: false, error: "CSRF validation failed." });
+                if (!operationsActor(app, req, true)) return json(res, 403, { ok: false, error: "Permission denied." });
+                const name = decodeURIComponent(backupDelete[1]);
+                return json(res, 200, await updaterRequest(config, "/backup/" + encodeURIComponent(name), { method: "DELETE", body: JSON.stringify(await readBody(req)) }));
             }
 
             if (req.method === "GET" && url.pathname === "/api/break-glass/mfa/continuity") {
