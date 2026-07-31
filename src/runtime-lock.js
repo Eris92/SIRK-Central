@@ -24,6 +24,15 @@ function lockError(message, owner) {
         owner: owner || null
     });
 }
+function lockTimestamp(lockDir, owner) {
+    const heartbeat = owner && Date.parse(owner.heartbeatAtUtc || owner.startedAtUtc || "");
+    if (Number.isFinite(heartbeat)) return heartbeat;
+    try { return fs.statSync(lockDir).mtimeMs; }
+    catch (error) {
+        if (error.code === "ENOENT") return NaN;
+        throw error;
+    }
+}
 
 function acquire(options = {}) {
     const dataDir = path.resolve(options.dataDir || path.join(process.cwd(), "data"));
@@ -63,8 +72,8 @@ function acquire(options = {}) {
     } catch (error) {
         if (error.code !== "EEXIST") throw error;
         const current = readJson(ownerPath);
-        const heartbeat = current && Date.parse(current.heartbeatAtUtc || current.startedAtUtc || "");
-        if (!Number.isFinite(heartbeat) || now() - heartbeat <= staleMs) {
+        const timestamp = lockTimestamp(lockDir, current);
+        if (!Number.isFinite(timestamp) || now() - timestamp <= staleMs) {
             throw lockError("Persistent storage is already owned by another SIRK Central runtime.", current);
         }
 
@@ -124,4 +133,4 @@ function acquire(options = {}) {
     };
 }
 
-module.exports = { acquire, readJson, lockError };
+module.exports = { acquire, readJson, lockError, lockTimestamp };
