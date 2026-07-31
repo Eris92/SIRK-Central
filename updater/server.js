@@ -105,6 +105,12 @@ function validatedBackupPath(name) {
     }
     return target;
 }
+function deleteBackup(name) {
+    if (restoreRunning || readRestoreStatus().running) throw new Error("A backup cannot be deleted while restore is running.");
+    const target = validatedBackupPath(name);
+    fs.rmSync(target, { force: false });
+    return { name };
+}
 function runCompose(args) {
     const result = spawnSync("docker", ["compose", "-f", composeFile, "--profile", "auth", ...args], { cwd: "/opt/sirk-central", encoding: "utf8" });
     if (result.status !== 0) throw new Error("Docker Compose failed: " + String(result.stderr || result.stdout || result.status));
@@ -136,6 +142,7 @@ function performRestore(name, archive, safetyBackup) {
 const server = http.createServer(async (req, res) => {
     try {
         const url = new URL(req.url, "http://updater.local");
+        const backupDelete = url.pathname.match(/^\/backup\/([^/]+)$/);
         if (url.pathname === "/healthz" && req.method === "GET") return json(res, 200, { ok: true });
         if (!authorized(req)) return json(res, 404, { ok: false, error: "Not found." });
         if (url.pathname === "/status" && req.method === "GET") {
@@ -158,6 +165,12 @@ const server = http.createServer(async (req, res) => {
             const body = await readBody(req);
             if (body.confirm !== "BACKUP SIRK CENTRAL") return json(res, 400, { ok: false, error: "Backup confirmation is invalid." });
             return json(res, 201, { ok: true, backup: createBackup() });
+        }
+        if (backupDelete && req.method === "DELETE") {
+            const body = await readBody(req);
+            if (body.confirm !== "DELETE SIRK BACKUP") return json(res, 400, { ok: false, error: "Backup deletion confirmation is invalid." });
+            const name = decodeURIComponent(backupDelete[1]);
+            return json(res, 200, { ok: true, deleted: deleteBackup(name) });
         }
         if (url.pathname === "/backup/restore" && req.method === "POST") {
             if (restoreRunning) return json(res, 409, { ok: false, error: "A restore is already running." });
