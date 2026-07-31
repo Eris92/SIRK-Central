@@ -236,6 +236,7 @@ function createApp(config) {
                 const now = Math.floor(Date.now() / 1000);
                 const ticket = sign({
                     v: 1,
+                    typ: "login",
                     iss: config.authOrigin,
                     aud: config.centralOrigin,
                     iat: now,
@@ -243,6 +244,8 @@ function createApp(config) {
                     jti: crypto.randomBytes(24).toString("base64url"),
                     tid: String(claims.tid),
                     oid: String(claims.oid),
+                    sid: String(claims.sid || "").slice(0, 512),
+                    providerIssuer: String(claims.iss || "").slice(0, 512),
                     name: String(claims.name || claims.preferred_username || "Entra user").slice(0, 160),
                     username: String(claims.preferred_username || claims.email || "").slice(0, 254),
                     roles: normalizeAppRoles(claims.roles)
