@@ -44,7 +44,7 @@ test("container image normalizes ownership and read permissions before USER node
 test("all credential helpers use root only in the one-shot setup container", () => {
     for (const helper of helpers) {
         assert.match(helper.content, /--user 0:0/, helper.name);
-        assert.match(helper.content, /--volume \/opt\/sirk-central:\/config/, helper.name);
+        assert.match(helper.content, /--volume (?:"\$\{INSTALL_DIR\}:\/config"|\/opt\/sirk-central:\/config)/, helper.name);
         assert.match(helper.content, /node scripts\/configure-production\.js/, helper.name);
         assert.match(helper.content, /chmod 0600 \.env/, helper.name);
     }
