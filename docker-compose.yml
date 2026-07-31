@@ -28,7 +28,7 @@ services:
     profiles: ["auth"]
     build: .
     restart: unless-stopped
-    command: ["node", "auth/server.js"]
+    command: ["node", "auth/hardened-server.js"]
     env_file: .env
     environment:
       SIRK_AUTH_BIND_HOST: 0.0.0.0
