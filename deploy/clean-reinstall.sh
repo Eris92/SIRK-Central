@@ -5,7 +5,8 @@ umask 077
 INSTALL_DIR="${SIRK_INSTALL_DIR:-/opt/sirk-central}"
 REPO_URL="${SIRK_REPO_URL:-https://github.com/Eris92/SIRK-Central.git}"
 REPO_REF="${SIRK_REPO_REF:-feat/central-production-hardening}"
-COMPOSE_FILE="docker-compose.yml"
+BASE_COMPOSE_FILE="docker-compose.yml"
+RUNTIME_COMPOSE_FILE="docker-compose.portal-runtime.yml"
 PRESERVE_ENV=1
 PURGE_DATA=0
 RUN_SMOKE=1
@@ -22,19 +23,16 @@ Usage:
   sudo bash clean-reinstall.sh [options]
 
 Options:
-  --preserve-env       Preserve the current .env file (default).
-  --new-env            Do not preserve .env; create a new configuration interactively.
+  --preserve-env       Preserve current .env (default).
+  --new-env            Create a new .env interactively.
   --purge-data         Delete application, updater and Caddy volumes.
-  --no-smoke           Skip deploy/smoke-test.sh after installation.
+  --no-smoke           Skip deploy/smoke-test.sh.
   --ref <branch|tag>   Git ref to clone.
   --repo <url>         Git repository URL.
   --install-dir <path> Installation directory.
-  -h, --help           Show help.
 
-Safety:
-  --purge-data permanently removes sessions, users, organizations, passkeys,
-  recovery-code hashes, WebAuthn challenges and Caddy certificates/state.
-  It requires the exact confirmation phrase: PURGE SIRK CENTRAL DATA
+--purge-data requires: PURGE SIRK CENTRAL DATA
+The privileged updater worker is always stopped/removed before checkout replacement.
 EOF
 }
 
@@ -55,8 +53,7 @@ done
 
 [[ "$(id -u)" -eq 0 ]] || die "run as root"
 [[ -t 0 && -t 1 ]] || die "interactive terminal required"
-command -v git >/dev/null 2>&1 || die "git is required"
-command -v docker >/dev/null 2>&1 || die "docker is required"
+for command in git docker; do command -v "$command" >/dev/null 2>&1 || die "$command is required"; done
 docker compose version >/dev/null 2>&1 || die "Docker Compose plugin is required"
 [[ "$INSTALL_DIR" == /* && "$INSTALL_DIR" != "/" ]] || die "unsafe installation path"
 
@@ -68,27 +65,24 @@ if [[ -d "$INSTALL_DIR" ]]; then
   if [[ "$PRESERVE_ENV" == "1" && -f "$INSTALL_DIR/.env" ]]; then
     cp -a "$INSTALL_DIR/.env" "$WORK_DIR/.env"
     chmod 0600 "$WORK_DIR/.env"
-    log "Production .env saved temporarily"
   fi
 
-  old_compose=""
-  [[ -f "$INSTALL_DIR/docker-compose.yml" ]] && old_compose="$INSTALL_DIR/docker-compose.yml"
-  [[ -z "$old_compose" && -f "$INSTALL_DIR/compose.yaml" ]] && old_compose="$INSTALL_DIR/compose.yaml"
-
-  if [[ -n "$old_compose" ]]; then
+  if [[ -f "$INSTALL_DIR/$BASE_COMPOSE_FILE" ]]; then
+    OLD_COMPOSE=(docker compose -f "$INSTALL_DIR/$BASE_COMPOSE_FILE")
+    [[ -f "$INSTALL_DIR/$RUNTIME_COMPOSE_FILE" ]] && OLD_COMPOSE+=(-f "$INSTALL_DIR/$RUNTIME_COMPOSE_FILE")
+    OLD_COMPOSE+=(--profile auth --profile maintenance)
     if [[ "$PURGE_DATA" == "1" ]]; then
-      printf '\nWARNING: this will permanently remove all SIRK Central application data and Caddy state.\n'
+      printf '\nWARNING: this permanently removes SIRK Central data and Caddy state.\n'
       read -r -p 'Type exactly "PURGE SIRK CENTRAL DATA": ' confirmation
       [[ "$confirmation" == "PURGE SIRK CENTRAL DATA" ]] || die "purge confirmation did not match"
-      log "Stopping stack and deleting project volumes"
-      docker compose -f "$old_compose" --profile auth down --volumes --remove-orphans
+      "${OLD_COMPOSE[@]}" down --volumes --remove-orphans
     else
-      log "Stopping stack while preserving named volumes"
-      docker compose -f "$old_compose" --profile auth down --remove-orphans
+      "${OLD_COMPOSE[@]}" down --remove-orphans
     fi
+  elif [[ -f "$INSTALL_DIR/compose.yaml" ]]; then
+    (cd "$INSTALL_DIR" && docker compose --profile auth down --remove-orphans) || true
   fi
 
-  log "Removing old checkout"
   cd /
   rm -rf --one-file-system "$INSTALL_DIR"
 fi
@@ -97,12 +91,9 @@ log "Cloning $REPO_URL ref $REPO_REF"
 install -d -m 0755 "$(dirname "$INSTALL_DIR")"
 git clone --branch "$REPO_REF" --single-branch "$REPO_URL" "$INSTALL_DIR"
 cd "$INSTALL_DIR"
-
-[[ -f "$COMPOSE_FILE" ]] || die "$COMPOSE_FILE is missing in the fresh checkout"
-if [[ -f compose.yaml ]]; then
-  log "Disabling obsolete compose.yaml to prevent automatic Compose selection"
-  mv compose.yaml compose.yaml.disabled
-fi
+[[ -f "$BASE_COMPOSE_FILE" && -f "$RUNTIME_COMPOSE_FILE" ]] || die "canonical Compose files are missing"
+[[ -f Dockerfile.portal-runtime && -f updater/Dockerfile.gateway ]] || die "canonical Dockerfiles are missing"
+if [[ -f compose.yaml ]]; then mv compose.yaml compose.yaml.disabled; fi
 
 if [[ "$PRESERVE_ENV" == "1" && -f "$WORK_DIR/.env" ]]; then
   install -m 0600 "$WORK_DIR/.env" "$INSTALL_DIR/.env"
@@ -119,27 +110,35 @@ else
   read -r -p 'BreakGlass username [admin]: ' SIRK_ADMIN_USERNAME
   SIRK_ADMIN_USERNAME="${SIRK_ADMIN_USERNAME:-admin}"
 
-  log "Building setup image and creating a brand-new .env"
   docker build --tag sirk-central:setup .
   docker run --rm -it \
     --user 0:0 \
-    --volume "${INSTALL_DIR}:/config" \
+    --volume "$INSTALL_DIR:/config" \
     --env SIRK_CONFIG_TARGET=/config \
-    --env "SIRK_WEBSITE_DOMAIN=${SIRK_WEBSITE_DOMAIN}" \
-    --env "SIRK_CENTRAL_DOMAIN=${SIRK_CENTRAL_DOMAIN}" \
-    --env "SIRK_AUTH_DOMAIN=${SIRK_AUTH_DOMAIN}" \
-    --env "SIRK_ACME_EMAIL=${SIRK_ACME_EMAIL}" \
-    --env "SIRK_ADMIN_USERNAME=${SIRK_ADMIN_USERNAME}" \
+    --env "SIRK_WEBSITE_DOMAIN=$SIRK_WEBSITE_DOMAIN" \
+    --env "SIRK_CENTRAL_DOMAIN=$SIRK_CENTRAL_DOMAIN" \
+    --env "SIRK_AUTH_DOMAIN=$SIRK_AUTH_DOMAIN" \
+    --env "SIRK_ACME_EMAIL=$SIRK_ACME_EMAIL" \
+    --env "SIRK_ADMIN_USERNAME=$SIRK_ADMIN_USERNAME" \
     sirk-central:setup node scripts/configure-production.js
   [[ -s .env ]] || die "configuration file was not created"
   chmod 0600 .env
 fi
 
-COMPOSE=(docker compose -f "$COMPOSE_FILE" --profile auth)
-log "Validating Compose configuration"
+COMPOSE=(docker compose -f "$BASE_COMPOSE_FILE" -f "$RUNTIME_COMPOSE_FILE" --profile auth)
+MAINTENANCE_COMPOSE=(docker compose -f "$BASE_COMPOSE_FILE" -f "$RUNTIME_COMPOSE_FILE" --profile auth --profile maintenance)
+SERVICES=(central auth updater-gateway backup-manager caddy)
+
+log "Validating canonical Compose configuration"
 "${COMPOSE[@]}" config >/dev/null
-log "Building and starting a completely fresh checkout"
-"${COMPOSE[@]}" up -d --build --remove-orphans central auth caddy
+mapfile -t active_services < <("${COMPOSE[@]}" config --services)
+printf '%s\n' "${active_services[@]}" >/tmp/sirk-clean-services.txt
+for service in "${SERVICES[@]}"; do grep -qx "$service" /tmp/sirk-clean-services.txt || die "missing service: $service"; done
+if grep -qx updater /tmp/sirk-clean-services.txt; then die "privileged updater is active in base profile"; fi
+
+log "Building and starting canonical base stack"
+"${COMPOSE[@]}" up -d --build --remove-orphans "${SERVICES[@]}"
+[[ -z "$("${MAINTENANCE_COMPOSE[@]}" ps -q updater)" ]] || die "privileged updater remains after clean reinstall"
 
 log "Waiting for container-local readiness"
 ready=0
@@ -150,16 +149,23 @@ for _ in $(seq 1 90); do
   fi
   sleep 2
 done
-[[ "$ready" == "1" ]] || { "${COMPOSE[@]}" ps >&2 || true; "${COMPOSE[@]}" logs --tail=200 central auth caddy >&2 || true; die "fresh installation did not become ready"; }
+[[ "$ready" == "1" ]] || {
+  "${COMPOSE[@]}" ps >&2 || true
+  "${COMPOSE[@]}" logs --tail=200 "${SERVICES[@]}" >&2 || true
+  die "fresh installation did not become ready"
+}
 
 if [[ "$RUN_SMOKE" == "1" ]]; then
-  chmod +x deploy/smoke-test.sh
-  SIRK_COMPOSE_FILE="$COMPOSE_FILE" SIRK_SMOKE_RESTART=1 bash deploy/smoke-test.sh
+  SIRK_COMPOSE_FILE="$BASE_COMPOSE_FILE" \
+  SIRK_RUNTIME_COMPOSE_FILE="$RUNTIME_COMPOSE_FILE" \
+  SIRK_SMOKE_RESTART=1 \
+  bash deploy/smoke-test.sh
 fi
 
 log "Clean reinstall completed"
 printf 'Checkout: %s\n' "$(git rev-parse HEAD)"
 printf 'Ref:      %s\n' "$REPO_REF"
 printf 'Path:     %s\n' "$INSTALL_DIR"
-printf 'Compose:  %s\n' "$COMPOSE_FILE"
+printf 'Compose:  %s + %s\n' "$BASE_COMPOSE_FILE" "$RUNTIME_COMPOSE_FILE"
+printf 'Worker:   stopped (gateway active)\n'
 printf 'Data:     %s\n' "$([[ "$PURGE_DATA" == "1" ]] && echo 'purged' || echo 'preserved in Docker volumes')"
