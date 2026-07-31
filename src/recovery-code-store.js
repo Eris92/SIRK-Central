@@ -59,6 +59,15 @@ function create(options) {
         return plaintext;
     }
 
+    function registerFailure(record, timestamp) {
+        record.failedAttempts = Number(record.failedAttempts || 0) + 1;
+        if (record.failedAttempts >= 5) {
+            record.blockedUntil = timestamp + 15 * 60_000;
+            record.failedAttempts = 0;
+        }
+        persist();
+    }
+
     function verify(identity, suppliedCode) {
         const owner = ownerKey(identity);
         const record = state.owners[owner];
@@ -66,7 +75,10 @@ function create(options) {
         const timestamp = now();
         if (record.blockedUntil > timestamp) throw new Error("Recovery-code verification is temporarily blocked.");
         const normalized = normalizeCode(suppliedCode);
-        if (normalized.length < 12 || normalized.length > 32) throw new Error("Recovery code is invalid.");
+        if (normalized.length < 12 || normalized.length > 32) {
+            registerFailure(record, timestamp);
+            throw new Error("Recovery code is invalid.");
+        }
         const candidate = codeHash(owner, normalized, record.salt);
         const candidateBuffer = Buffer.from(candidate);
         let matched = null;
@@ -79,12 +91,7 @@ function create(options) {
             }
         }
         if (!matched) {
-            record.failedAttempts = Number(record.failedAttempts || 0) + 1;
-            if (record.failedAttempts >= 5) {
-                record.blockedUntil = timestamp + 15 * 60_000;
-                record.failedAttempts = 0;
-            }
-            persist();
+            registerFailure(record, timestamp);
             throw new Error("Recovery code is invalid.");
         }
         matched.usedAtUtc = new Date(timestamp).toISOString();
