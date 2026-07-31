@@ -6,12 +6,14 @@ const ticketStoreFactory = require("./ticket-projection-store");
 const rateLimiterFactory = require("./request-rate-limiter");
 const ssoCallbackFactory = require("./sso-callback-handler");
 const centralOperationGuard = require("./central-operation-guard");
+const auditIntegrityGuard = require("./audit-integrity-guard");
+const portalUpgradeGuardFactory = require("./portal-upgrade-guard");
 const runtimeLockFactory = require("./runtime-lock");
 const { identityActive } = require("./rbac");
 const { loadConfig } = require("./server-v1");
 const { parseCookies } = require("./server-v8");
 
-const VERSION = "1.0.0-rc.24";
+const VERSION = "1.0.0-rc.25";
 
 function json(res, status, body, headers = {}) {
     const data = Buffer.from(JSON.stringify(body));
@@ -174,33 +176,45 @@ function createTicketRuntime(config) {
     });
 
     let app;
+    let ssoCallback;
+    let tickets;
+    let preAuthLimiter;
+    let ingestionLimiter;
+    let upgradeGuard;
     try {
         app = createPortalOperationsRuntime(config);
+        const inner = app.server.listeners("request")[0];
+        if (typeof inner !== "function") throw new Error("SIRK Central v14 request handler is unavailable.");
+        app.innerRequestHandler = inner;
+        ssoCallback = ssoCallbackFactory.create({ app, config });
+        tickets = ticketStoreFactory.create({
+            dataDir: config.dataDir,
+            maxTickets: Number(config.env.SIRK_TICKET_MAX_PROJECTIONS || 25000),
+            maxEventIdsPerPortal: Number(config.env.SIRK_TICKET_EVENT_ID_RETENTION || 2000)
+        });
+        preAuthLimiter = rateLimiterFactory.create({
+            limit: Number(config.env.SIRK_PORTAL_AUTH_RATE_LIMIT || 120),
+            windowMs: Number(config.env.SIRK_PORTAL_AUTH_RATE_WINDOW_MS || 60000),
+            maxEntries: Number(config.env.SIRK_PORTAL_RATE_LIMIT_MAX_KEYS || 20000)
+        });
+        ingestionLimiter = rateLimiterFactory.create({
+            limit: Number(config.env.SIRK_TICKET_INGEST_RATE_LIMIT || 120),
+            windowMs: Number(config.env.SIRK_TICKET_INGEST_RATE_WINDOW_MS || 60000),
+            maxEntries: Number(config.env.SIRK_PORTAL_RATE_LIMIT_MAX_KEYS || 20000)
+        });
+        upgradeGuard = portalUpgradeGuardFactory.create({
+            app,
+            config,
+            portalCredential,
+            requestIp,
+            precondition: () => auditIntegrityGuard.integrity(app)
+        });
     } catch (error) {
         if (runtimeLock) runtimeLock.release();
         throw error;
     }
-    const inner = app.server.listeners("request")[0];
-    if (typeof inner !== "function") {
-        if (runtimeLock) runtimeLock.release();
-        throw new Error("SIRK Central v14 request handler is unavailable.");
-    }
-    const ssoCallback = ssoCallbackFactory.create({ app, config });
-    const tickets = ticketStoreFactory.create({
-        dataDir: config.dataDir,
-        maxTickets: Number(config.env.SIRK_TICKET_MAX_PROJECTIONS || 25000),
-        maxEventIdsPerPortal: Number(config.env.SIRK_TICKET_EVENT_ID_RETENTION || 2000)
-    });
-    const preAuthLimiter = rateLimiterFactory.create({
-        limit: Number(config.env.SIRK_PORTAL_AUTH_RATE_LIMIT || 120),
-        windowMs: Number(config.env.SIRK_PORTAL_AUTH_RATE_WINDOW_MS || 60000),
-        maxEntries: Number(config.env.SIRK_PORTAL_RATE_LIMIT_MAX_KEYS || 20000)
-    });
-    const ingestionLimiter = rateLimiterFactory.create({
-        limit: Number(config.env.SIRK_TICKET_INGEST_RATE_LIMIT || 120),
-        windowMs: Number(config.env.SIRK_TICKET_INGEST_RATE_WINDOW_MS || 60000),
-        maxEntries: Number(config.env.SIRK_PORTAL_RATE_LIMIT_MAX_KEYS || 20000)
-    });
+    const inner = app.innerRequestHandler;
+    delete app.innerRequestHandler;
 
     function portalRequest(req, res, route) {
         if (!consumeOrReject(res, preAuthLimiter, route + ":ip:" + requestIp(req, config))) return { handled: true, portal: null };
@@ -213,6 +227,8 @@ function createTicketRuntime(config) {
     const server = http.createServer(async (req, res) => {
         try {
             const url = new URL(req.url, "http://central.local");
+            const auditDecision = auditIntegrityGuard.evaluate(app, req, url.pathname);
+            if (auditDecision.handled) return json(res, auditDecision.status, auditDecision.body);
             const operationDecision = centralOperationGuard.evaluate(actorFor(app, req), req.method, url.pathname);
             if (operationDecision.handled) return json(res, operationDecision.status, { ok: false, code: "OPERATION_ROLE_REQUIRED", error: operationDecision.error });
             if (ssoCallback.handler(req, res, url)) return;
@@ -373,9 +389,9 @@ function createTicketRuntime(config) {
     server.requestTimeout = 30000;
     server.headersTimeout = 15000;
     server.keepAliveTimeout = 5000;
-    server.on("upgrade", (req, socket, head) => app.server.emit("upgrade", req, socket, head));
+    server.on("upgrade", (req, socket, head) => upgradeGuard.handle(req, socket, head, (forwardReq, forwardSocket, forwardHead) => app.server.emit("upgrade", forwardReq, forwardSocket, forwardHead)));
     server.on("close", () => { if (runtimeLock) runtimeLock.release(); });
-    return Object.assign({}, app, { server, version: VERSION, ticketProjections: tickets, ssoReplay: ssoCallback.replay, runtimeLock });
+    return Object.assign({}, app, { server, version: VERSION, ticketProjections: tickets, ssoReplay: ssoCallback.replay, runtimeLock, portalUpgradeGuard: upgradeGuard });
 }
 
 if (require.main === module) {
