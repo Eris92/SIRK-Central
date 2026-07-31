@@ -55,7 +55,7 @@ rollback() {
     fi
     if [[ "$DEPLOY_STARTED" -eq 1 ]]; then
       compose config >/dev/null || true
-      compose build central auth updater || true
+      compose build central auth || true
       compose up -d --force-recreate --remove-orphans central auth caddy || true
     fi
   fi
@@ -117,10 +117,13 @@ npm ci
 npm test
 compose config >/dev/null
 
-write_status running "Building updated services." "$TARGET_COMMIT"
-compose build --pull central auth updater
+# The updater deliberately does not rebuild or recreate itself from inside its
+# own container. Doing so can terminate the Compose client before Docker has
+# created the replacement, leaving the updater service absent from the network.
+write_status running "Building updated application services." "$TARGET_COMMIT"
+compose build --pull central auth
 
-write_status running "Deploying updated services." "$TARGET_COMMIT"
+write_status running "Deploying updated application services." "$TARGET_COMMIT"
 DEPLOY_STARTED=1
 compose up -d --force-recreate --remove-orphans central auth caddy
 
@@ -136,7 +139,4 @@ done
 CENTRAL_DOMAIN="${SIRK_CENTRAL_DOMAIN:-central.sirkportal.com}"
 curl -fsS --max-time 10 "https://${CENTRAL_DOMAIN}/healthz" >/dev/null
 
-write_status completed "Update completed successfully." "$TARGET_COMMIT"
-# Recreating this container terminates this process, so the completed state is
-# persisted first.
-compose up -d --force-recreate updater || true
+write_status completed "Update completed successfully. The updater service remains on its current image and must be upgraded by the host deployment procedure when its own code changes." "$TARGET_COMMIT"
