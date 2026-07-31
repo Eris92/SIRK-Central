@@ -5,11 +5,12 @@ const { createPortalOperationsRuntime } = require("./server-v14");
 const ticketStoreFactory = require("./ticket-projection-store");
 const rateLimiterFactory = require("./request-rate-limiter");
 const ssoCallbackFactory = require("./sso-callback-handler");
+const centralOperationGuard = require("./central-operation-guard");
 const { identityActive } = require("./rbac");
 const { loadConfig } = require("./server-v1");
 const { parseCookies } = require("./server-v8");
 
-const VERSION = "1.0.0-rc.22";
+const VERSION = "1.0.0-rc.23";
 
 function json(res, status, body, headers = {}) {
     const data = Buffer.from(JSON.stringify(body));
@@ -179,6 +180,8 @@ function createTicketRuntime(config) {
     const server = http.createServer(async (req, res) => {
         try {
             const url = new URL(req.url, "http://central.local");
+            const operationDecision = centralOperationGuard.evaluate(actorFor(app, req), req.method, url.pathname);
+            if (operationDecision.handled) return json(res, operationDecision.status, { ok: false, code: "OPERATION_ROLE_REQUIRED", error: operationDecision.error });
             if (ssoCallback.handler(req, res, url)) return;
 
             if (req.method === "GET" && url.pathname === "/api/portal/v1/ticket-policy") {
