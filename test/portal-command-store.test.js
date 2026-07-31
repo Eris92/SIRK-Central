@@ -6,6 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 const commandStore = require("../src/portal-command-store");
+const { approvedOperation } = require("../src/server-v14");
 
 function temporaryDirectory() { return fs.mkdtempSync(path.join(os.tmpdir(), "sirk-command-")); }
 const actor = { username: "engineer", identityKey: "tenant:engineer", role: "EngineerL3" };
@@ -50,4 +51,21 @@ test("expired and failed commands can be retried while active commands can be ca
     store.expire();
     assert.equal(store.get(retried.id).state, "expired");
     assert.equal(store.retry(retried.id, actor).state, "queued");
+});
+
+test("high-risk approval is exact-scope and single-use", () => {
+    let request = {
+        id: "apr-high-risk",
+        type: "operation.high-risk",
+        state: "approved",
+        scope: { portalId: "tenant-site" },
+        payload: { operation: "restart" },
+        execution: null
+    };
+    const app = { approvals: { get: id => id === request.id ? structuredClone(request) : null } };
+    assert.ok(approvedOperation(app, request.id, "tenant-site", "restart"));
+    assert.equal(approvedOperation(app, request.id, "other-site", "restart"), null);
+    assert.equal(approvedOperation(app, request.id, "tenant-site", "update"), null);
+    request.execution = { state: "completed", commandId: "cmd-used" };
+    assert.equal(approvedOperation(app, request.id, "tenant-site", "restart"), null);
 });
