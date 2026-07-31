@@ -8,8 +8,8 @@ services:
       SIRK_PUBLIC_ORIGIN: https://${SIRK_CENTRAL_DOMAIN:-central.sirkportal.com}
       SIRK_AUTH_ORIGIN: ${SIRK_AUTH_ORIGIN:-}
       SIRK_SSO_SHARED_SECRET: ${SIRK_SSO_SHARED_SECRET:-}
-      SIRK_UPDATER_ORIGIN: http://updater:8090
-      SIRK_UPDATER_ALLOWED_HOSTS: updater
+      SIRK_UPDATER_ORIGIN: http://updater-gateway:8092
+      SIRK_UPDATER_ALLOWED_HOSTS: updater-gateway
     volumes:
       - central-data:/var/lib/sirk-central
     networks:
@@ -46,6 +46,34 @@ services:
       interval: 20s
       timeout: 5s
       start_period: 15s
+      retries: 5
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  updater-gateway:
+    build:
+      context: .
+      dockerfile: updater/Dockerfile
+    restart: unless-stopped
+    user: node
+    command: ["node", "/app/gateway-server.js"]
+    env_file: .env
+    environment:
+      SIRK_UPDATER_GATEWAY_BIND_HOST: 0.0.0.0
+      SIRK_UPDATER_GATEWAY_PORT: 8092
+      SIRK_UPDATER_WORKER_ORIGIN: http://updater:8090
+      SIRK_UPDATER_WORKER_ALLOWED_HOSTS: updater
+      SIRK_UPDATER_GATEWAY_TIMEOUT_MS: 35000
+      SIRK_UPDATER_GATEWAY_MAX_BODY_BYTES: 2097152
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8092/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 20s
+      timeout: 5s
+      start_period: 10s
       retries: 5
     security_opt:
       - no-new-privileges:true
