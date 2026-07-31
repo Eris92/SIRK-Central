@@ -31,6 +31,7 @@ function createRuntimeApp(config) {
     const operationsBootstrapPath = path.join(__dirname, "..", "public", "operations-bootstrap.js");
     const updateStatusResiliencePath = path.join(__dirname, "..", "public", "update-status-resilience.js");
     const auditUiPath = path.join(__dirname, "..", "public", "audit-ui.js");
+    const dashboardUiPath = path.join(__dirname, "..", "public", "dashboard-ui.js");
     const server = http.createServer((req, res) => {
         try {
             const url = new URL(req.url, "http://central.local");
@@ -54,7 +55,9 @@ function createRuntimeApp(config) {
                     Buffer.from("\n"),
                     fs.readFileSync(updateStatusResiliencePath),
                     Buffer.from("\n"),
-                    fs.readFileSync(auditUiPath)
+                    fs.readFileSync(auditUiPath),
+                    Buffer.from("\n"),
+                    fs.readFileSync(dashboardUiPath)
                 ]);
                 res.writeHead(200, Object.assign(securityHeaders(), { "Content-Type": "text/javascript; charset=utf-8", "Content-Length": String(data.length), "Cache-Control": "no-store" }));
                 return res.end(req.method === "HEAD" ? undefined : data);
@@ -65,7 +68,7 @@ function createRuntimeApp(config) {
                 return res.end(req.method === "HEAD" ? undefined : data);
             }
             if (req.method === "GET" && url.pathname === "/readyz") {
-                const checks = { passkeyStore: Boolean(app.passkeys && app.passkeys.filePath), webauthnChallenges: Boolean(app.webauthnChallenges && app.webauthnChallenges.filePath), loginTransactions: Boolean(app.loginTransactions && app.loginTransactions.filePath), passkeyUi: fs.existsSync(uiPath) && fs.existsSync(uiPolishPath) && fs.existsSync(passkeyCleanupPath) && fs.existsSync(operationsUiPath) && fs.existsSync(operationsActionsPath) && fs.existsSync(centralUxPath) && fs.existsSync(operationsBootstrapPath) && fs.existsSync(updateStatusResiliencePath) && fs.existsSync(auditUiPath), attestationBridge: fs.existsSync(bridgePath), attestationParser: true };
+                const checks = { passkeyStore: Boolean(app.passkeys && app.passkeys.filePath), webauthnChallenges: Boolean(app.webauthnChallenges && app.webauthnChallenges.filePath), loginTransactions: Boolean(app.loginTransactions && app.loginTransactions.filePath), passkeyUi: fs.existsSync(uiPath) && fs.existsSync(uiPolishPath) && fs.existsSync(passkeyCleanupPath) && fs.existsSync(operationsUiPath) && fs.existsSync(operationsActionsPath) && fs.existsSync(centralUxPath) && fs.existsSync(operationsBootstrapPath) && fs.existsSync(updateStatusResiliencePath) && fs.existsSync(auditUiPath) && fs.existsSync(dashboardUiPath), attestationBridge: fs.existsSync(bridgePath), attestationParser: true };
                 const ok = Object.values(checks).every(Boolean);
                 return json(res, ok ? 200 : 503, { ok, version: VERSION, checks });
             }
