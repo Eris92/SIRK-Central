@@ -9,6 +9,7 @@ PROFILE_ARGS=(--profile auth)
 PUBLIC_URL="${SIRK_ACCEPTANCE_PUBLIC_URL:-}"
 SKIP_BUILD="${SIRK_ACCEPTANCE_SKIP_BUILD:-false}"
 SKIP_LIVE="${SIRK_ACCEPTANCE_SKIP_LIVE:-false}"
+RUN_SIMULATOR="${SIRK_ACCEPTANCE_RUN_SIMULATOR:-false}"
 
 log() { printf '\n==> %s\n' "$*"; }
 fail() { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
@@ -42,18 +43,14 @@ log "Runtime contract"
 node - <<'NODE'
 const fs = require('node:fs');
 const pkg = require('./package.json');
-if (pkg.main !== 'src/server-v14.js') throw new Error('package.json main is not server-v14.js');
-if (!String(pkg.scripts.start).includes('server-v14.js')) throw new Error('npm start is not server-v14.js');
+if (pkg.main !== 'src/server-v15.js') throw new Error('package.json main is not server-v15.js');
+if (!String(pkg.scripts.start).includes('server-v15.js')) throw new Error('npm start is not server-v15.js');
 const dockerfile = fs.readFileSync('Dockerfile.portal-runtime', 'utf8');
-if (!dockerfile.includes('CMD ["node", "src/server-v14.js"]')) throw new Error('Docker runtime is not server-v14.js');
+if (!dockerfile.includes('CMD ["node", "src/server-v15.js"]')) throw new Error('Docker runtime is not server-v15.js');
 for (const required of [
-  'src/server-v14.js',
-  'src/portal-command-store.js',
-  'public/approval-center-ui.js',
-  'public/portal-operations-ui.js',
-  'public/portal-monitoring-ui.js',
-  'public/portal-monitoring-ui.css',
-  'docs/SECURITY-AUDIT-2026-07-31.md'
+  'src/server-v15.js','src/ticket-projection-store.js','src/portal-command-store.js',
+  'public/approval-center-ui.js','public/portal-operations-ui.js','public/portal-monitoring-ui.js','public/portal-monitoring-ui.css',
+  'public/tickets-ui.js','public/tickets-ui.css','scripts/portal-simulator.js','docs/SECURITY-AUDIT-2026-07-31.md'
 ]) if (!fs.existsSync(required)) throw new Error('Missing ' + required);
 NODE
 
@@ -74,10 +71,7 @@ test -n "$central_id" || fail "Central container was not created."
 for _ in $(seq 1 60); do
   state="$(docker inspect "$central_id" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}')"
   [[ "$state" == "healthy" ]] && break
-  [[ "$state" == "unhealthy" || "$state" == "exited" || "$state" == "dead" ]] && {
-    docker compose "${COMPOSE_FILES[@]}" logs --tail=200 central
-    fail "Central state is $state"
-  }
+  [[ "$state" == "unhealthy" || "$state" == "exited" || "$state" == "dead" ]] && { docker compose "${COMPOSE_FILES[@]}" logs --tail=200 central; fail "Central state is $state"; }
   sleep 2
 done
 state="$(docker inspect "$central_id" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}')"
@@ -95,8 +89,7 @@ image="$(docker inspect "$central_id" --format '{{.Image}}')"
 
 if [[ "$SKIP_LIVE" != "true" && -n "$PUBLIC_URL" ]]; then
   log "External HTTPS and security headers"
-  headers="$(mktemp)"
-  body="$(mktemp)"
+  headers="$(mktemp)"; body="$(mktemp)"
   curl --fail --silent --show-error --location --max-time 20 --dump-header "$headers" --output "$body" "$PUBLIC_URL/readyz"
   grep -qi '^strict-transport-security:' "$headers" || fail "HSTS header missing."
   grep -qi '^x-content-type-options:[[:space:]]*nosniff' "$headers" || fail "X-Content-Type-Options missing."
@@ -104,7 +97,15 @@ if [[ "$SKIP_LIVE" != "true" && -n "$PUBLIC_URL" ]]; then
   node -e 'const fs=require("node:fs");const body=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));if(!body.ok)process.exit(1)' "$body"
 fi
 
+if [[ "$RUN_SIMULATOR" == "true" ]]; then
+  : "${SIRK_SIMULATOR_ORIGIN:?Set SIRK_SIMULATOR_ORIGIN}"
+  : "${SIRK_SIMULATOR_PORTAL_ID:?Set SIRK_SIMULATOR_PORTAL_ID}"
+  : "${SIRK_SIMULATOR_PORTAL_TOKEN:?Set SIRK_SIMULATOR_PORTAL_TOKEN}"
+  log "Portal heartbeat, ticket and command protocol simulator"
+  node scripts/portal-simulator.js
+fi
+
 log "Acceptance checks completed"
 printf 'HEAD=%s\n' "$(git rev-parse HEAD)"
 printf 'Central=%s\n' "$state"
-printf 'Next manual checks: Playwright workflow, YubiKey, backup/restore, update/rollback, Portal simulator, PL/EN visual review.\n'
+printf 'Next manual checks: Playwright artifacts, YubiKey, backup/restore, update/rollback, PL/EN and responsive visual review.\n'
