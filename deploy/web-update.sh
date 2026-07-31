@@ -6,6 +6,7 @@ INSTALL_DIR="${SIRK_INSTALL_DIR:-/opt/sirk-central}"
 STATE_DIR="${SIRK_UPDATER_STATE_DIR:-/var/lib/sirk-updater}"
 STATUS_FILE="${STATE_DIR}/status.json"
 LOCK_DIR="${STATE_DIR}/update.lock"
+LOCK_PID_FILE="${LOCK_DIR}/pid"
 LOG_FILE="${STATE_DIR}/update-$(date -u +%Y%m%dT%H%M%SZ).log"
 STARTED_AT="${SIRK_UPDATE_STARTED_AT:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
 REQUESTED_BY="${SIRK_UPDATE_REQUESTED_BY:-unknown}"
@@ -70,7 +71,31 @@ fail() {
 }
 trap fail ERR
 
-if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+acquire_lock() {
+  if mkdir "$LOCK_DIR" 2>/dev/null; then
+    printf '%s\n' "$$" > "$LOCK_PID_FILE"
+    chmod 0600 "$LOCK_PID_FILE"
+    return 0
+  fi
+
+  local existing_pid=""
+  if [[ -f "$LOCK_PID_FILE" ]]; then
+    existing_pid="$(cat "$LOCK_PID_FILE" 2>/dev/null || true)"
+  fi
+
+  if [[ "$existing_pid" =~ ^[0-9]+$ ]] && kill -0 "$existing_pid" 2>/dev/null; then
+    return 1
+  fi
+
+  # The owner process no longer exists, or the legacy lock has no PID.
+  # Remove only the dedicated updater lock directory and retry atomically.
+  rm -rf "$LOCK_DIR"
+  mkdir "$LOCK_DIR"
+  printf '%s\n' "$$" > "$LOCK_PID_FILE"
+  chmod 0600 "$LOCK_PID_FILE"
+}
+
+if ! acquire_lock; then
   write_status failed "Another update is already running."
   exit 1
 fi
