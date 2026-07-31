@@ -15,26 +15,79 @@
         return body;
     }
 
+    async function runtimeHealthy() {
+        try {
+            const response = await fetch("/readyz", {
+                credentials: "same-origin",
+                cache: "no-store"
+            });
+            return response.ok;
+        } catch (_) {
+            return false;
+        }
+    }
+
+    function containsLogPath(message, logFile) {
+        return Boolean(message && logFile && String(message).includes(String(logFile)));
+    }
+
     async function refreshUpdateDiagnostics() {
         const statusTarget = document.getElementById("updateStatus");
         const messageTarget = document.getElementById("updateMessage");
+        const runButton = document.getElementById("runUpdateButton");
         if (!statusTarget || !messageTarget) return;
+
         try {
             const result = await api("/api/settings/update/status");
             const status = result.status || {};
+            const state = String(status.state || "idle");
+            const message = String(status.message || "");
+            const rollbackAttempted = state === "failed" && /rollback|previous version|poprzedni/i.test(message);
+            const healthyAfterRollback = rollbackAttempted ? await runtimeHealthy() : false;
             const details = [];
-            if (status.message) details.push(status.message);
-            if (status.error) details.push(status.error);
-            if (status.exitCode !== undefined && status.exitCode !== null) details.push(text("Kod zakończenia", "Exit code") + ": " + status.exitCode);
-            if (status.logFile) details.push(text("Log", "Log") + ": " + status.logFile);
-            if (details.length) {
-                messageTarget.textContent = details.join(" · ");
-                messageTarget.className = status.state === "failed" ? "error" : status.state === "completed" ? "success" : "muted";
+
+            if (rollbackAttempted && healthyAfterRollback) {
+                details.push(text(
+                    "Aktualizacja nie powiodła się, ale poprzednia wersja została przywrócona. System działa prawidłowo.",
+                    "The update failed, but the previous version was restored. The system is operational."
+                ));
+            } else if (message) {
+                details.push(message);
             }
+
+            if (status.error) details.push(String(status.error));
+            if (status.exitCode !== undefined && status.exitCode !== null) {
+                details.push(text("Kod zakończenia", "Exit code") + ": " + status.exitCode);
+            }
+            if (status.logFile && !containsLogPath(message, status.logFile)) {
+                details.push(text("Log", "Log") + ": " + status.logFile);
+            }
+
+            messageTarget.textContent = details.join(" · ");
+            if (rollbackAttempted && healthyAfterRollback) {
+                messageTarget.className = "success";
+                statusTarget.className = "muted";
+            } else if (state === "failed") {
+                messageTarget.className = "error";
+                statusTarget.className = "error";
+            } else if (state === "completed") {
+                messageTarget.className = "success";
+                statusTarget.className = "muted";
+            } else {
+                messageTarget.className = "muted";
+                statusTarget.className = "muted";
+            }
+
+            if (runButton) runButton.disabled = Boolean(status.running);
             if (status.running) setTimeout(refreshUpdateDiagnostics, 2500);
         } catch (error) {
-            messageTarget.textContent = error.message;
-            messageTarget.className = "error";
+            messageTarget.textContent = text(
+                "Trwa ponowne łączenie z usługą aktualizacji…",
+                "Reconnecting to the update service…"
+            );
+            messageTarget.className = "muted";
+            if (runButton) runButton.disabled = true;
+            setTimeout(refreshUpdateDiagnostics, 3000);
         }
     }
 
