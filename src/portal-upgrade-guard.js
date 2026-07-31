@@ -30,6 +30,7 @@ function create(options) {
     const config = options.config;
     const parseCredential = options.portalCredential;
     const requestIp = options.requestIp;
+    const precondition = typeof options.precondition === "function" ? options.precondition : () => ({ ok: true });
     if (!app || typeof parseCredential !== "function" || typeof requestIp !== "function") {
         throw new Error("Portal upgrade guard dependencies are required.");
     }
@@ -60,6 +61,11 @@ function create(options) {
         if (Buffer.isBuffer(head) && head.length > 4096) return reject(socket, "413 Payload Too Large", "Upgrade payload is too large.");
         const origin = String(req.headers.origin || "").replace(/\/+$/, "");
         if (origin && !origins.has(origin)) return reject(socket, "403 Forbidden", "Origin rejected.");
+
+        const prerequisite = precondition(req);
+        if (!prerequisite || prerequisite.ok !== true) {
+            return reject(socket, "503 Service Unavailable", "Portal tunnels are temporarily unavailable.", { "Retry-After": String(prerequisite && prerequisite.retryAfterSeconds || 60) });
+        }
 
         const ipResult = preAuth.consume("ip:" + requestIp(req, config));
         if (!ipResult.allowed) return reject(socket, "429 Too Many Requests", "Too many connection attempts.", { "Retry-After": String(ipResult.retryAfterSeconds) });
