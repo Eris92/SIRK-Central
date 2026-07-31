@@ -76,8 +76,11 @@ if ! mkdir "$LOCK_DIR" 2>/dev/null; then
 fi
 trap 'rm -rf "$LOCK_DIR"' EXIT
 
-exec > >(tee -a "$LOG_FILE") 2>&1
+# Create and secure the log synchronously before tee starts in a process
+# substitution. Otherwise chmod can race with tee and abort the update.
+: > "$LOG_FILE"
 chmod 0600 "$LOG_FILE"
+exec > >(tee -a "$LOG_FILE") 2>&1
 write_status running "Preparing update."
 
 [[ -d "$INSTALL_DIR/.git" ]]
