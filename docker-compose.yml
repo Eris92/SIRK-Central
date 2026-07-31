@@ -63,7 +63,9 @@ services:
       SIRK_BACKUP_SOURCE_DIR: /var/lib/sirk-central
       SIRK_BACKUP_DIR: /var/lib/sirk-updater/backups
       SIRK_BACKUP_TIME_ZONE: ${SIRK_BACKUP_TIME_ZONE:-Europe/Warsaw}
-      SIRK_COMPOSE_FILE: /opt/sirk-central/docker-compose.yml
+      SIRK_BACKUP_ALLOW_LEGACY_WITHOUT_CHECKSUM: ${SIRK_BACKUP_ALLOW_LEGACY_WITHOUT_CHECKSUM:-false}
+      SIRK_COMPOSE_FILES: /opt/sirk-central/docker-compose.yml:/opt/sirk-central/docker-compose.portal-runtime.yml
+      SIRK_COMPOSE_PROFILES: auth
       SIRK_INSTALL_DIR: /opt/sirk-central
       SIRK_REPO_REF: ${SIRK_REPO_REF:-}
     volumes:
@@ -74,6 +76,10 @@ services:
       - updater-state:/var/lib/sirk-updater
     networks:
       - internal
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
 
   caddy:
     image: caddy:2.10.0-alpine
