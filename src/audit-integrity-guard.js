@@ -23,11 +23,15 @@ function mutatingRequest(req, pathname) {
 }
 
 function evaluate(app, req, pathname) {
+    const readiness = pathname === "/readyz";
+    const mutation = mutatingRequest(req, pathname);
+    if (!readiness && !mutation) return { handled: false, status: 0, body: null, integrity: null };
+
     const result = integrity(app);
-    if (pathname === "/readyz" && !result.ok) {
+    if (readiness && !result.ok) {
         return { handled: true, status: 503, body: { ok: false, code: "AUDIT_INTEGRITY_FAILED", error: "Audit trail integrity verification failed.", checks: { auditIntegrity: false }, integrity: result } };
     }
-    if (mutatingRequest(req, pathname) && !result.ok) {
+    if (mutation && !result.ok) {
         return { handled: true, status: 503, body: { ok: false, code: "AUDIT_INTEGRITY_FAILED", error: "Mutating operations are disabled until audit trail integrity is restored." } };
     }
     return { handled: false, status: 0, body: null, integrity: result };
