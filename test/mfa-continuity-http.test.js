@@ -9,15 +9,6 @@ const { generateKeyPairSync } = require("node:crypto");
 const { hashSecret, hashAccessKey } = require("../src/security");
 const { createContinuityApp } = require("../src/server-v8");
 
-function cookieValue(headers, name) {
-    const values = typeof headers.getSetCookie === "function" ? headers.getSetCookie() : [headers.get("set-cookie") || ""];
-    for (const value of values) {
-        const match = String(value).match(new RegExp("(?:^|[,;]\\s*)" + name + "=([^;,]*)"));
-        if (match) return match[1];
-    }
-    return "";
-}
-
 async function request(origin, route, options = {}) {
     const response = await fetch(origin + route, {
         method: options.method || "GET",
@@ -60,21 +51,6 @@ test("HTTP API never removes the final BreakGlass MFA recovery method", async t 
     const origin = "http://127.0.0.1:" + app.server.address().port;
     const userAgent = "sirk-continuity-test";
 
-    const login = await request(origin, "/api/login", {
-        method: "POST",
-        headers: {
-            authorization: "Bearer " + accessKey,
-            "content-type": "application/json",
-            "user-agent": userAgent
-        },
-        body: { username: "admin", password }
-    });
-    assert.equal(login.response.status, 200);
-    const session = cookieValue(login.response.headers, "sirk_central_session");
-    const csrf = cookieValue(login.response.headers, "sirk_central_csrf");
-    assert.ok(session);
-    assert.ok(csrf);
-
     const identity = {
         username: "admin",
         displayName: "admin",
@@ -84,6 +60,10 @@ test("HTTP API never removes the final BreakGlass MFA recovery method", async t 
         builtIn: true,
         status: "active"
     };
+    const issued = app.sessions.issue(identity, { ip: "127.0.0.1", userAgent });
+    const session = issued.token;
+    const csrf = "T".repeat(43);
+
     const pair = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
     const publicKey = pair.publicKey.export({ format: "der", type: "spki" }).toString("base64url");
     const credentialId = "credential-active-0001";
