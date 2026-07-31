@@ -6,11 +6,12 @@ const ticketStoreFactory = require("./ticket-projection-store");
 const rateLimiterFactory = require("./request-rate-limiter");
 const ssoCallbackFactory = require("./sso-callback-handler");
 const centralOperationGuard = require("./central-operation-guard");
+const runtimeLockFactory = require("./runtime-lock");
 const { identityActive } = require("./rbac");
 const { loadConfig } = require("./server-v1");
 const { parseCookies } = require("./server-v8");
 
-const VERSION = "1.0.0-rc.23";
+const VERSION = "1.0.0-rc.24";
 
 function json(res, status, body, headers = {}) {
     const data = Buffer.from(JSON.stringify(body));
@@ -147,11 +148,43 @@ function validateFilter(filter, tickets) {
     if (filter.priority && !tickets.PRIORITIES.includes(filter.priority)) throw Object.assign(new Error("Unsupported ticket priority filter."), { statusCode: 400, code: "TICKET_PRIORITY_INVALID" });
     if (filter.portalId && !/^[a-z0-9][a-z0-9._:-]{1,127}$/.test(filter.portalId)) throw Object.assign(new Error("Portal ID filter is invalid."), { statusCode: 400, code: "PORTAL_ID_INVALID" });
 }
+function eventErrorResult(index, error) {
+    const status = Number.isInteger(error && error.statusCode) && error.statusCode >= 400 && error.statusCode <= 599
+        ? error.statusCode
+        : 500;
+    return {
+        index,
+        rejected: true,
+        status,
+        retryable: status === 429 || status >= 500,
+        code: error && error.code || "TICKET_EVENT_REJECTED",
+        error: status < 500 ? String(error && error.message || "Ticket event was rejected.") : "Ticket event was rejected."
+    };
+}
 
 function createTicketRuntime(config) {
-    const app = createPortalOperationsRuntime(config);
+    const lockDisabled = String(config.env.SIRK_RUNTIME_LOCK_DISABLED || "").toLowerCase() === "true";
+    if (lockDisabled && String(config.env.NODE_ENV || "").toLowerCase() === "production") {
+        throw Object.assign(new Error("SIRK_RUNTIME_LOCK_DISABLED is forbidden in production."), { code: "RUNTIME_LOCK_REQUIRED", statusCode: 503 });
+    }
+    const runtimeLock = lockDisabled ? null : runtimeLockFactory.acquire({
+        dataDir: config.dataDir,
+        staleMs: Number(config.env.SIRK_RUNTIME_LOCK_STALE_MS || 120000),
+        heartbeatMs: Number(config.env.SIRK_RUNTIME_LOCK_HEARTBEAT_MS || 30000)
+    });
+
+    let app;
+    try {
+        app = createPortalOperationsRuntime(config);
+    } catch (error) {
+        if (runtimeLock) runtimeLock.release();
+        throw error;
+    }
     const inner = app.server.listeners("request")[0];
-    if (typeof inner !== "function") throw new Error("SIRK Central v14 request handler is unavailable.");
+    if (typeof inner !== "function") {
+        if (runtimeLock) runtimeLock.release();
+        throw new Error("SIRK Central v14 request handler is unavailable.");
+    }
     const ssoCallback = ssoCallbackFactory.create({ app, config });
     const tickets = ticketStoreFactory.create({
         dataDir: config.dataDir,
@@ -220,20 +253,17 @@ function createTicketRuntime(config) {
                 if (!auth.portal) return json(res, 404, { ok: false, error: "Not found." });
                 const assignment = portalAssignment(app, auth.portal.id);
                 const body = await readBody(req, 256 * 1024);
-                const events = Array.isArray(body.events) ? body.events : [body];
+                const explicitBatch = Object.prototype.hasOwnProperty.call(body, "events");
+                if (explicitBatch && !Array.isArray(body.events)) return json(res, 400, { ok: false, code: "TICKET_EVENTS_INVALID", error: "events must be an array." });
+                const events = explicitBatch ? body.events : [body];
                 if (!events.length) return json(res, 400, { ok: false, code: "TICKET_EVENTS_EMPTY", error: "At least one ticket event is required." });
-                if (events.length > 500) return json(res, 413, { ok: false, error: "Too many ticket events." });
+                if (events.length > 500) return json(res, 413, { ok: false, code: "TICKET_EVENTS_TOO_LARGE", error: "Too many ticket events." });
                 const results = [];
                 for (let index = 0; index < events.length; index += 1) {
                     try {
-                        results.push(Object.assign({ index, rejected: false }, tickets.event(auth.portal.id, events[index], { assignment })));
+                        results.push(Object.assign({ index, rejected: false, status: 202, retryable: false }, tickets.event(auth.portal.id, events[index], { assignment })));
                     } catch (error) {
-                        results.push({
-                            index,
-                            rejected: true,
-                            code: error.code || "TICKET_EVENT_REJECTED",
-                            error: Number.isInteger(error.statusCode) && error.statusCode < 500 ? error.message : "Ticket event was rejected."
-                        });
+                        results.push(eventErrorResult(index, error));
                     }
                 }
                 for (const item of results) {
@@ -241,16 +271,31 @@ function createTicketRuntime(config) {
                         audit(app, item.type, { username: auth.portal.id, source: "portal", role: "Portal", status: "active" }, req, { portalId: auth.portal.id, ticketId: item.ticket.ticketId }, "failure", config);
                     }
                 }
-                const rejected = results.filter(item => item.rejected).length;
-                return json(res, rejected ? 207 : 202, {
+                const rejectedItems = results.filter(item => item.rejected);
+                const rejected = rejectedItems.length;
+                const response = {
                     ok: rejected === 0,
+                    batch: explicitBatch,
                     accepted: results.filter(item => !item.rejected && item.accepted).length,
                     duplicates: results.filter(item => !item.rejected && item.duplicate).length,
                     stale: results.filter(item => !item.rejected && item.stale).length,
                     skipped: results.filter(item => !item.rejected && !item.accepted && !item.duplicate && !item.stale).length,
                     rejected,
-                    results: rejected ? results : undefined
-                });
+                    results: explicitBatch ? results : undefined
+                };
+                if (rejected) {
+                    audit(app, "ticket.events_rejected", { username: auth.portal.id, source: "portal", role: "Portal", status: "active" }, req, {
+                        portalId: auth.portal.id,
+                        batch: explicitBatch,
+                        rejected,
+                        codes: rejectedItems.map(item => item.code)
+                    }, "failure", config);
+                }
+                if (!explicitBatch && rejected === 1) {
+                    const item = rejectedItems[0];
+                    return json(res, item.status, { ok: false, code: item.code, error: item.error, retryable: item.retryable });
+                }
+                return json(res, rejected ? 207 : 202, response);
             }
 
             if (!url.pathname.startsWith("/api/tickets")) return inner(req, res);
@@ -329,13 +374,21 @@ function createTicketRuntime(config) {
     server.headersTimeout = 15000;
     server.keepAliveTimeout = 5000;
     server.on("upgrade", (req, socket, head) => app.server.emit("upgrade", req, socket, head));
-    return Object.assign({}, app, { server, version: VERSION, ticketProjections: tickets, ssoReplay: ssoCallback.replay });
+    server.on("close", () => { if (runtimeLock) runtimeLock.release(); });
+    return Object.assign({}, app, { server, version: VERSION, ticketProjections: tickets, ssoReplay: ssoCallback.replay, runtimeLock });
 }
 
 if (require.main === module) {
     const config = loadConfig(process.env);
     const app = createTicketRuntime(config);
+    const shutdown = signal => {
+        process.stdout.write("SIRK Central received " + signal + "; closing.\n");
+        app.server.close(() => process.exit(0));
+        setTimeout(() => process.exit(1), 15000).unref();
+    };
+    process.once("SIGTERM", () => shutdown("SIGTERM"));
+    process.once("SIGINT", () => shutdown("SIGINT"));
     app.server.listen(config.port, config.bindHost, () => process.stdout.write("SIRK Central v15 listening on " + config.bindHost + ":" + config.port + "\n"));
 }
 
-module.exports = { createTicketRuntime, VERSION, canRead, canWrite, portalAllowed, visiblePortalIds, portalAssignment, validateFilter };
+module.exports = { createTicketRuntime, VERSION, canRead, canWrite, portalAllowed, visiblePortalIds, portalAssignment, validateFilter, eventErrorResult };
