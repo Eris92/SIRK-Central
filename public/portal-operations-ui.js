@@ -32,7 +32,7 @@
             <div class="toolbar"><div><h2 id="portalOperationsTitle"></h2><p id="portalOperationsHelp" class="muted"></p></div><button id="portalOperationsRefresh" type="button" class="secondary"></button></div>
             <div class="overview-grid" id="portalOperationsSummary"></div>
             <div class="form-actions">
-              <select id="portalOperationsState"><option value=""></option><option>queued</option><option>delivered</option><option>running</option><option>completed</option><option>failed</option><option>cancelled</option><option>expired</option></select>
+              <select id="portalOperationsState"><option value=""></option><option>queued</option><option>delivered</option><option>running</option><option>cancel_requested</option><option>completed</option><option>failed</option><option>cancelled</option><option>expired</option></select>
               <select id="portalOperationsType"><option value=""></option><option>backup</option><option>update</option><option>restart</option><option>reconnect</option><option>sync</option><option>diagnostics</option></select>
             </div>
             <div id="portalOperationsList" class="users-list"></div>
@@ -73,6 +73,7 @@
         const items = [
             [text("Aktywne", "Active"), summary.active || 0, "overview-info"],
             [text("W kolejce", "Queued"), summary.counts && summary.counts.queued || 0, "overview-warn"],
+            [text("Anulowanie", "Cancelling"), summary.counts && summary.counts.cancel_requested || 0, "overview-warn"],
             [text("Zakończone", "Completed"), summary.counts && summary.counts.completed || 0, "overview-ok"],
             [text("Błędy", "Failed"), summary.counts && summary.counts.failed || 0, "overview-error"]
         ];
@@ -87,13 +88,14 @@
         const row = document.createElement("div"); row.className = "user-row";
         const info = document.createElement("div");
         const title = document.createElement("strong"); title.textContent = command.portalId + " · " + command.type;
-        const meta = document.createElement("small"); meta.textContent = [command.state, new Date(command.createdAtUtc).toLocaleString(lang()), command.requestedBy, command.progress + "%"].filter(Boolean).join(" · ");
+        const stateText = command.state === "cancel_requested" ? text("żądanie anulowania", "cancellation requested") : command.state;
+        const meta = document.createElement("small"); meta.textContent = [stateText, new Date(command.createdAtUtc).toLocaleString(lang()), command.requestedBy, command.progress + "%"].filter(Boolean).join(" · ");
         const details = document.createElement("details");
         const summary = document.createElement("summary"); summary.textContent = text("Szczegóły", "Details") + (command.message ? " · " + command.message : "");
         const pre = document.createElement("pre"); pre.textContent = JSON.stringify(command, null, 2);
         details.append(summary, pre); info.append(title, meta, details); row.append(info);
         const actions = document.createElement("div"); actions.className = "form-actions";
-        if (["queued", "delivered"].includes(command.state)) actions.append(actionButton(text("Anuluj", "Cancel"), "secondary", () => commandAction(command.id, "cancel")));
+        if (["queued", "delivered", "running"].includes(command.state)) actions.append(actionButton(text("Anuluj", "Cancel"), "secondary", () => commandAction(command.id, "cancel")));
         if (["failed", "expired", "cancelled"].includes(command.state)) actions.append(actionButton(text("Ponów", "Retry"), "", () => commandAction(command.id, "retry")));
         if (actions.children.length) row.append(actions);
         return row;
@@ -105,8 +107,12 @@
         if (!confirm(text("Potwierdzić operację?", "Confirm operation?"))) return;
         const message = document.getElementById("portalOperationsMessage");
         try {
-            await api("/api/portal-operations/" + encodeURIComponent(id) + "/" + action, { method: "POST", body: "{}" });
-            message.textContent = text("Operacja została zapisana.", "Operation recorded."); message.className = "success";
+            const result = await api("/api/portal-operations/" + encodeURIComponent(id) + "/" + action, { method: "POST", body: "{}" });
+            const cooperative = action === "cancel" && result.command && result.command.state === "cancel_requested";
+            message.textContent = cooperative
+                ? text("Portal otrzyma żądanie anulowania. Stan końcowy pojawi się po ACK.", "The Portal will receive a cancellation request. Final state will appear after ACK.")
+                : text("Operacja została zapisana.", "Operation recorded.");
+            message.className = "success";
             await loadOperations();
         } catch (error) { message.textContent = error.message; message.className = "error"; }
     }
@@ -154,7 +160,7 @@
     function applyLanguage() {
         const values = {
             portalOperationsButton: ["Operacje", "Operations"], portalOperationsTitle: ["Operacje Portali", "Portal Operations"],
-            portalOperationsHelp: ["Kolejka poleceń, postęp i wyniki wykonania po stronie Portali.", "Command queue, progress and Portal execution results."],
+            portalOperationsHelp: ["Kolejka poleceń, anulowanie, postęp i wyniki wykonania po stronie Portali.", "Command queue, cancellation, progress and Portal execution results."],
             portalOperationsRefresh: ["Odśwież", "Refresh"], portalCommandTitle: ["Nowe polecenie", "New command"],
             portalCommandPortalLabel: ["Portal ID", "Portal ID"], portalCommandTypeLabel: ["Typ polecenia", "Command type"],
             portalCommandApprovalLabel: ["Approval ID dla operacji wysokiego ryzyka", "Approval ID for high-risk operation"],
