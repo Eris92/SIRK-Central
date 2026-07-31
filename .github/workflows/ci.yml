@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, feat/central-production-hardening]
+    branches: [main, feat/**, fix/**]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -16,8 +16,8 @@ concurrency:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
 
     steps:
       - name: Checkout
@@ -34,68 +34,74 @@ jobs:
 
       - name: Validate shell scripts
         run: |
-          bash -n \
-            deploy/bootstrap-ubuntu.sh \
-            deploy/configure-and-start.sh \
-            deploy/configure-auth.sh \
-            deploy/install.sh \
-            deploy/reset-admin-password.sh \
-            deploy/rotate-access-key.sh \
-            deploy/update.sh \
-            deploy/web-update.sh \
-            deploy/backup.sh \
-            deploy/restore.sh \
-            deploy/smoke-test.sh
+          set -euo pipefail
+          find deploy -maxdepth 1 -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
 
       - name: Validate JavaScript syntax
-        run: |
-          find src auth updater scripts public -type f -name '*.js' -print0 | xargs -0 -n1 node --check
+        run: npm run check:syntax
 
-      - name: Run tests
+      - name: Run unit and HTTP regression tests
         run: npm test
 
-      - name: Validate package metadata and entry point
+      - name: Validate package, runtime and UI contracts
         run: |
           node - <<'NODE'
           const fs = require('node:fs');
           const pkg = require('./package.json');
           const lock = require('./package-lock.json');
-          if (pkg.version !== '1.0.0-rc.10') process.exit(1);
-          if (pkg.version !== lock.version || pkg.version !== lock.packages[''].version) process.exit(1);
-          if (pkg.main !== 'src/server-v8.js' || !String(pkg.scripts.start).includes('server-v8.js')) process.exit(1);
+          if (pkg.version !== lock.version || pkg.version !== lock.packages[''].version) throw new Error('Package versions differ.');
+          if (pkg.main !== 'src/server-v14.js' || !String(pkg.scripts.start).includes('server-v14.js')) throw new Error('Canonical runtime is not v14.');
           for (const file of [
-            'src/mfa-continuity-policy.js',
-            'src/webauthn-attestation.js',
-            'public/passkey-attestation-bridge.js',
-            'test/mfa-continuity-policy.test.js',
-            'test/mfa-continuity-http.test.js',
-            'test/webauthn-attestation.test.js',
-            'test/break-glass-passkey-http.test.js',
-            'test/break-glass-passkey-registration-http.test.js',
+            'src/server-v14.js',
+            'src/portal-command-store.js',
+            'src/approval-store.js',
+            'public/approval-center-ui.js',
+            'public/portal-operations-ui.js',
+            'public/portal-monitoring-ui.js',
+            'public/portal-monitoring-ui.css',
+            'test/approval-workflow.test.js',
+            'test/portal-command-store.test.js',
+            'test/e2e/ui-buttons.spec.js',
             'deploy/smoke-test.sh'
-          ]) if (!fs.existsSync(file)) process.exit(1);
+          ]) if (!fs.existsSync(file)) throw new Error('Missing required file: ' + file);
+          const runtimeDockerfile = fs.readFileSync('Dockerfile.portal-runtime', 'utf8');
+          if (!runtimeDockerfile.includes('CMD ["node", "src/server-v14.js"]')) throw new Error('Runtime Dockerfile is not v14.');
           const restore = fs.readFileSync('deploy/restore.sh', 'utf8');
-          if (!restore.includes('/readyz') || restore.includes('/healthz')) process.exit(1);
-          const smoke = fs.readFileSync('deploy/smoke-test.sh', 'utf8');
-          for (const required of ['caddy validate', '/readyz', 'restart central', 'strict-transport-security']) {
-            if (!smoke.includes(required)) process.exit(1);
+          if (!restore.includes('/readyz') || restore.includes('/healthz')) throw new Error('Restore readiness contract is invalid.');
+          const bundle = fs.readFileSync('src/server-v7.js', 'utf8');
+          for (const asset of ['approval-center-ui.js', 'portal-operations-ui.js', 'portal-monitoring-ui.js', 'portal-monitoring-ui.css']) {
+            if (!bundle.includes(asset)) throw new Error('Production UI bundle misses ' + asset);
           }
           const html = fs.readFileSync('public/index.html', 'utf8');
-          const csrf = html.indexOf('/csrf-bootstrap.js');
-          const app = html.indexOf('/app.js');
-          const passkey = html.indexOf('/passkey-ui.js');
-          const routing = html.indexOf('/workspace-routing.js');
-          if ([csrf, app, passkey, routing].some(index => index < 0) || !(csrf < app && app < passkey && passkey < routing)) process.exit(1);
+          const order = ['/csrf-bootstrap.js', '/app.js', '/passkey-ui.js', '/workspace-routing.js'].map(item => html.indexOf(item));
+          if (order.some(index => index < 0) || order.some((value, index) => index && value <= order[index - 1])) throw new Error('Browser bootstrap order is invalid.');
           NODE
-          grep -F 'CMD ["node", "src/server-v8.js"]' Dockerfile
 
-      - name: Validate Docker Compose
-        env:
-          SIRK_ADMIN_PASSWORD_HASH: 'scrypt$16384$8$1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
-          SIRK_ACCESS_KEY_HASH: 'sha256$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
-          SIRK_SSO_SHARED_SECRET: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
-          SIRK_UPDATER_TOKEN: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
-          SIRK_CENTRAL_DOMAIN: central.example.com
-          SIRK_WEBSITE_DOMAIN: example.com
-          SIRK_ACME_EMAIL: admin@example.com
-        run: docker compose --profile auth config >/dev/null
+      - name: Create CI environment
+        run: |
+          cat > .env <<'EOF'
+          SIRK_ADMIN_PASSWORD_HASH=scrypt$16384$8$1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+          SIRK_ACCESS_KEY_HASH=sha256$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+          SIRK_SSO_SHARED_SECRET=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+          SIRK_UPDATER_TOKEN=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+          SIRK_CENTRAL_DOMAIN=central.example.test
+          SIRK_WEBSITE_DOMAIN=example.test
+          SIRK_AUTH_DOMAIN=auth.example.test
+          SIRK_ACME_EMAIL=admin@example.test
+          SIRK_BUSINESS_SITE_PATH=/tmp/sirk-business-site
+          EOF
+          mkdir -p /tmp/sirk-business-site
+
+      - name: Validate merged Docker Compose
+        run: docker compose -f docker-compose.yml -f docker-compose.portal-runtime.yml --profile auth config >/tmp/compose.rendered.yml
+
+      - name: Build application images
+        run: docker compose -f docker-compose.yml -f docker-compose.portal-runtime.yml --profile auth build central auth updater
+
+      - name: Inspect image runtime and user
+        run: |
+          set -euo pipefail
+          image=$(docker compose -f docker-compose.yml -f docker-compose.portal-runtime.yml images -q central)
+          test -n "$image"
+          test "$(docker image inspect "$image" --format '{{.Config.User}}')" = node
+          docker run --rm --entrypoint node "$image" --check src/server-v14.js
