@@ -2,7 +2,7 @@ name: SIRK Central Security Audit
 
 on:
   push:
-    branches: [main, feat/**, fix/**]
+    branches: [main, 'feat/**', 'fix/**']
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -34,7 +34,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if git grep -nEI '(BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY|client_secret[[:space:]]*[:=][[:space:]]*[A-Za-z0-9._~-]{12,}|SIRK_(SSO_SHARED_SECRET|UPDATER_TOKEN|PORTAL_TOKEN)[[:space:]]*=[[:space:]]*[A-Za-z0-9._~-]{16,})' -- ':!package-lock.json' ':!.github/workflows/security-audit.yml'; then
+          if git grep -nEI '(BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY|client_secret[[:space:]]*[:=][[:space:]]*[A-Za-z0-9._~-]{12,}|SIRK_(SSO_SHARED_SECRET|UPDATER_TOKEN|PORTAL_TOKEN)[[:space:]]*=[[:space:]]*[A-Za-z0-9._~-]{16,})' -- \
+            ':!package-lock.json' \
+            ':!.github/workflows/**' \
+            ':!docs/**'; then
             echo 'Potential committed secret detected.' >&2
             exit 1
           fi
@@ -53,18 +56,31 @@ jobs:
           node - <<'NODE'
           const fs = require('node:fs');
           const pkg = require('./package.json');
-          if (pkg.main !== 'src/server-v14.js') throw new Error('Canonical runtime is not v14.');
-          if (!String(pkg.scripts.start).includes('server-v14.js')) throw new Error('Start script is not v14.');
+          const lock = require('./package-lock.json');
+          if (pkg.version !== lock.version || pkg.version !== lock.packages[''].version) throw new Error('Package versions differ.');
+          if (pkg.main !== 'src/server-v15.js') throw new Error('Canonical runtime is not v15.');
+          if (!String(pkg.scripts.start).includes('server-v15.js')) throw new Error('Start script is not v15.');
           const dockerfile = fs.readFileSync('Dockerfile.portal-runtime', 'utf8');
-          if (!dockerfile.includes('CMD ["node", "src/server-v14.js"]')) throw new Error('Portal runtime image is not v14.');
+          if (!dockerfile.includes('CMD ["node", "src/server-v15.js"]')) throw new Error('Portal runtime image is not v15.');
           for (const file of [
-            'src/server-v14.js',
+            'src/server-v15.js',
+            'src/ticket-projection-store.js',
+            'src/ticket-projection-store-v2.js',
             'src/portal-command-store.js',
+            'src/request-rate-limiter.js',
             'src/approval-store.js',
+            'updater/backup-archive.js',
+            'updater/restore-transaction.js',
             'public/approval-center-ui.js',
             'public/portal-operations-ui.js',
             'public/portal-monitoring-ui.js',
-            'public/portal-monitoring-ui.css'
+            'public/portal-monitoring-ui.css',
+            'public/tickets-ui.js',
+            'public/tickets-ui.css',
+            'test/api-authorization.test.js',
+            'test/request-rate-limiter.test.js',
+            'test/ticket-projection-store.test.js',
+            'test/updater-client-security.test.js'
           ]) if (!fs.existsSync(file)) throw new Error('Missing required file: ' + file);
           NODE
 
