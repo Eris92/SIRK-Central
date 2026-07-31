@@ -53,10 +53,11 @@ services:
       - ALL
 
   updater:
+    profiles: ["maintenance"]
     build:
       context: .
       dockerfile: updater/Dockerfile
-    restart: unless-stopped
+    restart: "no"
     user: "0:0"
     env_file: .env
     environment:
@@ -68,7 +69,7 @@ services:
       SIRK_BACKUP_TIME_ZONE: ${SIRK_BACKUP_TIME_ZONE:-Europe/Warsaw}
       SIRK_BACKUP_ALLOW_LEGACY_WITHOUT_CHECKSUM: ${SIRK_BACKUP_ALLOW_LEGACY_WITHOUT_CHECKSUM:-false}
       SIRK_COMPOSE_FILES: /opt/sirk-central/docker-compose.yml:/opt/sirk-central/docker-compose.portal-runtime.yml
-      SIRK_COMPOSE_PROFILES: auth
+      SIRK_COMPOSE_PROFILES: auth,maintenance
       SIRK_INSTALL_DIR: /opt/sirk-central
       SIRK_REPO_REF: ${SIRK_REPO_REF:-}
     volumes:
