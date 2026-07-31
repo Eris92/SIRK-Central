@@ -7,12 +7,33 @@ const path = require("node:path");
 function atomicWrite(filePath, value) {
     fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
     const temporary = filePath + ".tmp-" + process.pid + "-" + crypto.randomBytes(6).toString("hex");
-    fs.writeFileSync(temporary, JSON.stringify(value, null, 2) + "\n", { mode: 0o600, flag: "wx" });
-    fs.renameSync(temporary, filePath);
+    let descriptor;
+    try {
+        descriptor = fs.openSync(temporary, "wx", 0o600);
+        fs.writeFileSync(descriptor, JSON.stringify(value, null, 2) + "\n", "utf8");
+        fs.fsyncSync(descriptor);
+        fs.closeSync(descriptor);
+        descriptor = undefined;
+        fs.renameSync(temporary, filePath);
+    } catch (error) {
+        if (descriptor !== undefined) {
+            try { fs.closeSync(descriptor); } catch (_) { /* ignore cleanup failure */ }
+        }
+        try { fs.rmSync(temporary, { force: true }); } catch (_) { /* ignore cleanup failure */ }
+        throw error;
+    }
 }
 
 function cleanText(value, limit) {
-    return String(value || "").replace(/[\r\n\t]+/g, " ").trim().slice(0, limit);
+    return String(value || "").replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, limit);
+}
+
+function cleanPath(value) {
+    return cleanText(String(value || "").split(/[?#]/, 1)[0], 500);
+}
+
+function secretKey(key) {
+    return /secret|password|token|credential|authorization|cookie|recovery.?code|access.?key|private.?key|client.?secret/i.test(String(key || ""));
 }
 
 function cleanObject(value, depth = 0) {
@@ -23,17 +44,58 @@ function cleanObject(value, depth = 0) {
     if (Array.isArray(value)) return value.slice(0, 50).map(item => cleanObject(item, depth + 1));
     if (typeof value === "object") {
         const result = {};
-        for (const [key, item] of Object.entries(value).slice(0, 50)) {
-            if (/secret|password|token|code|credential|authorization/i.test(key)) result[key] = "[redacted]";
-            else result[cleanText(key, 100)] = cleanObject(item, depth + 1);
+        for (const [rawKey, item] of Object.entries(value).slice(0, 50)) {
+            const key = cleanText(rawKey, 100);
+            result[key] = secretKey(key) ? "[redacted]" : cleanObject(item, depth + 1);
         }
         return result;
     }
     return cleanText(value, 200);
 }
 
-function digest(record) {
-    return crypto.createHash("sha256").update(JSON.stringify(record), "utf8").digest("base64url");
+function deriveIntegrityKey(value) {
+    const raw = String(value || "");
+    if (!raw) return null;
+    if (raw.length < 32) throw new Error("Audit integrity key must contain at least 32 characters.");
+    return crypto.createHash("sha256").update("SIRK-AUDIT-v2\0", "utf8").update(raw, "utf8").digest();
+}
+
+function digest(record, algorithm, key) {
+    const serialized = JSON.stringify(record);
+    if (algorithm === "hmac-sha256") {
+        if (!key) throw new Error("Audit HMAC key is unavailable.");
+        return crypto.createHmac("sha256", key).update(serialized, "utf8").digest("base64url");
+    }
+    return crypto.createHash("sha256").update(serialized, "utf8").digest("base64url");
+}
+
+function verifyState(state, key) {
+    if (!state || !Array.isArray(state.events)) return { ok: false, index: -1, reason: "invalid-state" };
+    const algorithm = state.version === 1 ? "sha256" : String(state.algorithm || "sha256");
+    if (!new Set(["sha256", "hmac-sha256"]).has(algorithm)) return { ok: false, index: -1, reason: "unsupported-algorithm" };
+    if (algorithm === "hmac-sha256" && !key) return { ok: false, index: -1, reason: "integrity-key-unavailable" };
+    let previousHash = state.version === 1 ? "" : String(state.anchorHash || "");
+    for (let index = 0; index < state.events.length; index += 1) {
+        const event = state.events[index];
+        if (event.previousHash !== previousHash) return { ok: false, index, reason: "previous-hash-mismatch" };
+        const copy = Object.assign({}, event);
+        const expected = copy.hash;
+        delete copy.hash;
+        if (digest(copy, algorithm, key) !== expected) return { ok: false, index, reason: "event-hash-mismatch" };
+        previousHash = expected;
+    }
+    return { ok: true, count: state.events.length, lastHash: previousHash, algorithm, anchorHash: state.version === 1 ? "" : String(state.anchorHash || "") };
+}
+
+function rechain(events, algorithm, key, anchorHash = "") {
+    let previousHash = anchorHash;
+    return events.map(source => {
+        const record = Object.assign({}, source, { previousHash });
+        delete record.hash;
+        record.hash = digest(record, algorithm, key);
+        previousHash = record.hash;
+        return record;
+    });
 }
 
 function create(options) {
@@ -42,20 +104,56 @@ function create(options) {
     const filePath = path.join(dataDir, "audit-events.json");
     const now = typeof options.now === "function" ? options.now : Date.now;
     const maxEvents = Math.max(100, Math.min(100000, Number(options.maxEvents || 10000)));
-    let state = { version: 1, events: [] };
+    const configuredKey = options.integrityKey !== undefined
+        ? options.integrityKey
+        : process.env.SIRK_AUDIT_INTEGRITY_KEY || process.env.SIRK_UPDATER_TOKEN || "";
+    const integrityKey = deriveIntegrityKey(configuredKey);
+    const desiredAlgorithm = integrityKey ? "hmac-sha256" : "sha256";
+    let state = { version: 2, algorithm: desiredAlgorithm, anchorHash: "", legacyLastHash: "", events: [] };
+    let integrityFailure = null;
 
     try {
         const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
-        if (parsed && parsed.version === 1 && Array.isArray(parsed.events)) state = parsed;
+        const verification = verifyState(parsed, integrityKey);
+        if (!verification.ok) {
+            integrityFailure = verification;
+            state = parsed;
+        } else if (parsed.version === 1 || parsed.algorithm !== desiredAlgorithm) {
+            const oldLastHash = verification.lastHash || "";
+            state = {
+                version: 2,
+                algorithm: desiredAlgorithm,
+                anchorHash: "",
+                legacyLastHash: oldLastHash,
+                migratedAtUtc: new Date(now()).toISOString(),
+                events: rechain(parsed.events, desiredAlgorithm, integrityKey)
+            };
+            atomicWrite(filePath, state);
+        } else {
+            state = parsed;
+        }
     } catch (error) {
         if (error.code !== "ENOENT") throw error;
     }
 
-    function persist() { atomicWrite(filePath, state); }
+    function persist() {
+        atomicWrite(filePath, state);
+    }
+
+    function assertIntegrity() {
+        const result = integrityFailure || verifyState(state, integrityKey);
+        if (!result.ok) {
+            throw Object.assign(new Error("Audit trail integrity verification failed."), {
+                code: "AUDIT_INTEGRITY_FAILED",
+                details: result
+            });
+        }
+    }
 
     function append(event) {
+        assertIntegrity();
         event = event || {};
-        const previousHash = state.events.length ? state.events[state.events.length - 1].hash : "";
+        const previousHash = state.events.length ? state.events[state.events.length - 1].hash : String(state.anchorHash || "");
         const record = {
             id: crypto.randomUUID(),
             timestampUtc: new Date(now()).toISOString(),
@@ -73,15 +171,20 @@ function create(options) {
                 ip: cleanText(event.request && event.request.ip, 128),
                 userAgent: cleanText(event.request && event.request.userAgent, 400),
                 method: cleanText(event.request && event.request.method, 16),
-                path: cleanText(event.request && event.request.path, 500)
+                path: cleanPath(event.request && event.request.path)
             },
             target: cleanText(event.target, 300),
             details: cleanObject(event.details || {}),
             previousHash
         };
-        record.hash = digest(record);
+        record.hash = digest(record, state.algorithm, integrityKey);
         state.events.push(record);
-        if (state.events.length > maxEvents) state.events = state.events.slice(-maxEvents);
+        if (state.events.length > maxEvents) {
+            const removeCount = state.events.length - maxEvents;
+            const firstRetained = state.events[removeCount];
+            state.anchorHash = firstRetained ? firstRetained.previousHash : record.hash;
+            state.events = state.events.slice(removeCount);
+        }
         persist();
         return JSON.parse(JSON.stringify(record));
     }
@@ -104,20 +207,10 @@ function create(options) {
     }
 
     function verify() {
-        let previousHash = "";
-        for (let index = 0; index < state.events.length; index += 1) {
-            const event = state.events[index];
-            if (event.previousHash !== previousHash) return { ok: false, index, reason: "previous-hash-mismatch" };
-            const copy = Object.assign({}, event);
-            const expected = copy.hash;
-            delete copy.hash;
-            if (digest(copy) !== expected) return { ok: false, index, reason: "event-hash-mismatch" };
-            previousHash = expected;
-        }
-        return { ok: true, count: state.events.length, lastHash: previousHash };
+        return integrityFailure || verifyState(state, integrityKey);
     }
 
-    return { append, list, verify, filePath };
+    return { append, list, verify, filePath, algorithm: state.algorithm };
 }
 
-module.exports = { create };
+module.exports = { create, cleanObject, cleanPath, deriveIntegrityKey, verifyState };
