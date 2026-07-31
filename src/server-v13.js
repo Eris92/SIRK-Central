@@ -2,10 +2,11 @@
 
 const http = require("node:http");
 const { createSecurityRuntime } = require("./server-v12");
+const { identityActive } = require("./rbac");
 const { loadConfig } = require("./server-v1");
 const { parseCookies } = require("./server-v8");
 
-const VERSION = "1.0.0-rc.20";
+const VERSION = "1.0.0-rc.21";
 const DEFERRED_APPROVAL_TYPES = new Set([
     "tenant.activation",
     "portal.enrollment",
@@ -27,7 +28,9 @@ function json(res, status, body) {
 }
 function readBody(req, limit = 65536) {
     return new Promise((resolve, reject) => {
-        const chunks = []; let size = 0; let settled = false;
+        const chunks = [];
+        let size = 0;
+        let settled = false;
         req.on("data", chunk => {
             if (settled) return;
             size += chunk.length;
@@ -62,10 +65,13 @@ function csrfAccepted(req, config) {
 }
 function actorKey(actor) { return String(actor && (actor.identityKey || actor.username) || ""); }
 function canRead(actor) {
-    return Boolean(actor && (actor.builtIn === true || ["Admin", "SecAdmin", "Auditor"].includes(actor.role)));
+    return Boolean(identityActive(actor) && (actor.builtIn === true || ["Admin", "SecAdmin", "Auditor"].includes(actor.role)));
+}
+function canSubmit(actor) {
+    return Boolean(identityActive(actor) && (actor.builtIn === true || ["Admin", "SecAdmin", "OperatorL1", "SupportL2", "EngineerL3"].includes(actor.role)));
 }
 function canDecide(actor, request) {
-    if (!actor) return false;
+    if (!identityActive(actor)) return false;
     if (actor.builtIn === true) return true;
     if (actor.role !== "SecAdmin") return false;
     const role = request && request.payload && request.payload.role;
@@ -104,12 +110,8 @@ function executeApproved(app, request, actor) {
         };
     }
 
-    if (request.type !== "role.assignment") {
-        throw new Error("Unsupported executable approval type.");
-    }
-    if (!app.userStore || typeof app.userStore.updateRole !== "function") {
-        throw new Error("User role store is unavailable.");
-    }
+    if (request.type !== "role.assignment") throw new Error("Unsupported executable approval type.");
+    if (!app.userStore || typeof app.userStore.updateRole !== "function") throw new Error("User role store is unavailable.");
 
     const identityKey = String(request.payload && request.payload.identityKey || request.scope && request.scope.identityKey || "");
     const role = String(request.payload && request.payload.role || "");
@@ -122,9 +124,7 @@ function executeApproved(app, request, actor) {
         executedBy: actorKey(actor),
         change: app.userStore.updateRole({ source: "entra", key: identityKey }, role, actor)
     };
-    if (app.approvals && typeof app.approvals.markExecution === "function") {
-        return app.approvals.markExecution(request.id, result);
-    }
+    if (app.approvals && typeof app.approvals.markExecution === "function") return app.approvals.markExecution(request.id, result);
     return result;
 }
 
@@ -151,6 +151,7 @@ function createApprovalRuntime(config) {
             }
 
             if (req.method === "POST" && url.pathname === "/api/approval-center") {
+                if (!canSubmit(actor)) return json(res, 403, { ok: false, error: "Permission denied." });
                 if (!csrfAccepted(req, config)) return json(res, 403, { ok: false, error: "CSRF validation failed." });
                 const body = await readBody(req);
                 const request = app.approvals.submit(body, actor);
@@ -160,6 +161,7 @@ function createApprovalRuntime(config) {
 
             const match = url.pathname.match(/^\/api\/approval-center\/(apr-[a-z0-9_-]+)\/(approve|reject|cancel)$/);
             if (req.method === "POST" && match) {
+                if (!identityActive(actor)) return json(res, 403, { ok: false, error: "Permission denied." });
                 if (!csrfAccepted(req, config)) return json(res, 403, { ok: false, error: "CSRF validation failed." });
                 const existing = app.approvals.get(match[1]);
                 if (!existing) return json(res, 404, { ok: false, error: "Approval request not found." });
@@ -195,7 +197,9 @@ function createApprovalRuntime(config) {
 
             return json(res, 404, { ok: false, error: "Not found." });
         } catch (error) {
-            if (!res.headersSent) return json(res, error.statusCode || 400, { ok: false, code: error.code || "REQUEST_REJECTED", error: error.message || "Request failed." });
+            const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+            const message = status >= 500 ? "Internal server error." : error.message || "Request failed.";
+            if (!res.headersSent) return json(res, status, { ok: false, code: error.code || (status >= 500 ? "INTERNAL_ERROR" : "REQUEST_REJECTED"), error: message });
             res.destroy(error);
         }
     });
@@ -209,4 +213,4 @@ if (require.main === module) {
     app.server.listen(config.port, config.bindHost, () => process.stdout.write("SIRK Central v13 listening on " + config.bindHost + ":" + config.port + "\n"));
 }
 
-module.exports = { createApprovalRuntime, VERSION, DEFERRED_APPROVAL_TYPES, canRead, canDecide, executeApproved };
+module.exports = { createApprovalRuntime, VERSION, DEFERRED_APPROVAL_TYPES, canRead, canSubmit, canDecide, executeApproved };
