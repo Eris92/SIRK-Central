@@ -15,8 +15,11 @@ const forbiddenPaths = [
     "src/server-production.js",
     "src/persistent-session-map.js",
     "test/persistent-session-map.test.js",
-    "deploy/reset-admin-password.sh"
+    "deploy/reset-admin-password.sh",
+    "scripts/hash-password.js",
+    "scripts/generate-access-key.js"
 ];
+const forbiddenPackageScripts = ["start:legacy", "hash-password", "generate-access-key"];
 
 function fail(message) {
     process.stderr.write("Legacy runtime validation failed: " + message + "\n");
@@ -68,8 +71,10 @@ for (const relativePath of forbiddenPaths) {
 
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
 if (packageJson.main !== "src/server-v15.js") fail("package.json main is not src/server-v15.js.");
-if (packageJson.scripts && packageJson.scripts["start:legacy"]) fail("package.json still exposes start:legacy.");
 if (!String(packageJson.scripts && packageJson.scripts.start || "").includes("src/server-v15.js")) fail("start script does not use src/server-v15.js.");
+for (const scriptName of forbiddenPackageScripts) {
+    if (packageJson.scripts && packageJson.scripts[scriptName]) fail("package.json still exposes obsolete script: " + scriptName);
+}
 
 const runtimeGraph = fs.existsSync(canonicalEntry) ? collectRuntimeGraph(canonicalEntry) : new Set();
 for (let version = 1; version <= 14; version += 1) {
@@ -84,7 +89,7 @@ for (const fileName of fs.readdirSync(path.join(root, "src"))) {
 }
 
 const scanRoots = ["src", "auth", "updater", "deploy", "scripts", "test"];
-const referenceTokens = forbiddenPaths.concat(["start:legacy"]);
+const referenceTokens = forbiddenPaths.concat(forbiddenPackageScripts);
 for (const relativeRoot of scanRoots) {
     for (const file of walk(path.join(root, relativeRoot))) {
         if (path.resolve(file) === selfPath) continue;
@@ -97,5 +102,5 @@ for (const relativeRoot of scanRoots) {
 }
 
 if (!process.exitCode) {
-    process.stdout.write("Legacy runtime validation passed: one canonical runtime and no alternate entrypoints.\n");
+    process.stdout.write("Legacy runtime validation passed: one canonical runtime and no obsolete secret helpers.\n");
 }
