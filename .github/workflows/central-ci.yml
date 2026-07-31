@@ -35,8 +35,7 @@ jobs:
         run: npm ci
 
       - name: Syntax validation
-        run: |
-          find src updater scripts public -type f -name '*.js' -print0 | xargs -0 -n1 node --check
+        run: npm run check:syntax
 
       - name: Validate browser security bootstrap
         run: |
@@ -56,13 +55,22 @@ jobs:
       - name: Validate package metadata
         run: |
           node - <<'NODE'
+          const fs = require('node:fs');
           const pkg = require('./package.json');
           const lock = require('./package-lock.json');
           if (pkg.version !== lock.version || pkg.version !== lock.packages[''].version) {
             throw new Error('package.json and package-lock.json versions differ');
           }
-          if (pkg.main !== 'src/server-v2.js' || !pkg.scripts.start.includes('server-v2.js')) {
-            throw new Error('Production entry point is not server-v2.js');
+          if (pkg.main !== 'src/server-v15.js' || !pkg.scripts.start.includes('server-v15.js')) {
+            throw new Error('Production entry point is not server-v15.js');
+          }
+          const dockerfile = fs.readFileSync('Dockerfile.portal-runtime', 'utf8');
+          if (!dockerfile.includes('CMD ["node", "src/server-v15.js"]')) {
+            throw new Error('Docker runtime is not server-v15.js');
+          }
+          const acceptance = fs.readFileSync('deploy/acceptance-test.sh', 'utf8');
+          if (!acceptance.includes('src/server-v15.js')) {
+            throw new Error('Acceptance test does not validate server-v15.js');
           }
           NODE
 
