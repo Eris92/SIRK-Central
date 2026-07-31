@@ -6,7 +6,7 @@ const { identityActive } = require("./rbac");
 const { loadConfig } = require("./server-v1");
 const { parseCookies } = require("./server-v8");
 
-const VERSION = "1.0.0-rc.21";
+const VERSION = "1.0.0-rc.22";
 const DEFERRED_APPROVAL_TYPES = new Set([
     "tenant.activation",
     "portal.enrollment",
@@ -71,12 +71,14 @@ function canSubmit(actor) {
     return Boolean(identityActive(actor) && (actor.builtIn === true || ["Admin", "SecAdmin", "OperatorL1", "SupportL2", "EngineerL3"].includes(actor.role)));
 }
 function canDecide(actor, request) {
-    if (!identityActive(actor)) return false;
+    if (!identityActive(actor) || actorKey(actor) === String(request && request.requestedBy || "")) return false;
+    const type = String(request && request.type || "");
+    const targetRole = String(request && request.payload && request.payload.role || "");
+    if (type === "role.assignment" && targetRole === "BreakGlass") return false;
     if (actor.builtIn === true) return true;
     if (actor.role !== "SecAdmin") return false;
-    const role = request && request.payload && request.payload.role;
-    if (role === "BreakGlass") return false;
-    return actorKey(actor) !== String(request && request.requestedBy || "");
+    if (type === "role.assignment") return targetRole === "SecAdmin";
+    return true;
 }
 function audit(app, action, actor, req, details, result = "success") {
     if (!app.auditStore || typeof app.auditStore.append !== "function") return;
@@ -111,6 +113,7 @@ function executeApproved(app, request, actor) {
     }
 
     if (request.type !== "role.assignment") throw new Error("Unsupported executable approval type.");
+    if (!canDecide(actor, request)) throw new Error("Actor is not permitted to execute this role approval.");
     if (!app.userStore || typeof app.userStore.updateRole !== "function") throw new Error("User role store is unavailable.");
 
     const identityKey = String(request.payload && request.payload.identityKey || request.scope && request.scope.identityKey || "");
@@ -171,7 +174,7 @@ function createApprovalRuntime(config) {
                 if (action === "cancel") {
                     request = app.approvals.cancel(match[1], actor);
                 } else {
-                    if (!canDecide(actor, existing)) return json(res, 403, { ok: false, error: "Approval decision requires an independent SecAdmin or Break-Glass." });
+                    if (!canDecide(actor, existing)) return json(res, 403, { ok: false, error: "Approval decision is not permitted for this role and request type." });
                     request = app.approvals.decide(match[1], action, actor, body.comment);
                 }
                 let execution = null;
@@ -203,6 +206,9 @@ function createApprovalRuntime(config) {
             res.destroy(error);
         }
     });
+    server.requestTimeout = 30000;
+    server.headersTimeout = 15000;
+    server.keepAliveTimeout = 5000;
     server.on("upgrade", (req, socket, head) => app.server.emit("upgrade", req, socket, head));
     return Object.assign({}, app, { server, version: VERSION });
 }
