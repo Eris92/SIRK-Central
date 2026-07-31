@@ -27,7 +27,6 @@ test("only active Admin and local BreakGlass may execute destructive Central ope
     for (const role of ["SecAdmin", "Auditor", "OperatorL1", "SupportL2", "EngineerL3"]) {
         assert.equal(guard.canExecute(active(role)), false, role);
     }
-    assert.equal(guard.canExecute(active("Admin", { status: "pending" })), true);
     assert.equal(guard.canExecute({ username: "pending", role: "Admin", source: "entra", status: "pending", builtIn: false }), false);
 });
 
