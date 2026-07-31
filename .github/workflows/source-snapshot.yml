@@ -1,0 +1,36 @@
+name: Source Snapshot
+
+on:
+  push:
+    branches:
+      - refactor/remove-legacy-runtime
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: source-snapshot-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Create source archive
+        run: |
+          tar \
+            --exclude=.git \
+            --exclude=node_modules \
+            --exclude=playwright-report \
+            --exclude=test-results \
+            -czf /tmp/sirk-central-source.tar.gz .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sirk-central-source
+          path: /tmp/sirk-central-source.tar.gz
+          retention-days: 1
