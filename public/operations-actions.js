@@ -1,7 +1,7 @@
 "use strict";
 
 (function () {
-    const HISTORY_KEY = "sirk-central-update-history-v1";
+    const HISTORY_KEY = "sirk-central-update-history-v2";
     let pollTimer = 0;
     let lastStatus = null;
 
@@ -32,35 +32,61 @@
 
     function stateLabel(state) {
         const labels = {
-            idle: ["bezczynny", "idle"],
-            starting: ["uruchamianie", "starting"],
-            running: ["w toku", "running"],
-            rollback: ["przywracanie poprzedniej wersji", "restoring previous version"],
-            rollback_completed: ["przywrócono poprzednią wersję", "previous version restored"],
-            completed: ["zakończona powodzeniem", "completed"],
-            failed: ["awaria aktualizacji", "failed"]
+            idle: ["Gotowy", "Ready"],
+            starting: ["Uruchamianie aktualizacji", "Starting update"],
+            running: ["Aktualizacja w toku", "Update in progress"],
+            rollback: ["Przywracanie poprzedniej wersji", "Restoring previous version"],
+            rollback_completed: ["Przywrócono poprzednią wersję", "Previous version restored"],
+            completed: ["Aktualizacja zakończona", "Update completed"],
+            failed: ["Awaria aktualizacji", "Update failure"]
         };
-        const pair = labels[state] || [state || "idle", state || "idle"];
+        const pair = labels[state] || [state || "Gotowy", state || "Ready"];
         return text(pair[0], pair[1]);
     }
 
+    function stateIcon(state) {
+        if (state === "completed") return "✓";
+        if (state === "rollback_completed") return "↶";
+        if (state === "failed") return "!";
+        if (["starting", "running", "rollback"].includes(state)) return "●";
+        return "○";
+    }
+
     function stateClass(state) {
-        if (state === "completed" || state === "rollback_completed") return "success";
+        if (state === "completed") return "success";
+        if (state === "rollback_completed") return "warning";
         if (state === "failed") return "error";
         return "muted";
     }
 
     function cleanMessage(status) {
-        if (status.state === "completed") return text("Aktualizacja została zakończona pomyślnie.", "The update completed successfully.");
+        if (status.state === "completed") return text(
+            "Aktualizacja została zakończona pomyślnie. System działa na nowej wersji.",
+            "The update completed successfully. The system is running the new version."
+        );
         if (status.state === "rollback_completed") return text(
-            "Aktualizacja nie powiodła się, ale poprzednia wersja została przywrócona. System działa prawidłowo.",
-            "The update failed, but the previous version was restored. The system is healthy."
+            "Aktualizacja nie powiodła się. Poprzednia wersja została automatycznie przywrócona i system działa prawidłowo.",
+            "The update failed. The previous version was restored automatically and the system is healthy."
         );
         if (status.state === "failed") return text(
-            "Aktualizacja nie powiodła się i nie potwierdzono poprawnego działania poprzedniej wersji.",
-            "The update failed and the previous version could not be confirmed healthy."
+            "Aktualizacja nie powiodła się i nie potwierdzono poprawnego działania przywróconej wersji.",
+            "The update failed and the restored version could not be confirmed healthy."
         );
-        return String(status.message || "").replace(/\s*Check the updater log:\s*\S+/i, "").trim();
+        const messages = {
+            "Preparing update.": ["Przygotowywanie aktualizacji.", "Preparing update."],
+            "Running tests and validating configuration.": ["Uruchamianie testów i sprawdzanie konfiguracji.", "Running tests and validating configuration."],
+            "Building updated application services.": ["Budowanie zaktualizowanych usług.", "Building updated application services."],
+            "Deploying updated application services.": ["Wdrażanie zaktualizowanych usług.", "Deploying updated application services."],
+            "Update failed. Restoring the previous version.": ["Aktualizacja nie powiodła się. Przywracanie poprzedniej wersji.", "Update failed. Restoring the previous version."]
+        };
+        const pair = messages[String(status.message || "")];
+        return pair ? text(pair[0], pair[1]) : String(status.message || "").replace(/\s*Check the updater log:\s*\S+/i, "").trim();
+    }
+
+    function effectiveCommit(status) {
+        if (status.state === "completed") return shortCommit(status.targetCommit || status.commit);
+        if (status.state === "rollback_completed") return shortCommit(status.previousCommit || status.commit);
+        return shortCommit(status.previousCommit || status.commit || status.targetCommit);
     }
 
     function readHistory() {
@@ -84,6 +110,57 @@
         localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, 10)));
     }
 
+    function ensureStyles() {
+        if (document.getElementById("updateCenterStyles")) return;
+        const style = document.createElement("style");
+        style.id = "updateCenterStyles";
+        style.textContent = `
+          .update-overview { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:12px; margin:16px 0; }
+          .update-metric { border:1px solid var(--border-color,#314b78); border-radius:12px; padding:14px 16px; background:rgba(7,20,43,.28); }
+          .update-metric small { display:block; margin-bottom:6px; opacity:.76; }
+          .update-metric strong { display:block; font-size:1.05rem; overflow-wrap:anywhere; }
+          .update-state-line { display:flex; align-items:center; gap:10px; font-weight:700; font-size:1.05rem; }
+          .update-state-dot { display:inline-grid; place-items:center; width:28px; height:28px; border-radius:999px; border:1px solid currentColor; }
+          .update-log-path { margin-top:10px; padding:10px 12px; border:1px solid var(--border-color,#314b78); border-radius:9px; overflow-wrap:anywhere; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:.86rem; }
+          .update-history-row { align-items:center; gap:14px; }
+          .update-history-marker { flex:0 0 32px; width:32px; height:32px; display:grid; place-items:center; border-radius:999px; border:1px solid currentColor; font-weight:800; }
+          .update-history-row.success { color:#54e6b1; }
+          .update-history-row.warning { color:#ffc857; }
+          .update-history-row.error { color:#ff7d86; }
+          .update-history-info { color:var(--text-color,#fff); flex:1; min-width:0; }
+          .update-history-info small { display:block; margin-top:5px; opacity:.8; }
+          .update-version-flow { margin-top:7px; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; }
+          .update-log-button { white-space:nowrap; }
+        `;
+        document.head.append(style);
+    }
+
+    function ensureUpdateOverview() {
+        const card = document.querySelector("#settingsTabUpdates .settings-card");
+        const actions = card && card.querySelector(".form-actions");
+        if (!card || !actions) return;
+        let overview = document.getElementById("updateOverview");
+        if (!overview) {
+            overview = document.createElement("div");
+            overview.id = "updateOverview";
+            overview.className = "update-overview";
+            overview.innerHTML = `
+              <div class="update-metric"><small id="currentVersionLabel"></small><strong id="currentVersionValue">—</strong></div>
+              <div class="update-metric"><small id="lastUpdateLabel"></small><strong id="lastUpdateValue">—</strong></div>
+              <div class="update-metric"><small id="systemStateLabel"></small><strong id="systemStateValue">—</strong></div>`;
+            actions.before(overview);
+        }
+        let logArea = document.getElementById("updateLogArea");
+        if (!logArea) {
+            logArea = document.createElement("div");
+            logArea.id = "updateLogArea";
+            logArea.hidden = true;
+            logArea.className = "update-log-path";
+            const message = document.getElementById("updateMessage");
+            if (message) message.after(logArea);
+        }
+    }
+
     function ensureHistoryUi() {
         const panel = document.getElementById("settingsTabUpdates");
         if (!panel || document.getElementById("updateHistory")) return;
@@ -91,6 +168,21 @@
         card.className = "settings-card";
         card.innerHTML = `<h2 id="updateHistoryTitle"></h2><div id="updateHistory" class="users-list"></div>`;
         panel.append(card);
+    }
+
+    function createLogButton(logFile) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "secondary update-log-button";
+        button.textContent = text("Pokaż log", "Show log");
+        button.addEventListener("click", () => {
+            const area = document.getElementById("updateLogArea");
+            if (!area) return;
+            area.textContent = logFile;
+            area.hidden = !area.hidden;
+            button.textContent = area.hidden ? text("Pokaż log", "Show log") : text("Ukryj log", "Hide log");
+        });
+        return button;
     }
 
     function renderHistory() {
@@ -106,41 +198,78 @@
         }
         list.replaceChildren(...history.map(item => {
             const row = document.createElement("div");
-            row.className = "user-row";
+            row.className = "user-row update-history-row " + stateClass(item.state);
+            const marker = document.createElement("span");
+            marker.className = "update-history-marker";
+            marker.textContent = stateIcon(item.state);
             const info = document.createElement("div");
+            info.className = "update-history-info";
             const strong = document.createElement("strong");
             strong.textContent = stateLabel(item.state);
             const small = document.createElement("small");
-            const details = [localDate(item.finishedAtUtc || item.startedAtUtc)];
-            if (shortCommit(item.previousCommit)) details.push(text("poprzedni", "previous") + ": " + shortCommit(item.previousCommit));
-            if (shortCommit(item.targetCommit)) details.push(text("docelowy", "target") + ": " + shortCommit(item.targetCommit));
-            small.textContent = details.filter(Boolean).join(" · ");
+            small.textContent = localDate(item.finishedAtUtc || item.startedAtUtc);
             info.append(strong, small);
-            row.append(info);
+
+            const previous = shortCommit(item.previousCommit);
+            const target = shortCommit(item.targetCommit);
+            const flow = document.createElement("div");
+            flow.className = "update-version-flow";
+            if (previous && target && previous === target) {
+                flow.textContent = text("Brak nowej wersji kodu · ", "No new code version · ") + previous;
+            } else if (previous && target) {
+                flow.textContent = previous + "  →  " + target;
+            } else {
+                flow.textContent = target || previous || text("Wersja nieznana", "Unknown version");
+            }
+            info.append(flow);
+            row.append(marker, info);
+            if (item.logFile) row.append(createLogButton(item.logFile));
             return row;
         }));
     }
 
     function renderStatus(status, reconnecting) {
+        ensureStyles();
+        ensureUpdateOverview();
         const target = document.getElementById("updateStatus");
         const message = document.getElementById("updateMessage");
         const runButton = document.getElementById("runUpdateButton");
         if (!target || !message) return;
 
-        const details = [text("Stan", "State") + ": " + stateLabel(status.state)];
-        if (status.startedAtUtc) details.push(text("uruchomiono", "started") + ": " + localDate(status.startedAtUtc));
-        if (status.finishedAtUtc) details.push(text("zakończono", "finished") + ": " + localDate(status.finishedAtUtc));
-        if (shortCommit(status.previousCommit)) details.push(text("poprzednia wersja", "previous version") + ": " + shortCommit(status.previousCommit));
-        if (shortCommit(status.targetCommit)) details.push(text("wersja docelowa", "target version") + ": " + shortCommit(status.targetCommit));
-        if (reconnecting) details.push(text("trwa ponowne łączenie", "reconnecting"));
-        target.textContent = details.join(" · ");
+        const stateText = stateLabel(status.state);
+        target.replaceChildren();
+        const stateLine = document.createElement("span");
+        stateLine.className = "update-state-line";
+        const dot = document.createElement("span");
+        dot.className = "update-state-dot";
+        dot.textContent = stateIcon(status.state);
+        stateLine.append(dot, document.createTextNode(stateText));
+        target.append(stateLine);
         target.className = stateClass(status.state);
 
-        const lines = [];
+        const currentVersionLabel = document.getElementById("currentVersionLabel");
+        const currentVersionValue = document.getElementById("currentVersionValue");
+        const lastUpdateLabel = document.getElementById("lastUpdateLabel");
+        const lastUpdateValue = document.getElementById("lastUpdateValue");
+        const systemStateLabel = document.getElementById("systemStateLabel");
+        const systemStateValue = document.getElementById("systemStateValue");
+        if (currentVersionLabel) currentVersionLabel.textContent = text("Obecna wersja", "Current version");
+        if (currentVersionValue) currentVersionValue.textContent = effectiveCommit(status) || "—";
+        if (lastUpdateLabel) lastUpdateLabel.textContent = text("Ostatnia próba", "Last attempt");
+        if (lastUpdateValue) lastUpdateValue.textContent = localDate(status.finishedAtUtc || status.startedAtUtc) || text("Brak", "None");
+        if (systemStateLabel) systemStateLabel.textContent = text("Stan systemu", "System state");
+        if (systemStateValue) systemStateValue.textContent = reconnecting
+            ? text("Ponowne łączenie…", "Reconnecting…")
+            : (["failed"].includes(status.state) ? text("Wymaga sprawdzenia", "Needs attention") : text("Działa prawidłowo", "Healthy"));
+
+        message.replaceChildren();
         const summary = cleanMessage(status);
-        if (summary) lines.push(summary);
-        if (status.logFile) lines.push(text("Log", "Log") + ": " + status.logFile);
-        message.textContent = lines.join(" · ");
+        if (summary) message.append(document.createTextNode(summary));
+        if (reconnecting) message.append(document.createTextNode(" · " + text("Trwa ponowne łączenie z usługą aktualizacji…", "Reconnecting to the update service…")));
+        if (status.logFile) {
+            message.append(document.createTextNode(" "));
+            message.append(createLogButton(status.logFile));
+        }
         message.className = stateClass(status.state);
         if (runButton) runButton.disabled = Boolean(status.running || ["starting", "running", "rollback"].includes(status.state));
 
@@ -192,17 +321,17 @@
             remove.className = "danger";
             remove.textContent = text("Usuń", "Delete");
             remove.addEventListener("click", async () => {
-                const message = document.getElementById("backupMessage");
+                const backupMessage = document.getElementById("backupMessage");
                 if (!confirm(text("Trwale usunąć backup " + name + "?", "Permanently delete backup " + name + "?"))) return;
                 const phrase = prompt(text("Aby potwierdzić, wpisz dokładnie: DELETE SIRK BACKUP", "To confirm, type exactly: DELETE SIRK BACKUP"), "");
                 if (phrase !== "DELETE SIRK BACKUP") return;
                 remove.disabled = true;
                 try {
                     await api("/api/settings/backup/" + encodeURIComponent(name), { method: "DELETE", body: JSON.stringify({ confirm: phrase }) });
-                    if (message) { message.textContent = text("Backup został usunięty: ", "Backup deleted: ") + name; message.className = "success"; }
+                    if (backupMessage) { backupMessage.textContent = text("Backup został usunięty: ", "Backup deleted: ") + name; backupMessage.className = "success"; }
                     document.getElementById("refreshBackupButton")?.click();
                 } catch (error) {
-                    if (message) { message.textContent = error.message; message.className = "error"; }
+                    if (backupMessage) { backupMessage.textContent = error.message; backupMessage.className = "error"; }
                     remove.disabled = false;
                 }
             });
@@ -213,6 +342,8 @@
     }
 
     function initialize() {
+        ensureStyles();
+        ensureUpdateOverview();
         const backupList = document.getElementById("backupList");
         if (backupList) {
             enhanceBackupRows();
