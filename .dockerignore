@@ -1,0 +1,17 @@
+.git
+.github
+docs
+test
+node_modules
+coverage
+playwright-report
+test-results
+*.log
+*.zip
+*.tar
+*.tar.gz
+.env
+.env.*
+data
+website
+README.md
