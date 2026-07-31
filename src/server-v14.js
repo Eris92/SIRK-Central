@@ -6,7 +6,7 @@ const commandStoreFactory = require("./portal-command-store");
 const { loadConfig } = require("./server-v1");
 const { parseCookies } = require("./server-v8");
 
-const VERSION = "1.0.0-rc.18";
+const VERSION = "1.0.0-rc.19";
 const HIGH_RISK = new Set(["update", "restart", "diagnostics"]);
 
 function json(res, status, body) {
@@ -86,15 +86,20 @@ function audit(app, action, actor, req, details, result = "success", category = 
         details
     });
 }
-function approvalAccepted(app, approvalId, portalId, type) {
-    if (!HIGH_RISK.has(type)) return true;
-    if (!approvalId || !app.approvals || typeof app.approvals.get !== "function") return false;
+function approvedOperation(app, approvalId, portalId, type) {
+    if (!HIGH_RISK.has(type)) return { required: false, request: null };
+    if (!approvalId || !app.approvals || typeof app.approvals.get !== "function") return null;
     const request = app.approvals.get(approvalId);
-    if (!request || request.state !== "approved") return false;
-    if (request.type !== "operation.high-risk") return false;
-    const approvedPortal = String(request.scope && request.scope.portalId || request.payload && request.payload.portalId || "");
-    const approvedType = String(request.payload && request.payload.operation || request.payload && request.payload.type || "");
-    return (!approvedPortal || approvedPortal === portalId) && (!approvedType || approvedType === type);
+    if (!request || request.state !== "approved" || request.execution) return null;
+    if (request.type !== "operation.high-risk") return null;
+    const approvedPortal = String(request.scope && request.scope.portalId || request.payload && request.payload.portalId || "").toLowerCase();
+    const approvedType = String(request.payload && (request.payload.operation || request.payload.type) || "");
+    if (!approvedPortal || !approvedType) return null;
+    if (approvedPortal !== portalId || approvedType !== type) return null;
+    return { required: true, request };
+}
+function approvalAccepted(app, approvalId, portalId, type) {
+    return Boolean(approvedOperation(app, approvalId, portalId, type));
 }
 
 function createPortalOperationsRuntime(config) {
@@ -143,13 +148,24 @@ function createPortalOperationsRuntime(config) {
                 const body = await readBody(req);
                 const portalId = String(body.portalId || "").toLowerCase();
                 const type = String(body.type || "");
-                if (HIGH_RISK.has(type) && !approvalAccepted(app, body.approvalId, portalId, type)) {
-                    return json(res, 409, { ok: false, code: "APPROVAL_REQUIRED", error: "This operation requires an approved operation.high-risk request matching the Portal and command type." });
+                const approval = approvedOperation(app, body.approvalId, portalId, type);
+                if (HIGH_RISK.has(type) && !approval) {
+                    return json(res, 409, { ok: false, code: "APPROVAL_REQUIRED", error: "This operation requires a new, unused operation.high-risk approval matching the exact Portal and command type." });
                 }
                 if (app.portalRegistry && typeof app.portalRegistry.list === "function" && !app.portalRegistry.list().some(item => item.id === portalId)) {
                     return json(res, 404, { ok: false, error: "Portal not found." });
                 }
                 const command = commands.enqueue(body, actor);
+                if (approval && app.approvals && typeof app.approvals.markExecution === "function") {
+                    app.approvals.markExecution(body.approvalId, {
+                        state: "completed",
+                        action: "portal.command.queued",
+                        portalId: command.portalId,
+                        commandType: command.type,
+                        commandId: command.id,
+                        executedBy: actor.identityKey || actor.username || "system"
+                    });
+                }
                 audit(app, "portal.command_queued", actor, req, { portalId: command.portalId, commandId: command.id, type: command.type, approvalId: command.approvalId });
                 return json(res, 201, { ok: true, command });
             }
@@ -177,4 +193,4 @@ if (require.main === module) {
     app.server.listen(config.port, config.bindHost, () => process.stdout.write("SIRK Central v14 listening on " + config.bindHost + ":" + config.port + "\n"));
 }
 
-module.exports = { createPortalOperationsRuntime, VERSION, approvalAccepted, canRead, canWrite };
+module.exports = { createPortalOperationsRuntime, VERSION, approvedOperation, approvalAccepted, canRead, canWrite };
