@@ -6,13 +6,12 @@ Data aktualizacji: 2026-07-31
 
 ```text
 Repo: Eris92/SIRK-Central
-Branch: feat/central-production-hardening
-PR: #45 (draft)
+Branch: main
 Runtime: src/server-v15.js
-Version: 1.0.0-rc.24
+Version: 1.0.0-rc.25
 ```
 
-Nie modyfikować repozytorium SIRK Portal. Integracja pozostaje testowana przez runtime Central i `scripts/portal-simulator.js`.
+`main` jest kanoniczną gałęzią wdrożeniową. Nie modyfikować repozytorium SIRK Portal w ramach zmian dotyczących Central. Integracja pozostaje testowana przez runtime Central i `scripts/portal-simulator.js`.
 
 ## Zamknięte problemy techniczne
 
@@ -91,11 +90,21 @@ backup-manager
 caddy
 ```
 
-Naprawione zostały `install.sh`, `configure-and-start.sh`, `clean-reinstall.sh`, `smoke-test.sh`, `acceptance-test.sh`, `web-update.sh` i `restore.sh`.
+Naprawione zostały `install.sh`, `configure-and-start.sh`, `clean-reinstall.sh`, `smoke-test.sh`, `acceptance-test.sh`, `web-update.sh`, `update.sh`, `configure-auth.sh`, `bootstrap-ubuntu.sh` i `restore.sh`.
 
-### Testy
+### Emergency recovery
 
-Dodano:
+- kanoniczny reset hasła znajduje się w `deploy/reset-breakglass-password.sh`;
+- stary `deploy/reset-admin-password.sh` jest wyłącznie wrapperem do kanonicznej procedury;
+- hasło jest hashowane w odizolowanym kontenerze i nie trafia do argumentów procesu;
+- `.env` jest aktualizowany atomowo z backupem i walidacją Compose;
+- lokalne i BreakGlass sessions są unieważniane offline przed publikacją nowych credentials;
+- po operacji Central musi przejść health check;
+- uprzywilejowany updater nie może pozostać uruchomiony.
+
+### Testy przygotowane w repo
+
+Dodano między innymi:
 
 ```text
 test/runtime-lock.test.js
@@ -103,55 +112,31 @@ test/portal-command-cancellation.test.js
 test/ticket-event-http-semantics.test.js
 test/protocol-concurrency.test.js
 test/updater-gateway.test.js
+test/emergency-security-reset.test.js
 ```
 
 CI i Security Audit walidują również dwa profile Compose, osobny minimalny gateway image, brak wolumenów/secrets w gatewayu oraz rootowego workera tylko w profilu maintenance.
 
-### Synchronizacja z main
-
-Na branch zachowano compatibility files dodane później na `main`:
-
-```text
-src/persistent-session-map.js
-src/preload-hardening.js
-src/server-hardened.js
-src/server-production.js
-test/persistent-session-map.test.js
-```
-
-Kanoniczny runtime pozostaje `src/server-v15.js`.
-
 ## Stan wykonania
 
-Nie ma jeszcze potwierdzonego zielonego wyniku dla finalnego HEAD:
+Kod został ujednolicony jako `main`, a kanoniczny runtime pozostaje `src/server-v15.js`. Wersja `1.0.0-rc.25` nie jest jeszcze oznaczona jako produkcyjnie zweryfikowana.
 
-- connector GitHub nie udostępnia kompletnej listy push workflow runs;
-- PR nadal raportował konflikt z `main`;
-- lokalny runner nie rozwiązuje `github.com`, więc nie może wykonać `git fetch`, merge ani pełnego `npm ci`;
-- wymagany jest standardowy merge commit z aktualnym `main`.
+Nie ma jeszcze potwierdzonego zielonego wyniku dla finalnego HEAD. Integracja kodu z `main` nie zastępuje testów CI ani acceptance na rzeczywistym VPS.
 
-## Pozostały blocker Git
-
-Na runnerze z działającym DNS:
+## Walidacja do wykonania wieczorem
 
 ```bash
 cd /opt/sirk-central
 git fetch origin
-git checkout feat/central-production-hardening
-git reset --hard origin/feat/central-production-hardening
-bash scripts/sync-main.sh
+git checkout main
+git reset --hard origin/main
 npm ci
 npm run check:syntax
 SIRK_CONCURRENCY_TEST_REQUESTS=24 npm test
 npm audit --omit=dev --audit-level=high
-git push origin feat/central-production-hardening
 ```
 
-`scripts/sync-main.sh` tworzy safety branch, automatycznie rozwiązuje wyłącznie oczekiwany konflikt `package.json`/`package-lock.json` i abortuje każdy inny konflikt.
-
-## Blockery środowiskowe
-
-Tych punktów nie można wiarygodnie zamknąć bez środowiska lub hardware:
+Następnie:
 
 1. pełny `deploy/acceptance-test.sh` na nieprodukcyjnym VPS;
 2. destructive backup/restore drill z wymuszonym rollbackiem;
@@ -166,8 +151,9 @@ Tych punktów nie można wiarygodnie zamknąć bez środowiska lub hardware:
 
 - file-backed stores są single-writer, nie active-active HA;
 - worker podczas otwartego maintenance window pozostaje root-equivalent przez Docker socket;
-- Portal-side connector Jira/ServiceDesk/GLPI nie należy do repo SIRK Central.
+- Portal-side connector Jira/ServiceDesk/GLPI nie należy do repo SIRK Central;
+- finalny HEAD wymaga jeszcze pełnego zielonego CI i walidacji środowiskowej.
 
-## Kryterium gotowości
+## Kryterium gotowości produkcyjnej
 
-PR pozostaje draftem do czasu integracji z `main`, zielonych workflow dla aktualnego HEAD, pełnego VPS acceptance oraz wykonania testów backup/restore, update/rollback, YubiKey, Entra, TLS i UI.
+`main` jest kodem głównym, ale wersję można oznaczyć jako produkcyjną dopiero po zielonych workflow, pełnym VPS acceptance oraz testach backup/restore, update/rollback, YubiKey, Entra, TLS i UI.
