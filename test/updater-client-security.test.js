@@ -38,12 +38,27 @@ test("updater path allowlist rejects traversal query fragments and arbitrary end
     ]) assert.equal(updaterPathAllowed(value), false, value);
 });
 
-test("updater origin is restricted to explicitly allowed hosts", () => {
-    assert.equal(updaterOrigin({ env: { SIRK_UPDATER_ORIGIN: "http://updater:8090", SIRK_UPDATER_ALLOWED_HOSTS: "updater" } }), "http://updater:8090");
-    assert.equal(updaterOrigin({ env: { SIRK_UPDATER_ORIGIN: "https://updater.internal", SIRK_UPDATER_ALLOWED_HOSTS: "updater.internal" } }), "https://updater.internal");
-    assert.throws(() => updaterOrigin({ env: { SIRK_UPDATER_ORIGIN: "http://169.254.169.254/latest", SIRK_UPDATER_ALLOWED_HOSTS: "updater" } }), /not allowed|invalid/i);
-    assert.throws(() => updaterOrigin({ env: { SIRK_UPDATER_ORIGIN: "http://user:pass@updater:8090", SIRK_UPDATER_ALLOWED_HOSTS: "updater" } }), /not allowed/i);
-    assert.throws(() => updaterOrigin({ env: { SIRK_UPDATER_ORIGIN: "http://evil.example:8090", SIRK_UPDATER_ALLOWED_HOSTS: "updater" } }), /not allowed/i);
+test("Central updater origin is restricted to the unprivileged gateway host", () => {
+    assert.equal(updaterOrigin({ env: {
+        SIRK_UPDATER_ORIGIN: "http://updater-gateway:8092",
+        SIRK_UPDATER_ALLOWED_HOSTS: "updater-gateway"
+    } }), "http://updater-gateway:8092");
+    assert.throws(() => updaterOrigin({ env: {
+        SIRK_UPDATER_ORIGIN: "http://updater:8090",
+        SIRK_UPDATER_ALLOWED_HOSTS: "updater-gateway"
+    } }), /not allowed/i);
+    assert.throws(() => updaterOrigin({ env: {
+        SIRK_UPDATER_ORIGIN: "http://169.254.169.254/latest",
+        SIRK_UPDATER_ALLOWED_HOSTS: "updater-gateway"
+    } }), /not allowed|invalid/i);
+    assert.throws(() => updaterOrigin({ env: {
+        SIRK_UPDATER_ORIGIN: "http://user:pass@updater-gateway:8092",
+        SIRK_UPDATER_ALLOWED_HOSTS: "updater-gateway"
+    } }), /not allowed/i);
+    assert.throws(() => updaterOrigin({ env: {
+        SIRK_UPDATER_ORIGIN: "http://evil.example:8092",
+        SIRK_UPDATER_ALLOWED_HOSTS: "updater-gateway"
+    } }), /not allowed/i);
 });
 
 test("only active Admin or local BreakGlass can execute updater operations", () => {
