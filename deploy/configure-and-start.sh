@@ -59,7 +59,7 @@ docker run --rm -it \
 chmod 0600 .env
 
 COMPOSE=(docker compose -f "$BASE_COMPOSE_FILE" -f "$RUNTIME_COMPOSE_FILE" --profile "$PROFILE")
-SERVICES=(central auth backup-manager caddy)
+SERVICES=(central auth updater-gateway backup-manager caddy)
 
 printf 'Validating canonical Compose stack...\n'
 "${COMPOSE[@]}" config >/dev/null
@@ -68,16 +68,16 @@ printf 'Building and starting canonical v15 services without Docker socket acces
 "${COMPOSE[@]}" up -d --build --remove-orphans "${SERVICES[@]}"
 "${COMPOSE[@]}" ps "${SERVICES[@]}"
 
-for service in central auth backup-manager; do
+for service in central auth updater-gateway backup-manager; do
   container_id="$("${COMPOSE[@]}" ps -q "$service")"
   [[ -n "$container_id" ]] || fail "Service $service was not created."
 done
 
-if docker ps --format '{{.Names}}' | grep -Eq '(^|[-_])updater($|[-_])'; then
-  fail "Updater is unexpectedly running outside a maintenance window."
+if [[ -n "$(docker compose -f "$BASE_COMPOSE_FILE" -f "$RUNTIME_COMPOSE_FILE" --profile "$PROFILE" --profile maintenance ps -q updater)" ]]; then
+  fail "Privileged updater worker is unexpectedly running outside a maintenance window."
 fi
 
-printf 'Configuration completed. The privileged updater is disabled by default.\n'
+printf 'Configuration completed. The unprivileged updater gateway is active; the Docker-socket worker is disabled.\n'
 printf 'Open a maintenance window only when required: sudo bash %s/deploy/maintenance-up.sh\n' "$INSTALL_DIR"
 printf 'Close it immediately after update/restore: sudo bash %s/deploy/maintenance-down.sh\n' "$INSTALL_DIR"
 printf 'Run deploy/acceptance-test.sh before production use.\n'
