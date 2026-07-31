@@ -3,26 +3,30 @@
 const http = require("node:http");
 const { createPortalOperationsRuntime } = require("./server-v14");
 const ticketStoreFactory = require("./ticket-projection-store");
+const rateLimiterFactory = require("./request-rate-limiter");
+const { identityActive } = require("./rbac");
 const { loadConfig } = require("./server-v1");
 const { parseCookies } = require("./server-v8");
 
-const VERSION = "1.0.0-rc.20";
+const VERSION = "1.0.0-rc.21";
 
-function json(res, status, body) {
+function json(res, status, body, headers = {}) {
     const data = Buffer.from(JSON.stringify(body));
-    res.writeHead(status, {
+    res.writeHead(status, Object.assign({
         "Content-Type": "application/json; charset=utf-8",
         "Content-Length": String(data.length),
         "Cache-Control": "no-store",
         "X-Content-Type-Options": "nosniff",
         "X-Frame-Options": "DENY",
         "Referrer-Policy": "no-referrer"
-    });
+    }, headers));
     res.end(data);
 }
 function readBody(req, limit = 2 * 1024 * 1024) {
     return new Promise((resolve, reject) => {
-        const chunks = []; let size = 0; let settled = false;
+        const chunks = [];
+        let size = 0;
+        let settled = false;
         req.on("data", chunk => {
             if (settled) return;
             size += chunk.length;
@@ -45,12 +49,15 @@ function actorFor(app, req) {
     return token && app.sessions ? app.sessions.get(token, true) : null;
 }
 function portalCredential(req) {
-    const match = String(req.headers.authorization || "").match(/^SIRK-Portal ([A-Za-z0-9_-]{8,8192})$/);
+    const authorization = String(req.headers.authorization || "");
+    if (authorization.length > 8192) return null;
+    const match = authorization.match(/^SIRK-Portal ([A-Za-z0-9_-]{8,8192})$/);
     if (!match) return null;
     try {
         const decoded = Buffer.from(match[1], "base64url").toString("utf8");
         const index = decoded.indexOf(":");
-        return index < 1 ? null : { id: decoded.slice(0, index), token: decoded.slice(index + 1) };
+        if (index < 1 || index > 128 || decoded.length - index - 1 < 16) return null;
+        return { id: decoded.slice(0, index), token: decoded.slice(index + 1) };
     } catch (_) { return null; }
 }
 function authenticatePortal(app, req) {
@@ -58,10 +65,10 @@ function authenticatePortal(app, req) {
     return value && app.portalRegistry && app.portalRegistry.authenticate(value.id, value.token);
 }
 function canRead(actor) {
-    return Boolean(actor && (actor.builtIn === true || ["Admin", "SecAdmin", "Auditor", "OperatorL1", "SupportL2", "EngineerL3"].includes(actor.role)));
+    return Boolean(identityActive(actor) && (actor.builtIn === true || ["Admin", "SecAdmin", "Auditor", "OperatorL1", "SupportL2", "EngineerL3"].includes(actor.role)));
 }
 function canWrite(actor) {
-    return Boolean(actor && (actor.builtIn === true || ["Admin", "SupportL2", "EngineerL3"].includes(actor.role)));
+    return Boolean(identityActive(actor) && (actor.builtIn === true || ["Admin", "SupportL2", "EngineerL3"].includes(actor.role)));
 }
 function csrfAccepted(req, config) {
     const cookies = parseCookies(req);
@@ -73,8 +80,21 @@ function csrfAccepted(req, config) {
     const site = String(req.headers["sec-fetch-site"] || "");
     return !site || site === "same-origin" || site === "none";
 }
+function requestIp(req, config) {
+    if (config.trustProxy) {
+        const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
+        if (forwarded) return forwarded.slice(0, 128);
+    }
+    return String(req.socket && req.socket.remoteAddress || "unknown").slice(0, 128);
+}
+function consumeOrReject(res, limiter, key) {
+    const result = limiter.consume(key);
+    if (result.allowed) return true;
+    json(res, 429, { ok: false, code: "RATE_LIMITED", error: "Too many requests." }, { "Retry-After": String(result.retryAfterSeconds) });
+    return false;
+}
 function portalAllowed(app, actor, portalId) {
-    if (!actor) return false;
+    if (!identityActive(actor)) return false;
     if (actor.builtIn === true) return true;
     if (!app.accessStore || typeof app.accessStore.effective !== "function") return false;
     try { return app.accessStore.effective(actor, portalId).allowed === true; }
@@ -103,7 +123,7 @@ function requireKnownPortal(app, portalId) {
         && app.portalRegistry.list().some(item => item.id === portalId);
     if (!exists) throw Object.assign(new Error("Portal not found."), { code: "PORTAL_NOT_FOUND", statusCode: 404 });
 }
-function audit(app, action, actor, req, details, result = "success") {
+function audit(app, action, actor, req, details, result = "success", config = {}) {
     if (!app.auditStore || typeof app.auditStore.append !== "function") return;
     app.auditStore.append({
         action,
@@ -113,7 +133,7 @@ function audit(app, action, actor, req, details, result = "success") {
         request: {
             method: req.method,
             path: req.url,
-            ip: String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "").split(",")[0].trim(),
+            ip: requestIp(req, config),
             userAgent: String(req.headers["user-agent"] || "")
         },
         target: details && (details.ticketId || details.portalId) || "",
@@ -123,6 +143,7 @@ function audit(app, action, actor, req, details, result = "success") {
 function validateFilter(filter, tickets) {
     if (filter.status && !tickets.STATUSES.includes(filter.status)) throw Object.assign(new Error("Unsupported ticket status filter."), { statusCode: 400, code: "TICKET_STATUS_INVALID" });
     if (filter.priority && !tickets.PRIORITIES.includes(filter.priority)) throw Object.assign(new Error("Unsupported ticket priority filter."), { statusCode: 400, code: "TICKET_PRIORITY_INVALID" });
+    if (filter.portalId && !/^[a-z0-9][a-z0-9._:-]{1,127}$/.test(filter.portalId)) throw Object.assign(new Error("Portal ID filter is invalid."), { statusCode: 400, code: "PORTAL_ID_INVALID" });
 }
 
 function createTicketRuntime(config) {
@@ -134,58 +155,95 @@ function createTicketRuntime(config) {
         maxTickets: Number(config.env.SIRK_TICKET_MAX_PROJECTIONS || 25000),
         maxEventIdsPerPortal: Number(config.env.SIRK_TICKET_EVENT_ID_RETENTION || 2000)
     });
+    const preAuthLimiter = rateLimiterFactory.create({
+        limit: Number(config.env.SIRK_PORTAL_AUTH_RATE_LIMIT || 120),
+        windowMs: Number(config.env.SIRK_PORTAL_AUTH_RATE_WINDOW_MS || 60000),
+        maxEntries: Number(config.env.SIRK_PORTAL_RATE_LIMIT_MAX_KEYS || 20000)
+    });
+    const ingestionLimiter = rateLimiterFactory.create({
+        limit: Number(config.env.SIRK_TICKET_INGEST_RATE_LIMIT || 120),
+        windowMs: Number(config.env.SIRK_TICKET_INGEST_RATE_WINDOW_MS || 60000),
+        maxEntries: Number(config.env.SIRK_PORTAL_RATE_LIMIT_MAX_KEYS || 20000)
+    });
+
+    function portalRequest(req, res, route) {
+        if (!consumeOrReject(res, preAuthLimiter, route + ":ip:" + requestIp(req, config))) return { handled: true, portal: null };
+        const portal = authenticatePortal(app, req);
+        if (!portal) return { handled: false, portal: null };
+        if (!consumeOrReject(res, ingestionLimiter, route + ":portal:" + portal.id)) return { handled: true, portal: null };
+        return { handled: false, portal };
+    }
 
     const server = http.createServer(async (req, res) => {
         try {
             const url = new URL(req.url, "http://central.local");
 
             if (req.method === "GET" && url.pathname === "/api/portal/v1/ticket-policy") {
-                const portal = authenticatePortal(app, req);
-                if (!portal) return json(res, 404, { ok: false, error: "Not found." });
-                const assignment = portalAssignment(app, portal.id);
+                const auth = portalRequest(req, res, "policy");
+                if (auth.handled) return;
+                if (!auth.portal) return json(res, 404, { ok: false, error: "Not found." });
+                const assignment = portalAssignment(app, auth.portal.id);
                 return json(res, 200, {
                     ok: true,
-                    portalId: portal.id,
+                    portalId: auth.portal.id,
                     assignment,
-                    policy: tickets.getPolicy(portal.id),
+                    policy: tickets.getPolicy(auth.portal.id),
                     statuses: tickets.STATUSES,
                     priorities: tickets.PRIORITIES,
                     protocolVersion: 1
                 });
             }
             if (req.method === "POST" && url.pathname === "/api/portal/v1/tickets/snapshot") {
-                const portal = authenticatePortal(app, req);
-                if (!portal) return json(res, 404, { ok: false, error: "Not found." });
-                const assignment = portalAssignment(app, portal.id);
-                const result = tickets.snapshot(portal.id, await readBody(req), { assignment });
-                audit(app, "ticket.snapshot_received", { username: portal.id, source: "portal", role: "Portal" }, req, {
-                    portalId: portal.id,
+                const auth = portalRequest(req, res, "snapshot");
+                if (auth.handled) return;
+                if (!auth.portal) return json(res, 404, { ok: false, error: "Not found." });
+                const assignment = portalAssignment(app, auth.portal.id);
+                const result = tickets.snapshot(auth.portal.id, await readBody(req), { assignment });
+                audit(app, "ticket.snapshot_received", { username: auth.portal.id, source: "portal", role: "Portal", status: "active" }, req, {
+                    portalId: auth.portal.id,
                     accepted: result.accepted,
                     skipped: result.skipped,
                     stale: result.stale,
                     duplicate: result.duplicate
-                });
+                }, "success", config);
                 return json(res, 202, { ok: true, ...result });
             }
             if (req.method === "POST" && url.pathname === "/api/portal/v1/tickets/events") {
-                const portal = authenticatePortal(app, req);
-                if (!portal) return json(res, 404, { ok: false, error: "Not found." });
-                const assignment = portalAssignment(app, portal.id);
+                const auth = portalRequest(req, res, "events");
+                if (auth.handled) return;
+                if (!auth.portal) return json(res, 404, { ok: false, error: "Not found." });
+                const assignment = portalAssignment(app, auth.portal.id);
                 const body = await readBody(req, 256 * 1024);
                 const events = Array.isArray(body.events) ? body.events : [body];
+                if (!events.length) return json(res, 400, { ok: false, code: "TICKET_EVENTS_EMPTY", error: "At least one ticket event is required." });
                 if (events.length > 500) return json(res, 413, { ok: false, error: "Too many ticket events." });
-                const results = events.map(item => tickets.event(portal.id, item, { assignment }));
-                for (const item of results) {
-                    if (item.accepted && item.ticket && ["ticket.sla_breached", "ticket.sync_failed"].includes(item.type)) {
-                        audit(app, item.type, { username: portal.id, source: "portal", role: "Portal" }, req, { portalId: portal.id, ticketId: item.ticket.ticketId }, "failure");
+                const results = [];
+                for (let index = 0; index < events.length; index += 1) {
+                    try {
+                        results.push(Object.assign({ index, rejected: false }, tickets.event(auth.portal.id, events[index], { assignment })));
+                    } catch (error) {
+                        results.push({
+                            index,
+                            rejected: true,
+                            code: error.code || "TICKET_EVENT_REJECTED",
+                            error: Number.isInteger(error.statusCode) && error.statusCode < 500 ? error.message : "Ticket event was rejected."
+                        });
                     }
                 }
-                return json(res, 202, {
-                    ok: true,
-                    accepted: results.filter(item => item.accepted).length,
-                    duplicates: results.filter(item => item.duplicate).length,
-                    stale: results.filter(item => item.stale).length,
-                    skipped: results.filter(item => !item.accepted && !item.duplicate && !item.stale).length
+                for (const item of results) {
+                    if (!item.rejected && item.accepted && item.ticket && ["ticket.sla_breached", "ticket.sync_failed"].includes(item.type)) {
+                        audit(app, item.type, { username: auth.portal.id, source: "portal", role: "Portal", status: "active" }, req, { portalId: auth.portal.id, ticketId: item.ticket.ticketId }, "failure", config);
+                    }
+                }
+                const rejected = results.filter(item => item.rejected).length;
+                return json(res, rejected ? 207 : 202, {
+                    ok: rejected === 0,
+                    accepted: results.filter(item => !item.rejected && item.accepted).length,
+                    duplicates: results.filter(item => !item.rejected && item.duplicate).length,
+                    stale: results.filter(item => !item.rejected && item.stale).length,
+                    skipped: results.filter(item => !item.rejected && !item.accepted && !item.duplicate && !item.stale).length,
+                    rejected,
+                    results: rejected ? results : undefined
                 });
             }
 
@@ -234,7 +292,7 @@ function createTicketRuntime(config) {
                 requireKnownPortal(app, policyMatch[1]);
                 portalAssignment(app, policyMatch[1]);
                 const policy = tickets.setPolicy(policyMatch[1], await readBody(req, 32768));
-                audit(app, "ticket.policy_updated", actor, req, { portalId: policyMatch[1], mode: policy.mode });
+                audit(app, "ticket.policy_updated", actor, req, { portalId: policyMatch[1], mode: policy.mode }, "success", config);
                 return json(res, 200, { ok: true, policy });
             }
 
@@ -250,7 +308,7 @@ function createTicketRuntime(config) {
                 const policy = tickets.getPolicy(ticketMatch[1]);
                 if (!policy.allowCentralChanges) return json(res, 409, { ok: false, code: "PORTAL_POLICY_READ_ONLY", error: "Portal policy does not permit Central-side ticket changes." });
                 const ticket = tickets.updateCentral(ticketMatch[1], ticketMatch[2], await readBody(req, 65536), actor);
-                audit(app, "ticket.central_change", actor, req, { portalId: ticket.portalId, ticketId: ticket.ticketId, status: ticket.status });
+                audit(app, "ticket.central_change", actor, req, { portalId: ticket.portalId, ticketId: ticket.ticketId, status: ticket.status }, "success", config);
                 return json(res, 200, { ok: true, ticket });
             }
             return json(res, 404, { ok: false, error: "Not found." });
@@ -271,4 +329,4 @@ if (require.main === module) {
     app.server.listen(config.port, config.bindHost, () => process.stdout.write("SIRK Central v15 listening on " + config.bindHost + ":" + config.port + "\n"));
 }
 
-module.exports = { createTicketRuntime, VERSION, canRead, canWrite, portalAllowed, visiblePortalIds, portalAssignment };
+module.exports = { createTicketRuntime, VERSION, canRead, canWrite, portalAllowed, visiblePortalIds, portalAssignment, validateFilter };
