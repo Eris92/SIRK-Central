@@ -56,11 +56,11 @@ test("session store enforces idle and absolute expiration", () => {
 
     timestamp = 1_700_000_000_000;
     const absoluteSession = store.issue({ username: "absolute" }, {}).token;
-    for (let index = 0; index < 11; index += 1) {
-        timestamp += 5 * 60_000;
+    for (let index = 0; index < 14; index += 1) {
+        timestamp += 4 * 60_000;
         assert.equal(store.get(absoluteSession).username, "absolute");
     }
-    timestamp += 6 * 60_000;
+    timestamp += 5 * 60_000;
     assert.equal(store.get(absoluteSession), null);
 });
 

@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'feat/**', 'fix/**']
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -16,57 +16,151 @@ concurrency:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
 
-      - name: Install dependencies
-        run: npm ci
+      - run: npm ci
 
-      - name: Validate shell scripts
-        run: |
-          bash -n \
-            deploy/bootstrap-ubuntu.sh \
-            deploy/configure-and-start.sh \
-            deploy/configure-auth.sh \
-            deploy/install.sh \
-            deploy/reset-admin-password.sh \
-            deploy/rotate-access-key.sh \
-            deploy/update.sh \
-            deploy/web-update.sh \
-            deploy/backup.sh \
-            deploy/restore.sh
+      - name: Validate shell JavaScript and Python syntax
+        run: npm run check:syntax
 
-      - name: Validate Node.js syntax
-        run: |
-          node --check auth/server.js
-          node --check scripts/configure-production.js
-          node --check src/server.js
-          node --check src/entry.js
-          node --check src/sso-ticket.js
-          node --check src/session-store.js
-          node --check src/organization-store.js
-          node --check src/approval-store.js
-          node --check src/passkey-store.js
-          node --check src/system-health.js
-          node --check updater/server.js
-
-      - name: Run tests
+      - name: Run unit HTTP security and concurrency tests
+        env:
+          SIRK_CONCURRENCY_TEST_REQUESTS: '24'
         run: npm test
 
-      - name: Validate Docker Compose
-        env:
-          SIRK_ADMIN_PASSWORD_HASH: 'scrypt$16384$8$1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
-          SIRK_ACCESS_KEY_HASH: 'sha256$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
-          SIRK_SSO_SHARED_SECRET: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
-          SIRK_UPDATER_TOKEN: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
-        run: docker compose --profile auth config >/dev/null
+      - name: Validate source and runtime contracts
+        run: |
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const pkg = require('./package.json');
+          const lock = require('./package-lock.json');
+          if (pkg.version !== lock.version || pkg.version !== lock.packages[''].version) throw new Error('Package versions differ.');
+          if (pkg.main !== 'src/server-v15.js' || !String(pkg.scripts.start).includes('server-v15.js')) throw new Error('Canonical runtime is not v15.');
+
+          for (const file of [
+            'src/server-v15.js','src/runtime-lock.js','src/ticket-projection-store-v2.js',
+            'src/portal-command-store-v2.js','src/request-rate-limiter.js','src/approval-store.js',
+            'src/central-operation-guard.js','src/sso-replay-store.js','src/sso-callback-handler.js',
+            'auth/hardened-server.js','updater/Dockerfile.gateway','updater/gateway-server.js','updater/server.js',
+            'updater/management-server.js','updater/backup-archive.js','updater/restore-transaction.js',
+            'test/runtime-lock.test.js','test/portal-command-cancellation.test.js',
+            'test/ticket-event-http-semantics.test.js','test/protocol-concurrency.test.js',
+            'test/updater-gateway.test.js','test/e2e/ui-buttons.spec.js',
+            'deploy/acceptance-test.sh','deploy/configure-and-start.sh',
+            'deploy/maintenance-up.sh','deploy/maintenance-down.sh','scripts/sync-main.sh'
+          ]) if (!fs.existsSync(file)) throw new Error('Missing required file: ' + file);
+
+          for (const dockerfileName of ['Dockerfile', 'Dockerfile.portal-runtime']) {
+            if (!fs.readFileSync(dockerfileName, 'utf8').includes('CMD ["node", "src/server-v15.js"]')) throw new Error(dockerfileName + ' is not v15.');
+          }
+          const gatewayDockerfile = fs.readFileSync('updater/Dockerfile.gateway', 'utf8');
+          if (!gatewayDockerfile.includes('USER node') || !gatewayDockerfile.includes('CMD ["node", "/app/gateway-server.js"]')) throw new Error('Gateway Dockerfile is not minimal/non-root.');
+          if (/docker-cli|\bgit\b|\btar\b/.test(gatewayDockerfile)) throw new Error('Gateway image contains maintenance tooling.');
+
+          const runtime = fs.readFileSync('src/server-v15.js', 'utf8');
+          for (const expected of ['runtimeLockFactory.acquire','eventErrorResult','SIRK_RUNTIME_LOCK_DISABLED']) {
+            if (!runtime.includes(expected)) throw new Error('Runtime contract missing: ' + expected);
+          }
+          const commands = fs.readFileSync('src/portal-command-store-v2.js', 'utf8');
+          for (const expected of ['cancel_requested','control = "cancel"','COMMAND_CANCEL_NOT_REQUESTED']) {
+            if (!commands.includes(expected)) throw new Error('Cancellation contract missing: ' + expected);
+          }
+          const gateway = fs.readFileSync('updater/gateway-server.js', 'utf8');
+          for (const expected of ['UPDATER_MAINTENANCE_REQUIRED','pathAllowed','workerOrigin','maxBodyBytes']) {
+            if (!gateway.includes(expected)) throw new Error('Gateway contract missing: ' + expected);
+          }
+          const compose = fs.readFileSync('docker-compose.yml', 'utf8');
+          for (const expected of [
+            'SIRK_UPDATER_ORIGIN: http://updater-gateway:8092',
+            'SIRK_UPDATER_ALLOWED_HOSTS: updater-gateway',
+            'dockerfile: updater/Dockerfile.gateway',
+            'profiles: ["maintenance"]','restart: "no"',
+            'SIRK_CENTRAL_INTERNAL_ORIGIN: http://central:8080'
+          ]) if (!compose.includes(expected)) throw new Error('Compose contract missing: ' + expected);
+
+          const configure = fs.readFileSync('deploy/configure-and-start.sh', 'utf8');
+          if (!configure.includes('SERVICES=(central auth updater-gateway backup-manager caddy)')) throw new Error('Installer base service list is invalid.');
+          if (!configure.includes('ps -q updater')) throw new Error('Installer does not verify the privileged worker is absent.');
+          const acceptance = fs.readFileSync('deploy/acceptance-test.sh', 'utf8');
+          for (const expected of ['gateway_expect 409 UPDATER_MAINTENANCE_REQUIRED','gateway_expect 200','Runtime and source contracts']) {
+            if (!acceptance.includes(expected)) throw new Error('Acceptance contract missing: ' + expected);
+          }
+          NODE
+
+      - name: Create deterministic CI environment
+        run: |
+          cat > .env <<'EOF'
+          NODE_ENV=production
+          SIRK_ADMIN_PASSWORD_HASH=scrypt$16384$8$1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+          SIRK_ACCESS_KEY_HASH=sha256$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+          SIRK_SSO_SHARED_SECRET=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+          SIRK_UPDATER_TOKEN=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+          SIRK_CENTRAL_DOMAIN=central.example.test
+          SIRK_PUBLIC_ORIGIN=https://central.example.test
+          SIRK_WEBSITE_DOMAIN=example.test
+          SIRK_AUTH_DOMAIN=auth.example.test
+          SIRK_AUTH_ORIGIN=https://auth.example.test
+          SIRK_ACME_EMAIL=admin@example.test
+          SIRK_BUSINESS_SITE_PATH=/tmp/sirk-business-site
+          EOF
+          mkdir -p /tmp/sirk-business-site
+
+      - name: Validate base Compose has gateway and excludes worker
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.portal-runtime.yml --profile auth config --services >/tmp/base-services.txt
+          for service in central auth updater-gateway backup-manager caddy; do grep -qx "$service" /tmp/base-services.txt; done
+          ! grep -qx updater /tmp/base-services.txt
+          docker compose -f docker-compose.yml -f docker-compose.portal-runtime.yml --profile auth config >/tmp/compose.base.yml
+
+      - name: Validate maintenance Compose trust boundaries
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.portal-runtime.yml --profile auth --profile maintenance config --format json >/tmp/compose.maintenance.json
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const compose = JSON.parse(fs.readFileSync('/tmp/compose.maintenance.json', 'utf8'));
+          for (const service of ['central','auth','updater-gateway','updater','backup-manager','caddy']) {
+            if (!compose.services?.[service]) throw new Error('Missing service: ' + service);
+          }
+          if (String(compose.services['updater-gateway'].user) !== 'node') throw new Error('Gateway must run as node.');
+          if (String(compose.services.updater.user) !== '0:0') throw new Error('Worker root boundary is not explicit.');
+          if (compose.services.updater.restart !== 'no') throw new Error('Worker restart policy must be no.');
+          for (const service of ['updater-gateway','updater','backup-manager']) {
+            if (compose.services[service].ports?.length) throw new Error(service + ' publishes host ports.');
+          }
+          if (compose.services['updater-gateway'].volumes?.length) throw new Error('Gateway must not mount host or persistent volumes.');
+          if (compose.services['updater-gateway'].environment.SIRK_ADMIN_PASSWORD_HASH) throw new Error('Gateway inherited unrelated .env secrets.');
+          if (compose.services.central.environment.SIRK_UPDATER_ORIGIN !== 'http://updater-gateway:8092') throw new Error('Central bypasses gateway.');
+          if (compose.services['updater-gateway'].environment.SIRK_UPDATER_WORKER_ORIGIN !== 'http://updater:8090') throw new Error('Gateway worker origin is invalid.');
+          NODE
+
+      - name: Build application images
+        run: docker compose -f docker-compose.yml -f docker-compose.portal-runtime.yml --profile auth --profile maintenance build central auth updater-gateway updater backup-manager
+
+      - name: Inspect image runtimes
+        run: |
+          set -euo pipefail
+          compose=(docker compose -f docker-compose.yml -f docker-compose.portal-runtime.yml --profile auth --profile maintenance)
+          central_image="$(${compose[@]} images -q central)"
+          auth_image="$(${compose[@]} images -q auth)"
+          gateway_image="$(${compose[@]} images -q updater-gateway)"
+          updater_image="$(${compose[@]} images -q updater)"
+          for image in "$central_image" "$auth_image" "$gateway_image" "$updater_image"; do test -n "$image"; done
+          test "$(docker image inspect "$central_image" --format '{{.Config.User}}')" = node
+          test "$(docker image inspect "$auth_image" --format '{{.Config.User}}')" = node
+          test "$(docker image inspect "$gateway_image" --format '{{.Config.User}}')" = node
+          test "$(docker image inspect "$updater_image" --format '{{.Config.User}}')" = root
+          docker run --rm --entrypoint node "$central_image" --check src/server-v15.js
+          docker run --rm --entrypoint node "$auth_image" --check auth/hardened-server.js
+          docker run --rm --entrypoint node "$gateway_image" --check /app/gateway-server.js
+          docker run --rm --entrypoint node "$updater_image" --check /app/server.js
+          docker run --rm --entrypoint node "$updater_image" --check /app/management-server.js

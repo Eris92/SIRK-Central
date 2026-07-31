@@ -13,7 +13,6 @@ function parseCookies(req) {
     }
     return result;
 }
-
 function readBody(req, limit) {
     return new Promise((resolve, reject) => {
         const chunks = [];
@@ -32,25 +31,17 @@ function readBody(req, limit) {
         req.on("error", reject);
     });
 }
-
 function sendJson(res, status, body) {
     const data = Buffer.from(JSON.stringify(body));
-    res.writeHead(status, {
-        "Content-Type": "application/json; charset=utf-8",
-        "Content-Length": String(data.length),
-        "Cache-Control": "no-store",
-        "X-Content-Type-Options": "nosniff"
-    });
+    res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Content-Length": String(data.length), "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" });
     res.end(data);
 }
-
 function cloneRequest(req, url, method) {
     const clone = Object.create(req);
     Object.defineProperty(clone, "url", { value: url, writable: true, configurable: true });
     Object.defineProperty(clone, "method", { value: method || req.method, writable: true, configurable: true });
     return clone;
 }
-
 async function capture(handler, req) {
     let statusCode = 200;
     const headers = {};
@@ -58,9 +49,7 @@ async function capture(handler, req) {
     let resolveFinished;
     const finished = new Promise(resolve => { resolveFinished = resolve; });
     const response = {
-        statusCode: 200,
-        headersSent: false,
-        writableEnded: false,
+        statusCode: 200, headersSent: false, writableEnded: false,
         setHeader(name, value) { headers[String(name).toLowerCase()] = value; },
         getHeader(name) { return headers[String(name).toLowerCase()]; },
         removeHeader(name) { delete headers[String(name).toLowerCase()]; },
@@ -80,19 +69,15 @@ async function capture(handler, req) {
     if (!response.writableEnded) await finished;
     return { statusCode, headers, body: Buffer.concat(chunks) };
 }
-
 async function readIdentity(handler, req) {
     const result = await capture(handler, cloneRequest(req, "/api/session", "GET"));
     if (result.statusCode !== 200) return null;
-    try { return JSON.parse(result.body.toString("utf8")); }
-    catch (_) { return null; }
+    try { return JSON.parse(result.body.toString("utf8")); } catch (_) { return null; }
 }
-
 function hasPermission(identity, permission) {
     const permissions = identity && Array.isArray(identity.permissions) ? identity.permissions : [];
     return permissions.includes("*") || permissions.includes(permission);
 }
-
 function createApp(config) {
     const NativeMap = global.Map;
     const persistentSessions = new PersistentSessionMap({
@@ -109,26 +94,20 @@ function createApp(config) {
             return new NativeMap(...args);
         }
     }
-
     let app;
     global.Map = SessionAwareMap;
     try { app = oldServer.createApp(config); }
     finally { global.Map = NativeMap; }
-
     const oldHandler = app.server.listeners("request")[0];
     const organizationStore = organizationStoreFactory.create({ dataDir: config.dataDir });
-
     const server = http.createServer(async (req, res) => {
         try {
             const url = new URL(req.url, "http://central.local");
-            const organizationRoute = url.pathname.startsWith("/api/organizations");
-
-            if (organizationRoute) {
+            if (url.pathname.startsWith("/api/organizations")) {
                 const identity = await readIdentity(oldHandler, req);
                 if (!identity) return sendJson(res, 401, { ok: false, error: "Authentication required." });
                 const canRead = hasPermission(identity, "settings.read") || hasPermission(identity, "settings.manage");
                 const canWrite = hasPermission(identity, "settings.manage");
-
                 if (req.method === "GET" && url.pathname === "/api/organizations") {
                     if (!canRead) return sendJson(res, 403, { ok: false, error: "Permission denied." });
                     return sendJson(res, 200, { ok: true, organizations: organizationStore.list(), tree: organizationStore.tree() });
@@ -167,7 +146,6 @@ function createApp(config) {
                 }
                 return sendJson(res, 404, { ok: false, error: "Not found." });
             }
-
             const rotatesBreakGlass = req.method === "POST" && (url.pathname === "/api/break-glass/password" || url.pathname === "/api/break-glass/access");
             if (rotatesBreakGlass) {
                 const originalWriteHead = res.writeHead.bind(res);
@@ -184,16 +162,13 @@ function createApp(config) {
                     return result;
                 };
             }
-
             return oldHandler(req, res);
         } catch (error) {
             if (!res.headersSent) return sendJson(res, error.statusCode || 400, { ok: false, error: error.message || "Internal server error." });
             res.destroy(error);
         }
     });
-
     server.on("upgrade", (req, socket, head) => app.server.emit("upgrade", req, socket, head));
     return Object.assign({}, app, { server, sessionStore: persistentSessions, organizationStore });
 }
-
 module.exports = { loadConfig: oldServer.loadConfig, createApp };

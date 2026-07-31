@@ -41,7 +41,7 @@ function create(options) {
         const id = credentialId(input && input.credentialId);
         if (state.credentials[id] && !state.credentials[id].revokedAtUtc) throw new Error("Passkey is already registered.");
         const publicKey = String(input && input.publicKey || "").trim();
-        if (!/^[A-Za-z0-9+/=_-]{40,8192}$/.test(publicKey)) throw new Error("Public key is invalid.");
+        if (!/^[A-Za-z0-9_-]{40,8192}$/.test(publicKey)) throw new Error("Public key is invalid.");
         const transports = Array.isArray(input && input.transports) ? input.transports.filter(x => ["usb", "nfc", "ble", "internal", "hybrid"].includes(x)) : [];
         const timestamp = new Date(now()).toISOString();
         const record = {
@@ -63,7 +63,15 @@ function create(options) {
         return clone(record);
     }
 
-    function verifyUse(idValue, identity, newCounter) {
+    function getActive(idValue, identity) {
+        const id = credentialId(idValue);
+        const record = state.credentials[id];
+        if (!record || record.revokedAtUtc || record.status !== "active") throw new Error("Passkey not found or revoked.");
+        if (identity && record.owner !== identityKey(identity)) throw new Error("Passkey owner mismatch.");
+        return clone(record);
+    }
+
+    function verifyUse(idValue, identity, newCounter, flags = {}) {
         const id = credentialId(idValue);
         const record = state.credentials[id];
         if (!record || record.revokedAtUtc || record.status !== "active") throw new Error("Passkey not found or revoked.");
@@ -71,6 +79,8 @@ function create(options) {
         const counter = Math.max(0, Number(newCounter || 0));
         if (counter > 0 && record.counter > 0 && counter <= record.counter) throw new Error("Passkey signature counter did not increase.");
         if (counter > record.counter) record.counter = counter;
+        if (typeof flags.backupEligible === "boolean") record.backupEligible = flags.backupEligible;
+        if (typeof flags.backupState === "boolean") record.backupState = flags.backupState;
         record.lastUsedAtUtc = new Date(now()).toISOString();
         persist();
         return clone(record);
@@ -100,7 +110,7 @@ function create(options) {
         return list(identity).filter(item => item.status === "active").length;
     }
 
-    return { register, verifyUse, revoke, list, activeCount, filePath };
+    return { register, getActive, verifyUse, revoke, list, activeCount, filePath };
 }
 
 module.exports = { create };

@@ -1,5 +1,6 @@
 "use strict";
 
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const { hashSecret, verifySecret } = require("./security");
@@ -24,8 +25,9 @@ function normalizeClaimRoles(value) {
 }
 function approvalAllowed(actor, targetRole, targetIdentityKey) {
     if (!actor || !PRIVILEGED_ROLES.has(targetRole)) return false;
-    if (actor.builtIn) return true;
-    if (actor.role !== "SecAdmin") return false;
+    if (actor.builtIn === true && actor.source === "local" && actor.role === "BreakGlass") return true;
+    if (actor.role !== "SecAdmin" || actor.status && actor.status !== "active") return false;
+    if (targetRole !== "SecAdmin") return false;
     return !actor.identityKey || actor.identityKey.toLowerCase() !== targetIdentityKey.toLowerCase();
 }
 
@@ -53,9 +55,22 @@ function create(options) {
     }
     function write(value) {
         value.schema = 2;
-        const temporary = storePath + ".tmp-" + process.pid + "-" + Date.now();
-        fs.writeFileSync(temporary, JSON.stringify(value, null, 2) + "\n", { mode: 0o600 });
-        fs.renameSync(temporary, storePath);
+        const temporary = storePath + ".tmp-" + process.pid + "-" + crypto.randomBytes(6).toString("hex");
+        let descriptor;
+        try {
+            descriptor = fs.openSync(temporary, "wx", 0o600);
+            fs.writeFileSync(descriptor, JSON.stringify(value, null, 2) + "\n", "utf8");
+            fs.fsyncSync(descriptor);
+            fs.closeSync(descriptor);
+            descriptor = undefined;
+            fs.renameSync(temporary, storePath);
+        } catch (error) {
+            if (descriptor !== undefined) {
+                try { fs.closeSync(descriptor); } catch (_) { /* ignore cleanup failure */ }
+            }
+            try { fs.rmSync(temporary, { force: true }); } catch (_) { /* ignore cleanup failure */ }
+            throw error;
+        }
     }
     function publicEntra(identityKey, item) {
         return {

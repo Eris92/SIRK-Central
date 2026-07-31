@@ -1,242 +1,179 @@
 # SIRK Central
 
-Centralny panel zarządzania dla wielu instalacji **SIRK Portal**. Projekt odpowiada za centralny RBAC, zarządzanie tenantami, użytkownikami, klientami, lokalizacjami i połączonymi Portalami oraz za publiczny punkt logowania Entra ID.
-
-## Architektura
-
-Projekt składa się z trzech usług uruchamianych przez Docker Compose:
-
-- `central` — panel SIRK Central i API,
-- `auth` — broker logowania Entra ID,
-- `caddy` — wspólny reverse proxy, TLS i serwowanie stron statycznych.
-
-Ten sam Caddy obsługuje również publiczną stronę firmową `sir-k.pl` zamontowaną tylko do odczytu z `/opt/sir-k.pl`.
+SIRK Central jest wielotenantowym management plane dla instalacji SIRK Portal.
 
 ```text
-Internet
-   |
-   v
-Caddy :80/:443
-   |-- sirkportal.com          -> statyczna strona produktu
-   |-- central.sirkportal.com  -> SIRK Central
-   |-- auth.sirkportal.com     -> SIRK Auth
-   |-- sir-k.pl                -> /opt/sir-k.pl
-   `-- www.sir-k.pl            -> redirect do sir-k.pl
+Branch: main
+Runtime: src/server-v15.js
+Version: 1.0.0-rc.25
 ```
 
-Lokalne Portale inicjują wychodzące połączenie WSS do Central. Nie wymagają publicznego adresu, przekierowania portów ani wystawienia lokalnego HTTP do Internetu.
+Gałąź `main` jest kanonicznym kodem SIRK Central. Wersja pozostaje release candidate do czasu zielonego CI, VPS acceptance oraz testów backup/restore, update/rollback, YubiKey i Entra.
 
-## Publiczne adresy
+## Dokumentacja
 
-| Adres | Rola |
-|---|---|
-| `https://sirkportal.com` | publiczna strona produktu SIRK Portal |
-| `https://central.sirkportal.com` | panel SIRK Central |
-| `https://auth.sirkportal.com` | broker logowania Entra ID |
-| `https://sir-k.pl` | publiczna strona firmowa Sir-K |
-| `https://www.sir-k.pl` | przekierowanie do `sir-k.pl` |
+- [Bieżący stan](docs/CURRENT-STATUS.md)
+- [Architektura](docs/ARCHITECTURE.md)
+- [Protokół Central ↔ Portal](docs/PORTAL-PROTOCOL.md)
+- [Testy](docs/TESTING.md)
+- [Audyt bezpieczeństwa](docs/SECURITY-AUDIT-2026-07-31.md)
+- [Polecenie wznowienia](docs/RESUME-PROMPT.md)
 
-## Logowanie i role
-
-Podstawowym mechanizmem logowania jest Microsoft Entra ID. Lokalne konto pozostaje jako dostęp awaryjny `break-glass`.
-
-Aktualny lokalny login wymaga dodatkowego klucza we fragmencie URL:
+## Kanoniczny runtime
 
 ```text
-https://central.sirkportal.com/#access=<KLUCZ>
+src/server-v15.js
 ```
 
-Fragment URL nie trafia do logów HTTP ani do nagłówka `Referer`. Klucz jest warstwą ukrycia wejścia i nie zastępuje uwierzytelnienia.
+Ten sam entry point jest wymagany przez `package.json`, Dockerfile, CI, Security Audit i acceptance. Pliki legacy są zachowane wyłącznie dla zgodności i migracji.
 
-Główne role:
+## Bezpieczeństwo i tożsamość
 
-- `BreakGlass` — awaryjne zarządzanie dostępem i pierwszą konfiguracją,
-- `SecAdmin` — bezpieczeństwo, zatwierdzanie uprzywilejowanych dostępów i role bezpieczeństwa,
-- `Admin` — administracja tenantami, użytkownikami i Portalami,
-- `Auditor` — dostęp tylko do odczytu i audytu,
-- `Operator` — obsługa operacyjna w przydzielonym zakresie.
+- Entra ID Authorization Code + PKCE;
+- lokalny BreakGlass z Access URL;
+- passkeys/WebAuthn, YubiKey i recovery codes;
+- hashowane persistent sessions z idle/absolute timeout;
+- globalny browser CSRF i Origin/Sec-Fetch-Site;
+- blokowanie `pending`, `conflict` i `disabled`;
+- separation of duties `Admin` / `SecAdmin`;
+- tamper-evident audit.
 
-`Admin` i `SecAdmin` są rozdzielone. Uprzywilejowane przypisania pochodzące z grup Entra mogą wymagać zatwierdzenia w Central.
+## Approval Center
 
-Kanoniczny obszar zarządzania uprawnieniami znajduje się pod:
+- jedna lub dwie niezależne decyzje;
+- self-approval protection;
+- exact-scope i single-use approvals;
+- high-risk approval zużywany dopiero przy utworzeniu command;
+- retry wysokiego ryzyka wymaga nowej zgody;
+- legacy approval mutations są wyłączone.
+
+## Portal monitoring i commands
+
+- signed heartbeat HMAC, timestamp i nonce replay protection;
+- rate limiting per IP i Portal;
+- access-scope filtering;
+- trwała kolejka z delivery lease, ACK, progress, result i timeout;
+- secret redaction i prototype-pollution protection;
+- cooperative cancellation:
+  - `queued` → `cancelled`,
+  - `delivered/running` → `cancel_requested`,
+  - Portal dostaje `control: "cancel"` i kończy ACK `cancelled`;
+- `completed/failed` może bezpiecznie wygrać race.
+
+## Tickets
+
+- projection store schema v2;
+- canonical Tenant/Customer/Site assignment;
+- fail-closed publication policy `none`;
+- opis/requester tylko po jawnej zgodzie;
+- digest replay i version conflict detection;
+- full snapshot usuwa nieobecne projekcje;
+- policy tightening usuwa/redaguje istniejące dane;
+- pojedynczy błąd zachowuje `400/409/429/5xx`;
+- `207 Multi-Status` jest wyłącznie dla partial batch;
+- każdy wynik batcha ma `status`, `code` i `retryable`.
+
+## Storage
+
+Dane znajdują się w `/var/lib/sirk-central`. Runtime używa fail-fast single-writer lease:
 
 ```text
-/permissions
+/var/lib/sirk-central/.sirk-central-runtime.lock/owner.json
 ```
 
-Dostęp mają `Admin`, `SecAdmin` oraz `BreakGlass`. Trasa `/admin` nie jest używana.
+Druga instancja na tym samym file-backed storage nie uruchomi się. Active-active wymaga transakcyjnej bazy danych i distributed locking.
 
-## DNS
+## Usługi Compose
 
-Wymagane rekordy powinny wskazywać na VPS z Caddy:
+Canonical stack:
 
 ```text
-sirkportal.com          A/AAAA -> VPS
-www.sirkportal.com      A/AAAA -> VPS
-central.sirkportal.com  A/AAAA -> VPS
-auth.sirkportal.com     A/AAAA -> VPS
-sir-k.pl                A/AAAA -> VPS
-www.sir-k.pl            A/AAAA -> VPS
+docker-compose.yml
+docker-compose.portal-runtime.yml
+--profile auth
 ```
 
-Nie publikuj rekordu `AAAA`, jeżeli wskazuje na inny serwer niż VPS. Błędny IPv6 powoduje, że ACME i użytkownicy mogą trafiać do starego hostingu zamiast do Caddy.
+Base services:
 
-Porty publiczne:
+- `central` — v15 API/UI, `USER node`;
+- `auth` — broker Entra, `USER node`;
+- `updater-gateway` — minimalny, nieuprzywilejowany proxy jako `USER node`;
+- `backup-manager` — scheduler i backup metadata;
+- `caddy` — TLS i reverse proxy.
+
+### Updater gateway
+
+Central nigdy nie łączy się bezpośrednio z rootowym workerem:
 
 ```text
-80/tcp   ACME HTTP-01 i redirect HTTPS
-443/tcp  HTTPS dla wszystkich domen
-443/udp  HTTP/3, jeżeli jest dozwolony
+Central -> updater-gateway:8092 -> updater:8090
 ```
 
-## Katalogi na VPS
+Gateway:
 
-```text
-/opt/sirk-central   repozytorium i Docker Compose SIRK Central
-/opt/sir-k.pl       statyczna strona firmowa montowana do Caddy
-```
+- ma osobny minimalny obraz bez Docker CLI, Git i tar;
+- nie ma wolumenów ani host ports;
+- otrzymuje wyłącznie `SIRK_UPDATER_TOKEN` i parametry proxy;
+- ma exact route/host allowlist, timeout i body limit;
+- przy zamkniętym maintenance zwraca `409 UPDATER_MAINTENANCE_REQUIRED`.
 
-Caddy montuje stronę firmową przez:
+### Maintenance worker
+
+Rootowy worker z Docker socket nie działa stale:
 
 ```yaml
-${SIRK_BUSINESS_SITE_PATH:-/opt/sir-k.pl}:/srv/sir-k:ro
+profiles: ["maintenance"]
+restart: "no"
+user: "0:0"
 ```
 
-## Czysta instalacja
+Otwarcie:
+
+```bash
+sudo bash /opt/sirk-central/deploy/maintenance-up.sh
+```
+
+Zamknięcie po operacji:
+
+```bash
+sudo bash /opt/sirk-central/deploy/maintenance-down.sh
+```
+
+## Instalacja
 
 ```bash
 curl -fsSL \
   https://raw.githubusercontent.com/Eris92/SIRK-Central/main/deploy/install.sh \
   -o /tmp/install-sirk-central.sh
-
 sudo bash /tmp/install-sirk-central.sh
 sudo rm -f /tmp/install-sirk-central.sh
 ```
 
-Nie używaj `curl | sudo bash`, ponieważ instalator pobiera dane interaktywnie.
+Nie używaj `curl | sudo bash`. Instalator uruchamia base stack z gatewayem, bez rootowego workera.
 
-Instalator:
-
-- obsługuje Ubuntu i Debian,
-- instaluje Docker Engine i Compose plugin, jeśli ich brakuje,
-- tworzy klon Git w `/opt/sirk-central`,
-- tworzy `.env`,
-- generuje lokalne dane `break-glass`,
-- konfiguruje UFW,
-- buduje i uruchamia kontenery.
-
-## Najważniejsze zmienne `.env`
-
-| Zmienna | Przykład |
-|---|---|
-| `SIRK_WEBSITE_DOMAIN` | `sirkportal.com` |
-| `SIRK_CENTRAL_DOMAIN` | `central.sirkportal.com` |
-| `SIRK_AUTH_DOMAIN` | `auth.sirkportal.com` |
-| `SIRK_BUSINESS_DOMAIN` | `sir-k.pl` |
-| `SIRK_BUSINESS_SITE_PATH` | `/opt/sir-k.pl` |
-| `SIRK_ACME_EMAIL` | adres administratora certyfikatów |
-| `SIRK_SSO_SHARED_SECRET` | współdzielony sekret Central/Auth |
-| `SIRK_ADMIN_USERNAME` | lokalne konto awaryjne |
-| `SIRK_SESSION_HOURS` | czas sesji, domyślnie `8` |
-
-Sekretów nie należy umieszczać w repozytorium ani w dokumentacji publicznej.
-
-## Aktualizacja istniejącej instalacji
-
-Standardowa aktualizacja:
-
-```bash
-cd /opt/sirk-central
-sudo bash ./deploy/update.sh
-```
-
-Skrypt pobiera `origin/main`, waliduje konfigurację, przebudowuje obrazy i odtwarza `central`, `auth` oraz `caddy`.
-
-Ręczne odtworzenie usług:
-
-```bash
-cd /opt/sirk-central
-docker compose --profile auth up -d --build --force-recreate central auth caddy
-```
-
-Restart samego Caddy:
-
-```bash
-cd /opt/sirk-central
-docker compose --profile auth restart caddy
-```
-
-## Aktualizacja strony `sir-k.pl`
-
-Strona firmowa jest osobnym repozytorium, ale korzysta z tego samego Caddy:
-
-```bash
-cd /opt/sir-k.pl
-git fetch --prune origin
-git reset --hard origin/main
-```
-
-Ponieważ katalog jest zamontowany bezpośrednio do kontenera tylko do odczytu, zwykle nie jest potrzebna przebudowa. W razie potrzeby:
-
-```bash
-cd /opt/sirk-central
-docker compose --profile auth restart caddy
-```
-
-## Operacje awaryjne
-
-Reset lokalnego hasła administratora:
-
-```bash
-sudo bash /opt/sirk-central/deploy/reset-admin-password.sh
-```
-
-Rotacja klucza `access`:
-
-```bash
-sudo bash /opt/sirk-central/deploy/rotate-access-key.sh
-```
-
-Docelowo konto `break-glass` powinno wspierać klucz sprzętowy YubiKey jako dodatkowy, zalecany mechanizm ochrony.
-
-## Weryfikacja wdrożenia
-
-```bash
-cd /opt/sirk-central
-
-docker compose --profile auth config
-docker compose --profile auth ps
-docker compose --profile auth logs --tail=150 caddy central auth
-
-curl -I https://sirkportal.com
-curl -I https://central.sirkportal.com
-curl -I https://auth.sirkportal.com
-curl -I https://sir-k.pl
-curl -I https://www.sir-k.pl
-```
-
-Sprawdzenie DNS z pominięciem lokalnego cache:
-
-```bash
-dig @1.1.1.1 +short A sir-k.pl
-dig @1.1.1.1 +short AAAA sir-k.pl
-dig @1.1.1.1 +short A central.sirkportal.com
-dig @1.1.1.1 +short AAAA central.sirkportal.com
-```
-
-Oczekiwane zachowanie:
-
-- wszystkie domeny trafiają do Caddy na tym samym VPS,
-- `www.*` przekierowuje na domenę kanoniczną,
-- odpowiedzi zawierają `server: Caddy` lub `via: 1.1 Caddy`,
-- panel Central i Auth nie są indeksowane przez wyszukiwarki,
-- żadna publiczna strona nie zawiera nazw klientów, tenantów ani wewnętrznych adresów.
-
-## Development i testy
+## Testy
 
 ```bash
 npm ci
-npm test
+npm run check:syntax
+SIRK_CONCURRENCY_TEST_REQUESTS=24 npm test
+npm audit --omit=dev --audit-level=high
 ```
 
-Przed wdrożeniem należy sprawdzić testy, konfigurację Compose oraz brak danych klientów w publicznych plikach.
+VPS acceptance:
+
+```bash
+cd /opt/sirk-central
+export SIRK_ACCEPTANCE_PUBLIC_URL='https://central.sirkportal.com'
+bash deploy/acceptance-test.sh
+```
+
+Acceptance sprawdza single-writer lock oraz lifecycle: gateway `409` → worker maintenance → gateway `200` → worker removed → gateway `409`.
+
+## Kod główny i walidacja
+
+`main` jest jedyną kanoniczną gałęzią wdrożeniową. Zmiany funkcjonalne należy prowadzić przez krótkie branche i scalać dopiero po testach. Bieżący RC wymaga jeszcze pełnego CI i testów środowiskowych opisanych w `docs/CURRENT-STATUS.md`.
+
+## SIRK Portal
+
+Nie modyfikować repozytorium SIRK Portal w ramach zmian dotyczących Central. Integracja jest obecnie weryfikowana przez testy HTTP i symulator w repo SIRK Central.

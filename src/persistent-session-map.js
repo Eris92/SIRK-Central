@@ -7,18 +7,13 @@ const path = require("node:path");
 function hashToken(token) {
     return crypto.createHash("sha256").update(String(token), "utf8").digest("base64url");
 }
-
-function clone(value) {
-    return JSON.parse(JSON.stringify(value));
-}
-
+function clone(value) { return JSON.parse(JSON.stringify(value)); }
 function atomicWrite(filePath, value) {
     fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
     const temporary = filePath + ".tmp-" + process.pid + "-" + crypto.randomBytes(6).toString("hex");
     fs.writeFileSync(temporary, JSON.stringify(value, null, 2) + "\n", { mode: 0o600, flag: "wx" });
     fs.renameSync(temporary, filePath);
 }
-
 class PersistentSessionMap {
     constructor(options) {
         options = options || {};
@@ -28,7 +23,6 @@ class PersistentSessionMap {
         this.records = {};
         this.load();
     }
-
     load() {
         try {
             const parsed = JSON.parse(fs.readFileSync(this.filePath, "utf8"));
@@ -39,11 +33,7 @@ class PersistentSessionMap {
         }
         this.cleanup(false);
     }
-
-    persist() {
-        atomicWrite(this.filePath, { version: 2, sessions: this.records });
-    }
-
+    persist() { atomicWrite(this.filePath, { version: 2, sessions: this.records }); }
     cleanup(write = true) {
         const now = Date.now();
         let changed = false;
@@ -58,7 +48,6 @@ class PersistentSessionMap {
         if (changed && write) this.persist();
         return changed;
     }
-
     set(token, value) {
         const hash = hashToken(token);
         const now = Date.now();
@@ -75,7 +64,6 @@ class PersistentSessionMap {
         this.persist();
         return this;
     }
-
     get(token) {
         const hash = hashToken(token);
         const record = this.records[hash];
@@ -91,11 +79,7 @@ class PersistentSessionMap {
         this.persist();
         return record;
     }
-
-    has(token) {
-        return Boolean(this.get(token));
-    }
-
+    has(token) { return Boolean(this.get(token)); }
     delete(key) {
         const text = String(key || "");
         const directHash = hashToken(text);
@@ -110,12 +94,7 @@ class PersistentSessionMap {
         this.persist();
         return true;
     }
-
-    clear() {
-        this.records = {};
-        this.persist();
-    }
-
+    clear() { this.records = {}; this.persist(); }
     revokeWhere(predicate, exceptToken) {
         const exceptHash = exceptToken ? hashToken(exceptToken) : "";
         let count = 0;
@@ -128,33 +107,11 @@ class PersistentSessionMap {
         if (count) this.persist();
         return count;
     }
-
-    entries() {
-        this.cleanup();
-        const values = Object.values(this.records).map(record => [record.id, record]);
-        return values[Symbol.iterator]();
-    }
-
-    keys() {
-        return Array.from(this.entries(), entry => entry[0])[Symbol.iterator]();
-    }
-
-    values() {
-        return Array.from(this.entries(), entry => entry[1])[Symbol.iterator]();
-    }
-
-    forEach(callback, thisArg) {
-        for (const [key, value] of this.entries()) callback.call(thisArg, value, key, this);
-    }
-
-    get size() {
-        this.cleanup();
-        return Object.keys(this.records).length;
-    }
-
-    [Symbol.iterator]() {
-        return this.entries();
-    }
+    entries() { this.cleanup(); return Object.values(this.records).map(record => [record.id, record])[Symbol.iterator](); }
+    keys() { return Array.from(this.entries(), entry => entry[0])[Symbol.iterator](); }
+    values() { return Array.from(this.entries(), entry => entry[1])[Symbol.iterator](); }
+    forEach(callback, thisArg) { for (const [key, value] of this.entries()) callback.call(thisArg, value, key, this); }
+    get size() { this.cleanup(); return Object.keys(this.records).length; }
+    [Symbol.iterator]() { return this.entries(); }
 }
-
 module.exports = { PersistentSessionMap, hashToken };

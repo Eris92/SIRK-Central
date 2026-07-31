@@ -6,54 +6,125 @@ services:
     environment:
       SIRK_BIND_HOST: 0.0.0.0
       SIRK_PUBLIC_ORIGIN: https://${SIRK_CENTRAL_DOMAIN:-central.sirkportal.com}
-      SIRK_AUTH_ORIGIN: https://${SIRK_AUTH_DOMAIN:-auth.sirkportal.com}
-      SIRK_UPDATER_ORIGIN: http://updater:8090
+      SIRK_AUTH_ORIGIN: ${SIRK_AUTH_ORIGIN:-}
+      SIRK_SSO_SHARED_SECRET: ${SIRK_SSO_SHARED_SECRET:-}
+      SIRK_UPDATER_ORIGIN: http://updater-gateway:8092
+      SIRK_UPDATER_ALLOWED_HOSTS: updater-gateway
     volumes:
       - central-data:/var/lib/sirk-central
     networks:
       - internal
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/readyz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 20s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
 
   auth:
     profiles: ["auth"]
     build: .
     restart: unless-stopped
-    command: ["node", "auth/server.js"]
+    command: ["node", "auth/hardened-server.js"]
     env_file: .env
     environment:
       SIRK_AUTH_BIND_HOST: 0.0.0.0
       SIRK_AUTH_PORT: 8081
       SIRK_PUBLIC_ORIGIN: https://${SIRK_CENTRAL_DOMAIN:-central.sirkportal.com}
-      SIRK_AUTH_ORIGIN: https://${SIRK_AUTH_DOMAIN:-auth.sirkportal.com}
+      SIRK_AUTH_ORIGIN: ${SIRK_AUTH_ORIGIN:-}
+      SIRK_CENTRAL_INTERNAL_ORIGIN: http://central:8080
     volumes:
       - central-data:/var/lib/sirk-central:ro
     networks:
       - internal
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8081/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 20s
+      timeout: 5s
+      start_period: 15s
+      retries: 5
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  updater-gateway:
+    build:
+      context: .
+      dockerfile: updater/Dockerfile.gateway
+    restart: unless-stopped
+    user: node
+    command: ["node", "/app/gateway-server.js"]
+    environment:
+      SIRK_UPDATER_TOKEN: ${SIRK_UPDATER_TOKEN}
+      SIRK_UPDATER_GATEWAY_BIND_HOST: 0.0.0.0
+      SIRK_UPDATER_GATEWAY_PORT: 8092
+      SIRK_UPDATER_WORKER_ORIGIN: http://updater:8090
+      SIRK_UPDATER_WORKER_ALLOWED_HOSTS: updater
+      SIRK_UPDATER_GATEWAY_TIMEOUT_MS: 35000
+      SIRK_UPDATER_GATEWAY_MAX_BODY_BYTES: 2097152
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8092/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 20s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
 
   updater:
+    profiles: ["maintenance"]
     build:
       context: .
       dockerfile: updater/Dockerfile
-    restart: unless-stopped
+    restart: "no"
+    user: "0:0"
     env_file: .env
     environment:
       SIRK_UPDATER_BIND_HOST: 0.0.0.0
       SIRK_UPDATER_PORT: 8090
       SIRK_UPDATER_STATE_DIR: /var/lib/sirk-updater
+      SIRK_BACKUP_SOURCE_DIR: /var/lib/sirk-central
+      SIRK_BACKUP_DIR: /var/lib/sirk-updater/backups
+      SIRK_BACKUP_TIME_ZONE: ${SIRK_BACKUP_TIME_ZONE:-Europe/Warsaw}
+      SIRK_BACKUP_ALLOW_LEGACY_WITHOUT_CHECKSUM: ${SIRK_BACKUP_ALLOW_LEGACY_WITHOUT_CHECKSUM:-false}
+      SIRK_COMPOSE_FILES: /opt/sirk-central/docker-compose.yml:/opt/sirk-central/docker-compose.portal-runtime.yml
+      SIRK_COMPOSE_PROFILES: auth,maintenance
       SIRK_INSTALL_DIR: /opt/sirk-central
-      SIRK_REPO_REF: ${SIRK_REPO_REF:-main}
+      SIRK_REPO_REF: ${SIRK_REPO_REF:-}
     volumes:
       - /opt/sirk-central:/opt/sirk-central
       - ${SIRK_BUSINESS_SITE_PATH:-/opt/sir-k.pl}:${SIRK_BUSINESS_SITE_PATH:-/opt/sir-k.pl}
       - /var/run/docker.sock:/var/run/docker.sock
+      - central-data:/var/lib/sirk-central
       - updater-state:/var/lib/sirk-updater
     networks:
       - internal
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8090/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 20s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
 
   caddy:
     image: caddy:2.10.0-alpine
     restart: unless-stopped
     depends_on:
-      - central
+      central:
+        condition: service_healthy
     ports:
       - "80:80"
       - "443:443"
@@ -71,9 +142,12 @@ services:
       - caddy-config:/config
     networks:
       - internal
+    security_opt:
+      - no-new-privileges:true
 
 networks:
   internal:
+    driver: bridge
 
 volumes:
   central-data:

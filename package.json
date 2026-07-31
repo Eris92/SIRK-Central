@@ -1,20 +1,19 @@
 {
   "name": "sirk-central",
-  "version": "0.2.0",
+  "version": "1.0.0-rc.25",
   "private": true,
-  "description": "Central management plane and outbound tunnel broker for SIRK Portal.",
-  "main": "src/entry.js",
+  "description": "SIRK Central production-ready management plane.",
+  "main": "src/server-v15.js",
   "scripts": {
-    "start": "node -r ./src/preload-hardening.js src/entry.js",
-    "dev": "node --watch -r ./src/preload-hardening.js src/entry.js",
+    "start": "node src/server-v15.js",
+    "dev": "node --watch src/server-v15.js",
+    "start:legacy": "node -r ./src/preload-api.js src/entry.js",
     "test": "node --test",
+    "check:syntax": "find deploy scripts -maxdepth 1 -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n && find src updater scripts public test -type f -name '*.js' -print0 | xargs -0 -n1 node --check && python3 -m py_compile scripts/validate-backup-archive.py",
+    "check": "npm run check:syntax && node --test",
     "hash-password": "node scripts/hash-password.js",
     "generate-access-key": "node scripts/generate-access-key.js"
   },
-  "engines": {
-    "node": ">=22"
-  },
-  "dependencies": {
-    "ws": "8.21.1"
-  }
+  "engines": { "node": ">=22" },
+  "dependencies": { "ws": "8.21.1" }
 }

@@ -33,18 +33,28 @@ function permissionsFor(role, builtIn) {
     return (ROLE_PERMISSIONS[normalizeRole(role)] || []).slice();
 }
 
-function hasPermission(identity, permission) {
+function identityActive(identity) {
     if (!identity) return false;
+    if (identity.builtIn === true) return identity.source === "local" && identity.role === "BreakGlass";
+    return !identity.status || identity.status === "active";
+}
+
+function hasPermission(identity, permission) {
+    if (!identityActive(identity)) return false;
     const permissions = permissionsFor(identity.role, identity.builtIn);
     return permissions.includes("*") || permissions.includes(permission);
 }
 
 function canAssignRole(actor, targetRole, currentRole) {
     const role = normalizeRole(targetRole);
-    if (!actor) return false;
-    if (actor.builtIn || actor.role === "SecAdmin") return true;
+    const current = currentRole ? normalizeRole(currentRole) : "";
+    if (!identityActive(actor)) return false;
+    if (actor.builtIn === true) return true;
+    if (actor.role === "SecAdmin") {
+        return role === "SecAdmin" && current !== "Admin";
+    }
     if (actor.role !== "Admin") return false;
-    if (role === "SecAdmin" || currentRole === "SecAdmin") return false;
+    if (role === "SecAdmin" || current === "SecAdmin") return false;
     return true;
 }
 
@@ -53,6 +63,7 @@ module.exports = {
     ROLE_PERMISSIONS,
     normalizeRole,
     permissionsFor,
+    identityActive,
     hasPermission,
     canAssignRole
 };

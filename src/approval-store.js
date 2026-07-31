@@ -27,6 +27,10 @@ function normalizeText(value, field, max) {
     if (!text || text.length > max) throw new Error(field + " is invalid.");
     return text;
 }
+function safeObject(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    return clone(value);
+}
 
 function create(options) {
     options = options || {};
@@ -71,10 +75,11 @@ function create(options) {
             requestedBy: actorKey(actor),
             requestedAtUtc: createdAt,
             expiresAtUtc: new Date(now() + ttlMinutes * 60000).toISOString(),
-            scope: clone(input && input.scope || {}),
-            payload: clone(input && input.payload || {}),
+            scope: safeObject(input && input.scope),
+            payload: safeObject(input && input.payload),
             requiredApprovals: Math.max(1, Math.min(2, Number(input && input.requiredApprovals || 1))),
-            decisions: []
+            decisions: [],
+            execution: null
         };
         state.requests[request.id] = request;
         persist();
@@ -83,7 +88,7 @@ function create(options) {
 
     function decide(requestId, decision, actor, comment) {
         expire();
-        if (!['approve', 'reject'].includes(decision)) throw new Error("Unsupported approval decision.");
+        if (!["approve", "reject"].includes(decision)) throw new Error("Unsupported approval decision.");
         const request = state.requests[String(requestId || "")];
         if (!request) throw new Error("Approval request not found.");
         if (request.state !== "pending") throw new Error("Approval request is no longer pending.");
@@ -110,6 +115,20 @@ function create(options) {
         return clone(request);
     }
 
+    function markExecution(requestId, execution) {
+        const request = state.requests[String(requestId || "")];
+        if (!request) throw new Error("Approval request not found.");
+        if (request.state !== "approved") throw new Error("Only an approved request may be executed.");
+        if (request.execution && request.execution.state === "completed") return clone(request.execution);
+        request.execution = Object.assign({
+            executed: true,
+            state: "completed",
+            executedAtUtc: new Date(now()).toISOString()
+        }, safeObject(execution));
+        persist();
+        return clone(request.execution);
+    }
+
     function list(filter) {
         expire();
         filter = filter || {};
@@ -126,7 +145,7 @@ function create(options) {
         return request ? clone(request) : null;
     }
 
-    return { submit, decide, cancel, list, get, expire, filePath, TYPES, STATES };
+    return { submit, decide, cancel, markExecution, list, get, expire, filePath, TYPES, STATES };
 }
 
 module.exports = { create, TYPES, STATES };
