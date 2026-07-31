@@ -81,7 +81,7 @@ sudo bash /tmp/install-sirk-central.sh
 sudo rm -f /tmp/install-sirk-central.sh
 ```
 
-Nie używaj `curl | sudo bash`.
+Nie przekazuj zdalnie pobranego instalatora bezpośrednio do powłoki uruchomionej jako root. Najpierw zapisz plik, sprawdź go i dopiero wtedy uruchom.
 
 ## Operacje awaryjne
 
