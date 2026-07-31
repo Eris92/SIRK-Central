@@ -1,110 +1,111 @@
 "use strict";
 
 (function () {
-    const RETRY_DELAY_MS = 3000;
-    const MAX_RETRIES = 20;
-    let timer = null;
-    let attempts = 0;
-    let lastSuccessfulText = "";
+    const oldFetch = window.fetch.bind(window);
+    const originalShowSettings = window.showSettings;
+    let retryTimer = 0;
+    let retryCount = 0;
+    const maxRetries = 20;
+    const retryDelayMs = 3000;
 
-    function lang() {
-        return document.documentElement.lang === "en" ? "en" : "pl";
+    function tr(pl, en) { return document.documentElement.lang === "en" ? en : pl; }
+
+    async function requestStatus() {
+        const response = await oldFetch("/api/settings/update/status", { credentials: "same-origin", cache: "no-store" });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            const error = new Error(body.error || "Update status request failed.");
+            error.status = response.status;
+            error.code = body.code || "";
+            error.maintenanceRequired = response.status === 409 && /maintenance window is closed/i.test(error.message);
+            throw error;
+        }
+        return body;
     }
 
-    function text(pl, en) {
-        return lang() === "en" ? en : pl;
-    }
-
-    function statusElement() {
-        return document.getElementById("updateStatus");
-    }
-
-    function messageElement() {
-        return document.getElementById("updateMessage");
-    }
-
-    function runButton() {
-        return document.getElementById("runUpdateButton");
-    }
-
-    function formatStatus(status) {
-        const parts = [text("Stan", "State") + ": " + String(status.state || "idle")];
-        if (status.startedAtUtc) parts.push(text("uruchomiono", "started") + ": " + new Date(status.startedAtUtc).toLocaleString(lang()));
-        if (status.finishedAtUtc) parts.push(text("zakończono", "finished") + ": " + new Date(status.finishedAtUtc).toLocaleString(lang()));
-        if (status.message) parts.push(String(status.message));
-        if (status.exitCode !== undefined && status.exitCode !== null) parts.push(text("kod", "exit code") + ": " + status.exitCode);
-        if (status.logFile) parts.push(text("log", "log") + ": " + status.logFile);
-        return parts.join(" · ");
-    }
-
-    async function refresh() {
-        const target = statusElement();
-        if (!target) return;
-
-        try {
-            const response = await fetch("/api/settings/update/status", {
-                credentials: "same-origin",
-                cache: "no-store",
-                headers: { Accept: "application/json" }
-            });
-            const body = await response.json().catch(() => ({}));
-            if (!response.ok) throw new Error(body.error || "HTTP " + response.status);
-
-            const status = body.status || {};
-            attempts = 0;
-            lastSuccessfulText = formatStatus(status);
-            target.textContent = lastSuccessfulText;
-            target.className = status.state === "failed" ? "error" : "muted";
-
-            const active = status.running === true || ["starting", "running", "rollback"].includes(status.state);
-            const button = runButton();
-            if (button) button.disabled = active;
-
-            if (active) schedule();
-            else stop();
-        } catch (error) {
-            attempts += 1;
-            const suffix = attempts >= MAX_RETRIES
-                ? text("Usługa nadal jest niedostępna. Użyj „Odśwież status”.", "The service is still unavailable. Use “Refresh status”.")
-                : text("Trwa ponowne łączenie z usługą aktualizacji…", "Reconnecting to the update service…");
-            target.textContent = (lastSuccessfulText ? lastSuccessfulText + " · " : "") + suffix;
-            target.className = "muted";
-            const message = messageElement();
-            if (message && /Błąd żądania|Request failed/i.test(message.textContent || "")) message.textContent = "";
-            if (attempts < MAX_RETRIES) schedule();
-            else stop();
+    function renderMaintenanceRequired() {
+        const button = document.getElementById("runUpdateButton");
+        const status = document.getElementById("updateStatus");
+        if (button) {
+            button.disabled = true;
+            button.textContent = tr("Otwórz maintenance na serwerze", "Open server maintenance");
+        }
+        if (status) {
+            status.className = "warning";
+            status.textContent = tr(
+                "Updater worker jest bezpiecznie wyłączony. Na serwerze uruchom: sudo bash /opt/sirk-central/deploy/maintenance-up.sh. Po operacji wykonaj maintenance-down.sh.",
+                "The updater worker is safely disabled. On the server run: sudo bash /opt/sirk-central/deploy/maintenance-up.sh. Run maintenance-down.sh after the operation."
+            );
         }
     }
 
-    function schedule() {
-        if (timer) clearTimeout(timer);
-        timer = setTimeout(refresh, RETRY_DELAY_MS);
+    function renderUnavailable(error) {
+        const button = document.getElementById("runUpdateButton");
+        const status = document.getElementById("updateStatus");
+        if (button) {
+            button.disabled = true;
+            button.textContent = tr("Aktualizacja niedostępna", "Update unavailable");
+        }
+        if (status) {
+            status.className = "error";
+            const suffix = retryCount < maxRetries
+                ? tr(" Ponawiam sprawdzenie...", " Retrying status check...")
+                : tr(" Sprawdź gateway i worker na serwerze.", " Check the gateway and worker on the server.");
+            status.textContent = (error && error.message ? error.message : tr("Usługa aktualizacji jest niedostępna.", "Update service is unavailable.")) + suffix;
+        }
     }
 
-    function stop() {
-        if (timer) clearTimeout(timer);
-        timer = null;
+    function renderAvailable(body) {
+        retryCount = 0;
+        clearTimeout(retryTimer);
+        const button = document.getElementById("runUpdateButton");
+        const status = document.getElementById("updateStatus");
+        if (button) {
+            button.disabled = Boolean(body.status && body.status.running);
+            button.textContent = body.status && body.status.running
+                ? tr("Aktualizacja w toku...", "Update in progress...")
+                : tr("Uruchom aktualizację", "Run update");
+        }
+        if (status) {
+            status.className = body.status && body.status.state === "failed" ? "error" : "muted";
+            status.textContent = body.status && body.status.message
+                ? body.status.message
+                : tr("Updater maintenance worker jest dostępny.", "Updater maintenance worker is available.");
+        }
     }
 
-    function mount() {
-        const refreshButton = document.getElementById("refreshUpdateButton");
-        const updateTab = document.getElementById("updatesTab");
-        const startButton = runButton();
-
-        if (refreshButton) refreshButton.addEventListener("click", function () {
-            attempts = 0;
-            refresh();
-        }, true);
-        if (updateTab) updateTab.addEventListener("click", function () {
-            attempts = 0;
-            refresh();
-        }, true);
-        if (startButton) startButton.addEventListener("click", function () {
-            attempts = 0;
-            setTimeout(refresh, 750);
-        }, true);
+    async function refreshStatus() {
+        try {
+            const body = await requestStatus();
+            renderAvailable(body);
+        } catch (error) {
+            clearTimeout(retryTimer);
+            if (error.maintenanceRequired) {
+                retryCount = 0;
+                renderMaintenanceRequired();
+                return;
+            }
+            retryCount += 1;
+            renderUnavailable(error);
+            if (retryCount < maxRetries) retryTimer = setTimeout(refreshStatus, retryDelayMs);
+        }
     }
 
-    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", mount, { once: true });
-    else mount();
+    if (typeof originalShowSettings === "function") {
+        window.showSettings = async function patchedShowSettings() {
+            const result = await originalShowSettings.apply(this, arguments);
+            refreshStatus();
+            return result;
+        };
+    }
+
+    document.addEventListener("click", event => {
+        if (event.target.closest("#settingsButton,#settingsNavButton,#refreshUpdateStatusButton")) {
+            setTimeout(refreshStatus, 50);
+        }
+        if (event.target.closest("#overviewButton,#backButton,#logoutButton")) {
+            clearTimeout(retryTimer);
+            retryCount = 0;
+        }
+    }, true);
 }());
