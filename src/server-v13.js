@@ -5,7 +5,13 @@ const { createSecurityRuntime } = require("./server-v12");
 const { loadConfig } = require("./server-v1");
 const { parseCookies } = require("./server-v8");
 
-const VERSION = "1.0.0-rc.17";
+const VERSION = "1.0.0-rc.20";
+const DEFERRED_APPROVAL_TYPES = new Set([
+    "tenant.activation",
+    "portal.enrollment",
+    "operation.high-risk",
+    "credential.use"
+]);
 
 function json(res, status, body) {
     const data = Buffer.from(JSON.stringify(body));
@@ -21,19 +27,22 @@ function json(res, status, body) {
 }
 function readBody(req, limit = 65536) {
     return new Promise((resolve, reject) => {
-        const chunks = []; let size = 0;
+        const chunks = []; let size = 0; let settled = false;
         req.on("data", chunk => {
+            if (settled) return;
             size += chunk.length;
             if (size > limit) {
+                settled = true;
                 reject(Object.assign(new Error("Request body is too large."), { statusCode: 413 }));
-                req.destroy();
+                req.resume();
             } else chunks.push(chunk);
         });
         req.on("end", () => {
+            if (settled) return;
             try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}")); }
             catch (_) { reject(Object.assign(new Error("Invalid JSON body."), { statusCode: 400 })); }
         });
-        req.on("error", reject);
+        req.on("error", error => { if (!settled) reject(error); });
     });
 }
 function currentToken(req) { return parseCookies(req).sirk_central_session || ""; }
@@ -81,22 +90,38 @@ function audit(app, action, actor, req, details, result = "success") {
     });
 }
 function executeApproved(app, request, actor) {
-    if (!request || request.state !== "approved") return { executed: false };
+    if (!request || request.state !== "approved") return { executed: false, state: "not-approved" };
     if (request.execution && request.execution.state === "completed") return request.execution;
-    let result = { executed: true, state: "completed", executedAtUtc: new Date().toISOString(), executedBy: actorKey(actor) };
-    if (request.type === "role.assignment") {
-        if (!app.userStore || typeof app.userStore.updateRole !== "function") throw new Error("User role store is unavailable.");
-        const identityKey = String(request.payload && request.payload.identityKey || request.scope && request.scope.identityKey || "");
-        const role = String(request.payload && request.payload.role || "");
-        if (!identityKey || !role) throw new Error("Role approval payload is incomplete.");
-        result.change = app.userStore.updateRole({ source: "entra", key: identityKey }, role, actor);
-    } else if (request.type === "portal.enrollment") {
-        result.note = "Enrollment authorization granted. The Portal must still complete authenticated enrollment.";
-    } else if (request.type === "operation.high-risk" || request.type === "credential.use" || request.type === "tenant.activation") {
-        result.note = "Authorization granted for the requesting subsystem.";
-    } else {
+
+    if (DEFERRED_APPROVAL_TYPES.has(request.type)) {
+        return {
+            executed: false,
+            state: "authorized",
+            approvalId: request.id,
+            authorizationType: request.type,
+            authorizedAtUtc: request.finishedAtUtc || new Date().toISOString(),
+            authorizedBy: actorKey(actor)
+        };
+    }
+
+    if (request.type !== "role.assignment") {
         throw new Error("Unsupported executable approval type.");
     }
+    if (!app.userStore || typeof app.userStore.updateRole !== "function") {
+        throw new Error("User role store is unavailable.");
+    }
+
+    const identityKey = String(request.payload && request.payload.identityKey || request.scope && request.scope.identityKey || "");
+    const role = String(request.payload && request.payload.role || "");
+    if (!identityKey || !role) throw new Error("Role approval payload is incomplete.");
+
+    const result = {
+        executed: true,
+        state: "completed",
+        executedAtUtc: new Date().toISOString(),
+        executedBy: actorKey(actor),
+        change: app.userStore.updateRole({ source: "entra", key: identityKey }, role, actor)
+    };
     if (app.approvals && typeof app.approvals.markExecution === "function") {
         return app.approvals.markExecution(request.id, result);
     }
@@ -161,7 +186,7 @@ function createApprovalRuntime(config) {
                             });
                         }
                         audit(app, "approval.execution_failed", actor, req, { approvalId: request.id, type: request.type, error: String(error.message || error) }, "failure");
-                        return json(res, 409, { ok: false, request: app.approvals.get(request.id), error: "Approval was recorded, but execution failed: " + String(error.message || error) });
+                        return json(res, 409, { ok: false, request: app.approvals.get(request.id), error: "Approval was recorded, but execution failed." });
                     }
                 }
                 audit(app, "approval." + action, actor, req, { approvalId: request.id, type: request.type, state: request.state, execution });
@@ -184,4 +209,4 @@ if (require.main === module) {
     app.server.listen(config.port, config.bindHost, () => process.stdout.write("SIRK Central v13 listening on " + config.bindHost + ":" + config.port + "\n"));
 }
 
-module.exports = { createApprovalRuntime, VERSION, canRead, canDecide, executeApproved };
+module.exports = { createApprovalRuntime, VERSION, DEFERRED_APPROVAL_TYPES, canRead, canDecide, executeApproved };
