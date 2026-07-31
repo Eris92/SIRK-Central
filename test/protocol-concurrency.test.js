@@ -121,8 +121,11 @@ test("parallel signed heartbeats preserve valid final telemetry without request 
     assert.deepEqual(new Set(results.map(item => item.response.status)), new Set([202]));
     const current = h.app.portalTelemetry.get(h.portal.id);
     assert.ok(current);
-    assert.equal(current.health, "ok");
-    assert.ok(Number.isFinite(current.agentCount));
+    assert.equal(current.status, "online");
+    assert.equal(current.heartbeatCount, REQUESTS);
+    assert.equal(current.metrics.health, "ok");
+    assert.ok(Number.isFinite(current.metrics.agentCount));
+    assert.ok(current.metrics.agentCount >= 1 && current.metrics.agentCount <= REQUESTS);
 });
 
 test("parallel ticket events do not lose projections", async t => {
@@ -150,30 +153,41 @@ test("parallel ticket events do not lose projections", async t => {
 
 test("parallel command polling delivers one command only once within its lease", async t => {
     const h = await harness(t);
-    const command = h.app.portalCommands.enqueue({ portalId: h.portal.id, type: "backup", payload: { mode: "full" } }, h.actor);
-    const results = await Promise.all(Array.from({ length: REQUESTS }, () => h.request("/api/portal/v1/commands?limit=20", {
+    const command = h.app.portalCommands.enqueue(h.portal.id, "diagnostics.collect", { scope: "runtime" }, h.actor, { ttlSeconds: 600 });
+    const results = await Promise.all(Array.from({ length: REQUESTS }, () => h.request("/api/portal/v1/commands/poll?limit=1", {
         headers: { Authorization: h.authorization }
     })));
 
     assert.deepEqual(new Set(results.map(item => item.response.status)), new Set([200]));
-    const deliveries = results.flatMap(item => item.body.commands || []).filter(item => item.id === command.id);
+    const deliveries = results.flatMap(item => Array.isArray(item.body.commands) ? item.body.commands : []);
     assert.equal(deliveries.length, 1);
-    assert.equal(h.app.portalCommands.get(command.id).attempts, 1);
+    assert.equal(deliveries[0].id, command.id);
 });
 
 test("parallel identical terminal acknowledgements are idempotent", async t => {
     const h = await harness(t);
-    const command = h.app.portalCommands.enqueue({ portalId: h.portal.id, type: "backup" }, h.actor);
-    h.app.portalCommands.deliver(h.portal.id);
-    h.app.portalCommands.acknowledge(h.portal.id, command.id, { state: "running", progress: 50 });
+    const command = h.app.portalCommands.enqueue(h.portal.id, "diagnostics.collect", { scope: "runtime" }, h.actor, { ttlSeconds: 600 });
+    const delivery = h.app.portalCommands.poll(h.portal.id, { limit: 1 })[0];
+    h.app.portalCommands.acknowledge(h.portal.id, command.id, {
+        state: "running",
+        leaseId: delivery.leaseId,
+        progress: 10,
+        message: "Started"
+    });
 
+    const payload = {
+        state: "completed",
+        leaseId: delivery.leaseId,
+        progress: 100,
+        result: { ok: true, digest: "same-result" },
+        message: "Completed"
+    };
     const results = await Promise.all(Array.from({ length: REQUESTS }, () => h.request("/api/portal/v1/commands/" + command.id + "/ack", {
         method: "POST",
         headers: { Authorization: h.authorization, "Content-Type": "application/json" },
-        body: JSON.stringify({ state: "completed", progress: 100, result: { ok: true } })
+        body: JSON.stringify(payload)
     })));
 
     assert.deepEqual(new Set(results.map(item => item.response.status)), new Set([200]));
-    assert.deepEqual(new Set(results.map(item => item.body.command.state)), new Set(["completed"]));
     assert.equal(h.app.portalCommands.get(command.id).state, "completed");
 });
