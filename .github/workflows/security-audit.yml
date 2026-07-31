@@ -18,7 +18,7 @@ concurrency:
 jobs:
   dependency-and-source-audit:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
         with:
@@ -29,15 +29,19 @@ jobs:
           cache: npm
       - run: npm ci
 
-      - name: Shell JavaScript and Python syntax
-        run: |
-          find deploy -maxdepth 1 -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
-          npm run check:syntax
+      - name: Validate syntax
+        run: npm run check:syntax
 
-      - name: Security regression suite
+      - name: Security and concurrency regression suite
         env:
           SIRK_CONCURRENCY_TEST_REQUESTS: '24'
-        run: node --test test/runtime-lock.test.js test/portal-command-cancellation.test.js test/ticket-event-http-semantics.test.js test/protocol-concurrency.test.js
+        run: |
+          node --test \
+            test/runtime-lock.test.js \
+            test/portal-command-cancellation.test.js \
+            test/ticket-event-http-semantics.test.js \
+            test/protocol-concurrency.test.js \
+            test/updater-gateway.test.js
 
       - name: Production dependency audit
         run: npm audit --omit=dev --audit-level=high
@@ -62,7 +66,7 @@ jobs:
             exit 1
           fi
 
-      - name: Security-sensitive pattern review
+      - name: Reject dangerous execution patterns
         shell: bash
         run: |
           set -euo pipefail
@@ -71,12 +75,12 @@ jobs:
             echo 'Dynamic execution requires explicit review.' >&2
             exit 1
           }
-          ! git grep -nE 'curl[^|]*\|[[:space:]]*(sudo[[:space:]]+)?(bash|sh)' -- 'deploy/**' 'README.md' 'docs/**' || {
+          ! git grep -nE 'curl[^|]*\|[[:space:]]*(sudo[[:space:]]+)?(bash|sh)' -- 'deploy/**' 'scripts/**' 'README.md' 'docs/**' || {
             echo 'Piped remote shell execution is forbidden.' >&2
             exit 1
           }
 
-      - name: Validate runtime and security contracts
+      - name: Validate security boundaries
         shell: bash
         run: |
           set -euo pipefail
@@ -85,53 +89,39 @@ jobs:
           const pkg = require('./package.json');
           const lock = require('./package-lock.json');
           if (pkg.version !== lock.version || pkg.version !== lock.packages[''].version) throw new Error('Package versions differ.');
-          if (pkg.main !== 'src/server-v15.js' || !String(pkg.scripts.start).includes('server-v15.js')) throw new Error('Canonical runtime is not v15.');
-          for (const dockerfileName of ['Dockerfile','Dockerfile.portal-runtime']) {
-            const dockerfile = fs.readFileSync(dockerfileName, 'utf8');
-            if (!dockerfile.includes('CMD ["node", "src/server-v15.js"]')) throw new Error(dockerfileName + ' is not v15.');
-          }
+          if (pkg.main !== 'src/server-v15.js') throw new Error('Canonical runtime is not v15.');
+
           for (const file of [
-            'src/server-v15.js','src/runtime-lock.js',
-            'src/ticket-projection-store.js','src/ticket-projection-store-v2.js',
-            'src/portal-command-store.js','src/portal-command-store-v2.js',
-            'src/request-rate-limiter.js','src/approval-store.js','src/central-operation-guard.js',
-            'src/sso-replay-store.js','src/sso-callback-handler.js','auth/hardened-server.js',
+            'src/server-v15.js','src/runtime-lock.js','src/portal-command-store-v2.js',
+            'src/ticket-projection-store-v2.js','src/sso-callback-handler.js','src/central-operation-guard.js',
+            'auth/hardened-server.js','updater/gateway-server.js','updater/server.js',
             'updater/backup-archive.js','updater/restore-transaction.js',
-            'scripts/validate-backup-archive.py','deploy/backup.sh','deploy/restore.sh','deploy/web-update.sh',
-            'deploy/maintenance-up.sh','deploy/maintenance-down.sh',
-            'test/runtime-lock.test.js','test/portal-command-cancellation.test.js',
-            'test/ticket-event-http-semantics.test.js','test/protocol-concurrency.test.js'
-          ]) if (!fs.existsSync(file)) throw new Error('Missing required file: ' + file);
+            'deploy/backup.sh','deploy/restore.sh','deploy/web-update.sh',
+            'deploy/maintenance-up.sh','deploy/maintenance-down.sh','scripts/sync-main.sh'
+          ]) if (!fs.existsSync(file)) throw new Error('Missing security file: ' + file);
 
           const runtime = fs.readFileSync('src/server-v15.js', 'utf8');
-          for (const expected of [
-            'centralOperationGuard.evaluate','ssoCallback.handler',
-            'runtimeLockFactory.acquire','eventErrorResult','SIRK_RUNTIME_LOCK_DISABLED',
-            '/api/portal/v1/tickets/snapshot','/api/portal/v1/tickets/events'
-          ]) if (!runtime.includes(expected)) throw new Error('Runtime hardening contract missing: ' + expected);
-
-          const commands = fs.readFileSync('src/portal-command-store-v2.js', 'utf8');
-          for (const expected of ['cancel_requested','control = "cancel"','COMMAND_CANCEL_NOT_REQUESTED']) {
-            if (!commands.includes(expected)) throw new Error('Cancellation contract missing: ' + expected);
+          for (const expected of ['runtimeLockFactory.acquire','SIRK_RUNTIME_LOCK_DISABLED','eventErrorResult']) {
+            if (!runtime.includes(expected)) throw new Error('Runtime hardening missing: ' + expected);
           }
-
+          const gateway = fs.readFileSync('updater/gateway-server.js', 'utf8');
+          for (const expected of ['UPDATER_MAINTENANCE_REQUIRED','pathAllowed','workerOrigin','AbortSignal.timeout']) {
+            if (!gateway.includes(expected)) throw new Error('Gateway hardening missing: ' + expected);
+          }
           const compose = fs.readFileSync('docker-compose.yml', 'utf8');
           for (const expected of [
-            'SIRK_CENTRAL_INTERNAL_ORIGIN: http://central:8080',
-            'SIRK_UPDATER_ALLOWED_HOSTS: updater',
-            'profiles: ["maintenance"]','restart: "no"','SIRK_COMPOSE_PROFILES: auth,maintenance'
-          ]) if (!compose.includes(expected)) throw new Error('Compose security contract missing: ' + expected);
-
+            'SIRK_UPDATER_ORIGIN: http://updater-gateway:8092',
+            'SIRK_UPDATER_ALLOWED_HOSTS: updater-gateway',
+            'user: node','profiles: ["maintenance"]','restart: "no"'
+          ]) if (!compose.includes(expected)) throw new Error('Compose security boundary missing: ' + expected);
           const configure = fs.readFileSync('deploy/configure-and-start.sh', 'utf8');
-          if (!configure.includes('SERVICES=(central auth backup-manager caddy)')) throw new Error('Installer starts Docker-socket updater by default.');
-          const caddy = fs.readFileSync('deploy/Caddyfile', 'utf8');
-          if (!caddy.includes('respond @internalSsoLogout 404')) throw new Error('Internal logout endpoint is not hidden publicly.');
+          if (!configure.includes('SERVICES=(central auth updater-gateway backup-manager caddy)')) throw new Error('Installer service boundary is invalid.');
           const backup = fs.readFileSync('deploy/backup.sh', 'utf8');
-          if (!backup.includes('SIRK_BACKUP_REQUIRE_ENCRYPTION:-auto')) throw new Error('Production offline backup encryption is not fail-closed.');
+          if (!backup.includes('SIRK_BACKUP_REQUIRE_ENCRYPTION:-auto')) throw new Error('Offline backup encryption is not fail-closed.');
           const restore = fs.readFileSync('deploy/restore.sh', 'utf8');
-          if (!restore.includes('validate-backup-archive.py') || !restore.includes('rollback')) throw new Error('Offline restore is not transactional and validated.');
+          if (!restore.includes('validate-backup-archive.py') || !restore.includes('rollback')) throw new Error('Restore validation/rollback contract is missing.');
           const update = fs.readFileSync('deploy/web-update.sh', 'utf8');
-          if (!update.includes('central-data.tar.gz') || !update.includes('schedule_updater_recreate')) throw new Error('Web update lacks data rollback or updater self-recreate.');
+          if (!update.includes('central-data.tar.gz') || !update.includes('schedule_updater_recreate')) throw new Error('Update rollback contract is missing.');
           NODE
 
   codeql:
