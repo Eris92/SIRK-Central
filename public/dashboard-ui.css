@@ -1,0 +1,180 @@
+#overviewView {
+  display: grid;
+  gap: 20px;
+  width: 100%;
+}
+
+#overviewView[hidden] {
+  display: none !important;
+}
+
+.overview-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.overview-card {
+  position: relative;
+  min-width: 0;
+  min-height: 158px;
+  padding: 22px;
+  overflow: hidden;
+  border: 1px solid #29446f;
+  border-radius: 18px;
+  background: linear-gradient(145deg, #101f3c, #0b172d);
+  box-shadow: 0 16px 36px rgba(2, 9, 24, 0.18);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.overview-card::after {
+  content: "";
+  position: absolute;
+  right: -42px;
+  bottom: -54px;
+  width: 130px;
+  height: 130px;
+  border: 22px solid rgba(91, 139, 255, 0.07);
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.overview-card small {
+  position: relative;
+  z-index: 1;
+  color: #9eb3d5;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.overview-card strong {
+  position: relative;
+  z-index: 1;
+  display: block;
+  margin-top: auto;
+  overflow-wrap: anywhere;
+  color: #f4f7ff;
+  font-size: clamp(30px, 3vw, 42px);
+  line-height: 1;
+}
+
+.overview-card .status-line {
+  position: relative;
+  z-index: 1;
+  display: block;
+  min-height: 20px;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1.45;
+}
+
+.overview-ok {
+  color: #48e6ba !important;
+}
+
+.overview-warn {
+  color: #ffd166 !important;
+}
+
+.overview-error {
+  color: #ff7a83 !important;
+}
+
+.overview-info {
+  color: #91b4ff !important;
+}
+
+.overview-sections {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(290px, 0.55fr);
+  gap: 18px;
+  align-items: start;
+}
+
+#overviewView .settings-card {
+  min-width: 0;
+  margin: 0;
+}
+
+#overviewView .toolbar {
+  gap: 20px;
+}
+
+#overviewEvents {
+  margin-top: 8px;
+}
+
+.overview-event {
+  display: grid;
+  gap: 6px;
+  padding: 15px 0;
+  border-bottom: 1px solid #29446f;
+}
+
+.overview-event:last-child {
+  border-bottom: 0;
+}
+
+.overview-event strong {
+  overflow-wrap: anywhere;
+  font-size: 15px;
+}
+
+.overview-event small {
+  display: block;
+  color: #9eb3d5;
+  line-height: 1.45;
+}
+
+.overview-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.overview-actions button {
+  width: 100%;
+  min-width: 0;
+}
+
+#overviewUpdated {
+  margin-top: 20px;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 1180px) {
+  .overview-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .overview-sections {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  #overviewView {
+    gap: 14px;
+  }
+
+  .overview-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .overview-card {
+    min-height: 132px;
+    padding: 18px;
+  }
+
+  .overview-actions {
+    grid-template-columns: 1fr;
+  }
+}
