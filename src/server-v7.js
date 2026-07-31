@@ -33,34 +33,29 @@ function createRuntimeApp(config) {
     const auditUiPath = path.join(__dirname, "..", "public", "audit-ui.js");
     const dashboardCssLoaderPath = path.join(__dirname, "..", "public", "dashboard-css-loader.js");
     const dashboardUiPath = path.join(__dirname, "..", "public", "dashboard-ui.js");
+    const adminToolsCssLoaderPath = path.join(__dirname, "..", "public", "admin-tools-css-loader.js");
+    const adminToolsUiPath = path.join(__dirname, "..", "public", "admin-tools-ui.js");
+    const dashboardStylePath = path.join(__dirname, "..", "public", "dashboard-ui.css");
+    const adminToolsStylePath = path.join(__dirname, "..", "public", "admin-tools-ui.css");
     const server = http.createServer((req, res) => {
         try {
             const url = new URL(req.url, "http://central.local");
             if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/passkey-ui.js") {
                 const data = Buffer.concat([
-                    fs.readFileSync(bridgePath),
-                    Buffer.from("\n"),
-                    fs.readFileSync(uiPath),
-                    Buffer.from("\n"),
-                    fs.readFileSync(uiPolishPath),
-                    Buffer.from("\n"),
-                    fs.readFileSync(passkeyCleanupPath),
-                    Buffer.from("\n"),
-                    fs.readFileSync(operationsUiPath),
-                    Buffer.from("\n"),
-                    fs.readFileSync(operationsActionsPath),
-                    Buffer.from("\n"),
-                    fs.readFileSync(centralUxPath),
-                    Buffer.from("\n"),
-                    fs.readFileSync(operationsBootstrapPath),
-                    Buffer.from("\n"),
-                    fs.readFileSync(updateStatusResiliencePath),
-                    Buffer.from("\n"),
-                    fs.readFileSync(auditUiPath),
-                    Buffer.from("\n"),
-                    fs.readFileSync(dashboardCssLoaderPath),
-                    Buffer.from("\n"),
-                    fs.readFileSync(dashboardUiPath)
+                    fs.readFileSync(bridgePath), Buffer.from("\n"),
+                    fs.readFileSync(uiPath), Buffer.from("\n"),
+                    fs.readFileSync(uiPolishPath), Buffer.from("\n"),
+                    fs.readFileSync(passkeyCleanupPath), Buffer.from("\n"),
+                    fs.readFileSync(operationsUiPath), Buffer.from("\n"),
+                    fs.readFileSync(operationsActionsPath), Buffer.from("\n"),
+                    fs.readFileSync(centralUxPath), Buffer.from("\n"),
+                    fs.readFileSync(operationsBootstrapPath), Buffer.from("\n"),
+                    fs.readFileSync(updateStatusResiliencePath), Buffer.from("\n"),
+                    fs.readFileSync(auditUiPath), Buffer.from("\n"),
+                    fs.readFileSync(dashboardCssLoaderPath), Buffer.from("\n"),
+                    fs.readFileSync(dashboardUiPath), Buffer.from("\n"),
+                    fs.readFileSync(adminToolsCssLoaderPath), Buffer.from("\n"),
+                    fs.readFileSync(adminToolsUiPath)
                 ]);
                 res.writeHead(200, Object.assign(securityHeaders(), { "Content-Type": "text/javascript; charset=utf-8", "Content-Length": String(data.length), "Cache-Control": "no-store" }));
                 return res.end(req.method === "HEAD" ? undefined : data);
@@ -75,18 +70,9 @@ function createRuntimeApp(config) {
                     passkeyStore: Boolean(app.passkeys && app.passkeys.filePath),
                     webauthnChallenges: Boolean(app.webauthnChallenges && app.webauthnChallenges.filePath),
                     loginTransactions: Boolean(app.loginTransactions && app.loginTransactions.filePath),
-                    passkeyUi: fs.existsSync(uiPath)
-                        && fs.existsSync(uiPolishPath)
-                        && fs.existsSync(passkeyCleanupPath)
-                        && fs.existsSync(operationsUiPath)
-                        && fs.existsSync(operationsActionsPath)
-                        && fs.existsSync(centralUxPath)
-                        && fs.existsSync(operationsBootstrapPath)
-                        && fs.existsSync(updateStatusResiliencePath)
-                        && fs.existsSync(auditUiPath)
-                        && fs.existsSync(dashboardCssLoaderPath)
-                        && fs.existsSync(dashboardUiPath),
-                    dashboardStyle: fs.existsSync(path.join(__dirname, "..", "public", "dashboard-ui.css")),
+                    passkeyUi: [uiPath, uiPolishPath, passkeyCleanupPath, operationsUiPath, operationsActionsPath, centralUxPath, operationsBootstrapPath, updateStatusResiliencePath, auditUiPath, dashboardCssLoaderPath, dashboardUiPath, adminToolsCssLoaderPath, adminToolsUiPath].every(fs.existsSync),
+                    dashboardStyle: fs.existsSync(dashboardStylePath),
+                    adminToolsStyle: fs.existsSync(adminToolsStylePath),
                     attestationBridge: fs.existsSync(bridgePath),
                     attestationParser: true
                 };
