@@ -3,10 +3,10 @@
   "version": "1.0.0-rc.10",
   "private": true,
   "description": "SIRK Central production-ready management plane.",
-  "main": "src/server-v14.js",
+  "main": "src/server-v15.js",
   "scripts": {
-    "start": "node src/server-v14.js",
-    "dev": "node --watch src/server-v14.js",
+    "start": "node src/server-v15.js",
+    "dev": "node --watch src/server-v15.js",
     "start:legacy": "node -r ./src/preload-api.js src/entry.js",
     "test": "node --test",
     "check:syntax": "find src updater scripts public test -type f -name '*.js' -print0 | xargs -0 -n1 node --check",
@@ -14,10 +14,6 @@
     "hash-password": "node scripts/hash-password.js",
     "generate-access-key": "node scripts/generate-access-key.js"
   },
-  "engines": {
-    "node": ">=22"
-  },
-  "dependencies": {
-    "ws": "8.21.1"
-  }
+  "engines": { "node": ">=22" },
+  "dependencies": { "ws": "8.21.1" }
 }
