@@ -36,6 +36,7 @@ services:
       SIRK_AUTH_PORT: 8081
       SIRK_PUBLIC_ORIGIN: https://${SIRK_CENTRAL_DOMAIN:-central.sirkportal.com}
       SIRK_AUTH_ORIGIN: ${SIRK_AUTH_ORIGIN:-}
+      SIRK_CENTRAL_INTERNAL_ORIGIN: http://central:8080
     volumes:
       - central-data:/var/lib/sirk-central:ro
     networks:
