@@ -12,13 +12,43 @@ function atomicWrite(filePath, value) {
 }
 
 function cleanText(value, limit = 200) {
-    return String(value || "").replace(/[\r\n\t]+/g, " ").trim().slice(0, limit);
+    return String(value == null ? "" : value)
+        .replace(/[\u0000-\u001f\u007f]/g, " ")
+        .trim()
+        .slice(0, limit);
 }
 
 function finiteNumber(value, minimum, maximum, fallback = 0) {
     const number = Number(value);
     if (!Number.isFinite(number)) return fallback;
     return Math.max(minimum, Math.min(maximum, number));
+}
+
+function finiteInteger(value, minimum, maximum, fallback) {
+    return Math.round(finiteNumber(value, minimum, maximum, fallback));
+}
+
+function optionNumber(value, fallback, minimum, maximum) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return fallback;
+    return Math.max(minimum, Math.min(maximum, number));
+}
+
+function optionalIso(value) {
+    if (!value) return null;
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function cleanPublicUrl(value) {
+    const input = cleanText(value, 500);
+    if (!input) return "";
+    try {
+        const url = new URL(input);
+        if (url.protocol !== "https:" || url.username || url.password) return "";
+        url.hash = "";
+        return url.toString().slice(0, 500);
+    } catch (_) { return ""; }
 }
 
 function timingSafeText(left, right) {
@@ -42,26 +72,31 @@ function verifySignature(token, timestamp, nonce, rawBody, supplied) {
 }
 
 function normalizeHeartbeat(input) {
-    input = input || {};
-    const health = ["ok", "warning", "critical"].includes(input.health) ? input.health : "ok";
+    input = input && typeof input === "object" && !Array.isArray(input) ? input : {};
+    const health = ["ok", "warning", "critical"].includes(input.health) ? input.health : "warning";
+    const agentCount = finiteInteger(input.agentCount, 0, 10000000, 0);
+    const onlineAgents = Math.min(agentCount, finiteInteger(input.onlineAgents, 0, 10000000, 0));
+    const memoryTotalBytes = finiteInteger(input.memoryTotalBytes, 0, Number.MAX_SAFE_INTEGER, 0);
+    const memoryUsedBytes = Math.min(memoryTotalBytes || Number.MAX_SAFE_INTEGER, finiteInteger(input.memoryUsedBytes, 0, Number.MAX_SAFE_INTEGER, 0));
     return {
+        protocolVersion: finiteInteger(input.protocolVersion, 1, 1000, 1),
         portalVersion: cleanText(input.portalVersion, 80),
-        buildCommit: cleanText(input.buildCommit, 80),
+        buildCommit: cleanText(input.buildCommit || input.commit, 80),
         platform: cleanText(input.platform, 120),
         hostname: cleanText(input.hostname, 160),
-        publicUrl: cleanText(input.publicUrl, 500),
+        publicUrl: cleanPublicUrl(input.publicUrl),
         health,
-        agentCount: Math.round(finiteNumber(input.agentCount, 0, 10000000, 0)),
-        onlineAgents: Math.round(finiteNumber(input.onlineAgents, 0, 10000000, 0)),
+        agentCount,
+        onlineAgents,
         cpuPercent: finiteNumber(input.cpuPercent, 0, 100, 0),
-        memoryUsedBytes: Math.round(finiteNumber(input.memoryUsedBytes, 0, Number.MAX_SAFE_INTEGER, 0)),
-        memoryTotalBytes: Math.round(finiteNumber(input.memoryTotalBytes, 0, Number.MAX_SAFE_INTEGER, 0)),
-        lastBackupAtUtc: cleanText(input.lastBackupAtUtc, 80),
+        memoryUsedBytes,
+        memoryTotalBytes,
+        lastBackupAtUtc: optionalIso(input.lastBackupAtUtc),
         lastBackupStatus: ["ok", "failed", "unknown"].includes(input.lastBackupStatus) ? input.lastBackupStatus : "unknown",
         updateChannel: cleanText(input.updateChannel, 80),
         availableVersion: cleanText(input.availableVersion, 80),
         capabilities: Array.isArray(input.capabilities)
-            ? input.capabilities.map(value => cleanText(value, 100)).filter(Boolean).slice(0, 100)
+            ? [...new Set(input.capabilities.map(value => cleanText(value, 100)).filter(Boolean))].slice(0, 100)
             : []
     };
 }
@@ -71,8 +106,9 @@ function create(options) {
     const dataDir = path.resolve(options.dataDir || path.join(process.cwd(), "data"));
     const filePath = path.join(dataDir, "portal-telemetry.json");
     const now = typeof options.now === "function" ? options.now : Date.now;
-    const onlineAfterMs = Math.max(30000, Math.min(3600000, Number(options.onlineAfterMs || 180000)));
-    const maximumClockSkewMs = Math.max(30000, Math.min(900000, Number(options.maximumClockSkewMs || 300000)));
+    const onlineAfterMs = optionNumber(options.onlineAfterMs, 180000, 30000, 3600000);
+    const maximumClockSkewMs = optionNumber(options.maximumClockSkewMs, 300000, 30000, 900000);
+    const maxNoncesPerPortal = Math.round(optionNumber(options.maxNoncesPerPortal, 1000, 100, 10000));
     let state = { schema: 1, portals: {} };
 
     try {
@@ -90,36 +126,46 @@ function create(options) {
         const rawBody = String(envelope.rawBody || "");
         const signature = cleanText(envelope.signature, 200);
         const token = String(envelope.token || "");
-        if (!Number.isFinite(timestamp) || Math.abs(now() - timestamp) > maximumClockSkewMs) {
+        const currentTime = now();
+
+        if (!Number.isSafeInteger(timestamp) || Math.abs(currentTime - timestamp) > maximumClockSkewMs) {
             throw Object.assign(new Error("Heartbeat timestamp is outside the accepted window."), { code: "HEARTBEAT_STALE", statusCode: 401 });
         }
         if (!/^[A-Za-z0-9_-]{16,200}$/.test(nonce)) {
             throw Object.assign(new Error("Heartbeat nonce is invalid."), { code: "HEARTBEAT_NONCE_INVALID", statusCode: 400 });
         }
-        if (!/^[A-Za-z0-9_-]{43,100}$/.test(signature) || !verifySignature(token, timestamp, nonce, rawBody, signature)) {
+        if (!/^[A-Za-z0-9_-]{43}$/.test(signature) || !verifySignature(token, timestamp, nonce, rawBody, signature)) {
             throw Object.assign(new Error("Heartbeat signature is invalid."), { code: "HEARTBEAT_SIGNATURE_INVALID", statusCode: 401 });
         }
+
         const previous = state.portals[portal.id] || { nonces: [] };
-        const nonces = Array.isArray(previous.nonces) ? previous.nonces : [];
-        if (nonces.some(item => item.value === nonce && Number(item.expiresAt) > now())) {
+        const activeNonces = (Array.isArray(previous.nonces) ? previous.nonces : [])
+            .filter(item => item && Number(item.expiresAt) > currentTime && typeof item.value === "string");
+        if (activeNonces.some(item => item.value === nonce)) {
             throw Object.assign(new Error("Heartbeat nonce was already used."), { code: "HEARTBEAT_REPLAY", statusCode: 409 });
         }
+        if (activeNonces.length >= maxNoncesPerPortal) {
+            throw Object.assign(new Error("Heartbeat replay cache is at capacity."), { code: "HEARTBEAT_NONCE_CAPACITY", statusCode: 429 });
+        }
+
         let body;
         try { body = JSON.parse(rawBody || "{}"); }
         catch (_) { throw Object.assign(new Error("Heartbeat body is invalid JSON."), { code: "HEARTBEAT_BODY_INVALID", statusCode: 400 }); }
-        const acceptedAt = now();
-        const cleanNonces = nonces.filter(item => Number(item.expiresAt) > acceptedAt).slice(-99);
-        cleanNonces.push({ value: nonce, expiresAt: acceptedAt + maximumClockSkewMs });
+        if (!body || typeof body !== "object" || Array.isArray(body)) {
+            throw Object.assign(new Error("Heartbeat body must be a JSON object."), { code: "HEARTBEAT_BODY_INVALID", statusCode: 400 });
+        }
+
+        activeNonces.push({ value: nonce, expiresAt: currentTime + maximumClockSkewMs });
         const metrics = normalizeHeartbeat(body);
         state.portals[portal.id] = {
             id: portal.id,
             name: portal.name,
-            firstSeenAtUtc: previous.firstSeenAtUtc || new Date(acceptedAt).toISOString(),
-            lastSeenAtUtc: new Date(acceptedAt).toISOString(),
+            firstSeenAtUtc: previous.firstSeenAtUtc || new Date(currentTime).toISOString(),
+            lastSeenAtUtc: new Date(currentTime).toISOString(),
             lastRemoteTimestampUtc: new Date(timestamp).toISOString(),
             heartbeatCount: Number(previous.heartbeatCount || 0) + 1,
             metrics,
-            nonces: cleanNonces
+            nonces: activeNonces
         };
         persist();
         return publicRecord(state.portals[portal.id]);
@@ -151,7 +197,18 @@ function create(options) {
             const registered = known.get(id);
             const telemetry = publicRecord(state.portals[id]);
             if (telemetry) return Object.assign({}, telemetry, { name: registered && registered.name || telemetry.name, registered: Boolean(registered) });
-            return { id, name: registered && registered.name || id, registered: Boolean(registered), status: "never", ageSeconds: null, firstSeenAtUtc: null, lastSeenAtUtc: null, lastRemoteTimestampUtc: null, heartbeatCount: 0, metrics: normalizeHeartbeat({}) };
+            return {
+                id,
+                name: registered && registered.name || id,
+                registered: Boolean(registered),
+                status: "never",
+                ageSeconds: null,
+                firstSeenAtUtc: null,
+                lastSeenAtUtc: null,
+                lastRemoteTimestampUtc: null,
+                heartbeatCount: 0,
+                metrics: normalizeHeartbeat({})
+            };
         });
     }
 
@@ -163,7 +220,7 @@ function create(options) {
         return true;
     }
 
-    return { accept, get, list, remove, filePath, onlineAfterMs, maximumClockSkewMs };
+    return { accept, get, list, remove, filePath, onlineAfterMs, maximumClockSkewMs, maxNoncesPerPortal };
 }
 
-module.exports = { create, sign, verifySignature, canonicalPayload, normalizeHeartbeat };
+module.exports = { create, sign, verifySignature, canonicalPayload, normalizeHeartbeat, cleanPublicUrl, optionalIso };
