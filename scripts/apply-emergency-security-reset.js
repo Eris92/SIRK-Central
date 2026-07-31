@@ -62,10 +62,13 @@ function run(options = {}) {
         changed.push("access-key");
     }
     users.security.emergencyResetAtUtc = new Date().toISOString();
-    atomicJson(usersPath, users);
 
+    // Fail secure: revoke local/BreakGlass sessions before publishing new credentials.
+    // If the credential write fails, the operator can retry without leaving old sessions active.
     const sessions = sessionStoreFactory.create({ dataDir });
     const revokedSessions = sessions.revokeWhere(record => record && (record.builtIn === true || record.source === "local"));
+    atomicJson(usersPath, users);
+
     return { ok: true, changed, revokedSessions, dataDir };
 }
 
