@@ -1,0 +1,5 @@
+services:
+  central:
+    build:
+      context: .
+      dockerfile: Dockerfile.portal-runtime
