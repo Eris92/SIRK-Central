@@ -47,7 +47,7 @@ const matrix = [
 ];
 
 test("complete RBAC matrix is consistent across organization approvals operations and tickets", () => {
-    const independentRequest = { requestedBy: "tenant:requester", payload: { role: "Admin" } };
+    const independentRequest = { type: "role.assignment", requestedBy: "tenant:requester", payload: { role: "SecAdmin" } };
     for (const row of matrix) {
         assert.equal(rbac.identityActive(row.actor), row.active, row.name + " active");
         assert.equal(organizationApi.canRead(row.actor), row.organizationRead, row.name + " organization read");
@@ -80,10 +80,14 @@ test("non-active identities are denied regardless of retained role", () => {
     }
 });
 
-test("SecAdmin decision must be independent and BreakGlass identity must be local", () => {
-    const selfRequest = { requestedBy: identities.secadmin.identityKey, payload: { role: "Admin" } };
+test("SecAdmin decisions are independent and limited to SecAdmin role requests", () => {
+    const selfRequest = { type: "role.assignment", requestedBy: identities.secadmin.identityKey, payload: { role: "SecAdmin" } };
+    const adminRequest = { type: "role.assignment", requestedBy: "tenant:other", payload: { role: "Admin" } };
+    const secAdminRequest = { type: "role.assignment", requestedBy: "tenant:other", payload: { role: "SecAdmin" } };
     assert.equal(approvalCenter.canDecide(identities.secadmin, selfRequest), false);
-    assert.equal(approvalCenter.canDecide(identities.breakglass, selfRequest), true);
+    assert.equal(approvalCenter.canDecide(identities.secadmin, adminRequest), false);
+    assert.equal(approvalCenter.canDecide(identities.secadmin, secAdminRequest), true);
+    assert.equal(approvalCenter.canDecide(identities.breakglass, adminRequest), true);
     assert.equal(rbac.identityActive(identity("BreakGlass", { builtIn: true, source: "entra" })), false);
     assert.equal(rbac.identityActive(identity("Admin", { builtIn: true, source: "local" })), false);
 });
@@ -93,6 +97,11 @@ test("Admin and SecAdmin separation of duties remains explicit", () => {
     assert.equal(rbac.hasPermission(identities.admin, "security.manage"), false);
     assert.equal(rbac.hasPermission(identities.secadmin, "security.manage"), true);
     assert.equal(rbac.hasPermission(identities.secadmin, "settings.manage"), false);
+    assert.equal(rbac.canAssignRole(identities.admin, "Admin", "Auditor"), true);
+    assert.equal(rbac.canAssignRole(identities.admin, "SecAdmin", "Auditor"), false);
+    assert.equal(rbac.canAssignRole(identities.secadmin, "Admin", "Auditor"), false);
+    assert.equal(rbac.canAssignRole(identities.secadmin, "SecAdmin", "Auditor"), true);
+    assert.equal(rbac.canAssignRole(identities.secadmin, "SecAdmin", "Admin"), false);
     assert.equal(portalOperations.canWrite(identities.admin), true);
     assert.equal(portalOperations.canWrite(identities.secadmin), false);
     assert.equal(ticketApi.canWrite(identities.admin), true);
