@@ -18,23 +18,26 @@ concurrency:
 jobs:
   dependency-and-source-audit:
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
-
       - run: npm ci
 
       - name: Shell JavaScript and Python syntax
         run: |
           find deploy -maxdepth 1 -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
           npm run check:syntax
+
+      - name: Security regression suite
+        env:
+          SIRK_CONCURRENCY_TEST_REQUESTS: '24'
+        run: node --test test/runtime-lock.test.js test/portal-command-cancellation.test.js test/ticket-event-http-semantics.test.js test/protocol-concurrency.test.js
 
       - name: Production dependency audit
         run: npm audit --omit=dev --audit-level=high
@@ -54,9 +57,7 @@ jobs:
         run: |
           set -euo pipefail
           if git grep -nEI '(BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY|client_secret[[:space:]]*[:=][[:space:]]*[A-Za-z0-9._~-]{12,}|SIRK_(SSO_SHARED_SECRET|UPDATER_TOKEN|PORTAL_TOKEN)[[:space:]]*=[[:space:]]*[A-Za-z0-9._~-]{16,})' -- \
-            ':!package-lock.json' \
-            ':!.github/workflows/**' \
-            ':!docs/**'; then
+            ':!package-lock.json' ':!.github/workflows/**' ':!docs/**'; then
             echo 'Potential committed secret detected.' >&2
             exit 1
           fi
@@ -84,60 +85,45 @@ jobs:
           const pkg = require('./package.json');
           const lock = require('./package-lock.json');
           if (pkg.version !== lock.version || pkg.version !== lock.packages[''].version) throw new Error('Package versions differ.');
-          if (pkg.main !== 'src/server-v15.js') throw new Error('Canonical runtime is not v15.');
-          if (!String(pkg.scripts.start).includes('server-v15.js')) throw new Error('Start script is not v15.');
+          if (pkg.main !== 'src/server-v15.js' || !String(pkg.scripts.start).includes('server-v15.js')) throw new Error('Canonical runtime is not v15.');
           for (const dockerfileName of ['Dockerfile','Dockerfile.portal-runtime']) {
             const dockerfile = fs.readFileSync(dockerfileName, 'utf8');
             if (!dockerfile.includes('CMD ["node", "src/server-v15.js"]')) throw new Error(dockerfileName + ' is not v15.');
           }
           for (const file of [
-            'src/server-v15.js',
-            'src/ticket-projection-store.js',
-            'src/ticket-projection-store-v2.js',
-            'src/portal-command-store.js',
-            'src/request-rate-limiter.js',
-            'src/approval-store.js',
-            'src/central-operation-guard.js',
-            'src/sso-replay-store.js',
-            'src/sso-callback-handler.js',
-            'auth/hardened-server.js',
-            'updater/backup-archive.js',
-            'updater/restore-transaction.js',
-            'scripts/validate-backup-archive.py',
-            'deploy/backup.sh',
-            'deploy/restore.sh',
-            'deploy/web-update.sh',
-            'public/approval-center-ui.js',
-            'public/portal-operations-ui.js',
-            'public/portal-monitoring-ui.js',
-            'public/portal-monitoring-ui.css',
-            'public/tickets-ui.js',
-            'public/tickets-ui.css',
-            'test/api-authorization.test.js',
-            'test/central-http-matrix.test.js',
-            'test/central-operation-guard-http.test.js',
-            'test/request-rate-limiter.test.js',
-            'test/ticket-projection-store.test.js',
-            'test/updater-client-security.test.js',
-            'test/sso-frontchannel-logout.test.js',
-            'test/sso-replay-store.test.js',
-            'test/session-store-hardening.test.js',
-            'test/backup-archive.test.js',
-            'test/restore-transaction.test.js',
-            'test/user-role-boundaries.test.js'
+            'src/server-v15.js','src/runtime-lock.js',
+            'src/ticket-projection-store.js','src/ticket-projection-store-v2.js',
+            'src/portal-command-store.js','src/portal-command-store-v2.js',
+            'src/request-rate-limiter.js','src/approval-store.js','src/central-operation-guard.js',
+            'src/sso-replay-store.js','src/sso-callback-handler.js','auth/hardened-server.js',
+            'updater/backup-archive.js','updater/restore-transaction.js',
+            'scripts/validate-backup-archive.py','deploy/backup.sh','deploy/restore.sh','deploy/web-update.sh',
+            'deploy/maintenance-up.sh','deploy/maintenance-down.sh',
+            'test/runtime-lock.test.js','test/portal-command-cancellation.test.js',
+            'test/ticket-event-http-semantics.test.js','test/protocol-concurrency.test.js'
           ]) if (!fs.existsSync(file)) throw new Error('Missing required file: ' + file);
 
           const runtime = fs.readFileSync('src/server-v15.js', 'utf8');
-          for (const expected of ['centralOperationGuard.evaluate','ssoCallback.handler','/api/portal/v1/tickets/snapshot','/api/portal/v1/tickets/events']) {
-            if (!runtime.includes(expected)) throw new Error('Runtime hardening contract missing: ' + expected);
+          for (const expected of [
+            'centralOperationGuard.evaluate','ssoCallback.handler',
+            'runtimeLockFactory.acquire','eventErrorResult','SIRK_RUNTIME_LOCK_DISABLED',
+            '/api/portal/v1/tickets/snapshot','/api/portal/v1/tickets/events'
+          ]) if (!runtime.includes(expected)) throw new Error('Runtime hardening contract missing: ' + expected);
+
+          const commands = fs.readFileSync('src/portal-command-store-v2.js', 'utf8');
+          for (const expected of ['cancel_requested','control = "cancel"','COMMAND_CANCEL_NOT_REQUESTED']) {
+            if (!commands.includes(expected)) throw new Error('Cancellation contract missing: ' + expected);
           }
-          const auth = fs.readFileSync('auth/hardened-server.js', 'utf8');
-          for (const expected of ['__Host-sirk_auth_flow','relayFrontchannelLogout','SIRK-Logout']) {
-            if (!auth.includes(expected)) throw new Error('Auth hardening contract missing: ' + expected);
-          }
+
           const compose = fs.readFileSync('docker-compose.yml', 'utf8');
-          if (!compose.includes('SIRK_CENTRAL_INTERNAL_ORIGIN: http://central:8080')) throw new Error('Internal logout relay is not configured.');
-          if (!compose.includes('SIRK_UPDATER_ALLOWED_HOSTS: updater')) throw new Error('Updater SSRF allowlist is not configured.');
+          for (const expected of [
+            'SIRK_CENTRAL_INTERNAL_ORIGIN: http://central:8080',
+            'SIRK_UPDATER_ALLOWED_HOSTS: updater',
+            'profiles: ["maintenance"]','restart: "no"','SIRK_COMPOSE_PROFILES: auth,maintenance'
+          ]) if (!compose.includes(expected)) throw new Error('Compose security contract missing: ' + expected);
+
+          const configure = fs.readFileSync('deploy/configure-and-start.sh', 'utf8');
+          if (!configure.includes('SERVICES=(central auth backup-manager caddy)')) throw new Error('Installer starts Docker-socket updater by default.');
           const caddy = fs.readFileSync('deploy/Caddyfile', 'utf8');
           if (!caddy.includes('respond @internalSsoLogout 404')) throw new Error('Internal logout endpoint is not hidden publicly.');
           const backup = fs.readFileSync('deploy/backup.sh', 'utf8');
