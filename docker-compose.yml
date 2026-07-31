@@ -58,6 +58,7 @@ services:
       dockerfile: updater/Dockerfile.gateway
     restart: unless-stopped
     user: node
+    command: ["node", "/app/gateway-server.js"]
     environment:
       SIRK_UPDATER_TOKEN: ${SIRK_UPDATER_TOKEN}
       SIRK_UPDATER_GATEWAY_BIND_HOST: 0.0.0.0
