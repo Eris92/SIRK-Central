@@ -8,6 +8,19 @@ function sessionCookie(token, hours) {
     return "sirk_central_session=" + token + "; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=" + (hours * 3600);
 }
 
+function json(res, status, body) {
+    const data = Buffer.from(JSON.stringify(body));
+    res.writeHead(status, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Content-Length": String(data.length),
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY",
+        "Referrer-Policy": "no-referrer"
+    });
+    res.end(data);
+}
+
 function redirect(res, location, headers = {}) {
     res.writeHead(302, Object.assign({
         Location: location,
@@ -38,8 +51,41 @@ function create(options) {
     });
 
     function handler(req, res, url) {
-        if (req.method !== "GET" || url.pathname !== "/auth/sso/callback") return false;
         if (!config.authOrigin) return false;
+
+        if (req.method === "POST" && url.pathname === "/auth/sso/frontchannel-logout") {
+            const authorization = String(req.headers.authorization || "");
+            if (authorization.length > 32768) throw Object.assign(new Error("Invalid SSO logout authorization."), { statusCode: 401, code: "SSO_LOGOUT_INVALID" });
+            const match = authorization.match(/^SIRK-Logout ([A-Za-z0-9_.-]+)$/);
+            if (!match) throw Object.assign(new Error("Invalid SSO logout authorization."), { statusCode: 401, code: "SSO_LOGOUT_INVALID" });
+            const ticket = verifySsoTicket(match[1], config.ssoSharedSecret, {
+                issuer: config.authOrigin,
+                audience: config.publicOrigin,
+                type: "logout"
+            });
+            if (!replay.consume(ticket.jti, ticket.exp * 1000)) {
+                throw Object.assign(new Error("SSO logout ticket was already used."), { statusCode: 409, code: "SSO_LOGOUT_REPLAY" });
+            }
+            const sid = String(ticket.sid);
+            const providerIssuer = String(ticket.providerIssuer);
+            const count = app.sessions.revokeWhere(record => record.source === "entra"
+                && record.entraSessionId === sid
+                && record.entraIssuer === providerIssuer);
+            if (app.securityCenter && typeof app.securityCenter.audit === "function") {
+                app.securityCenter.audit("authentication.entra.frontchannel_logout", {
+                    username: "entra-frontchannel",
+                    displayName: "Entra front-channel logout",
+                    source: "entra",
+                    role: "System",
+                    status: "active",
+                    builtIn: false
+                }, { providerIssuer, revokedSessions: count });
+            }
+            json(res, 200, { ok: true, revokedSessions: count });
+            return true;
+        }
+
+        if (req.method !== "GET" || url.pathname !== "/auth/sso/callback") return false;
         const rawTicket = String(url.searchParams.get("ticket") || "");
         if (!rawTicket || rawTicket.length > 32768) {
             throw Object.assign(new Error("Invalid SSO ticket."), { statusCode: 401, code: "SSO_TICKET_INVALID" });
