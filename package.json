@@ -7,10 +7,11 @@
   "scripts": {
     "start": "node src/server-v15.js",
     "dev": "node --watch src/server-v15.js",
-    "start:legacy": "node -r ./src/preload-api.js src/entry.js",
+    "pretest": "node scripts/validate-no-legacy-runtime.js",
     "test": "node --test",
     "check:syntax": "find deploy scripts -maxdepth 1 -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n && find src updater scripts public test -type f -name '*.js' -print0 | xargs -0 -n1 node --check && python3 -m py_compile scripts/validate-backup-archive.py",
-    "check": "npm run check:syntax && node --test",
+    "check:legacy": "node scripts/validate-no-legacy-runtime.js",
+    "check": "npm run check:syntax && npm test",
     "hash-password": "node scripts/hash-password.js",
     "generate-access-key": "node scripts/generate-access-key.js"
   },
