@@ -2,7 +2,7 @@ name: SIRK Central Security Audit
 
 on:
   push:
-    branches: [main, 'feat/**', 'fix/**']
+    branches: [main, 'feat/**', 'fix/**', 'refactor/**']
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -56,13 +56,13 @@ jobs:
           path: sirk-central-sbom.spdx.json
           retention-days: 30
 
-      - name: Reject committed private keys and obvious secrets
+      - name: Reject committed private keys and obvious literal secrets
         shell: bash
         run: |
           set -euo pipefail
-          if git grep -nEI '(BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY|client_secret[[:space:]]*[:=][[:space:]]*[A-Za-z0-9._~-]{12,}|SIRK_(SSO_SHARED_SECRET|UPDATER_TOKEN|PORTAL_TOKEN)[[:space:]]*=[[:space:]]*[A-Za-z0-9._~-]{16,})' -- \
+          if git grep -nEI "(BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY|client_secret[[:space:]]*[:=][[:space:]]*['\"][A-Za-z0-9._~-]{12,}['\"]|SIRK_(SSO_SHARED_SECRET|UPDATER_TOKEN|PORTAL_TOKEN)[[:space:]]*=[[:space:]]*['\"]?[A-Za-z0-9._~-]{16,}['\"]?)" -- \
             ':!package-lock.json' ':!.github/workflows/**' ':!docs/**'; then
-            echo 'Potential committed secret detected.' >&2
+            echo 'Potential committed literal secret detected.' >&2
             exit 1
           fi
 
@@ -97,7 +97,8 @@ jobs:
             'auth/hardened-server.js','updater/Dockerfile.gateway','updater/gateway-server.js','updater/server.js',
             'updater/backup-archive.js','updater/restore-transaction.js',
             'deploy/backup.sh','deploy/restore.sh','deploy/web-update.sh',
-            'deploy/maintenance-up.sh','deploy/maintenance-down.sh','scripts/sync-main.sh'
+            'deploy/maintenance-up.sh','deploy/maintenance-down.sh','scripts/sync-main.sh',
+            'scripts/validate-no-legacy-runtime.js'
           ]) if (!fs.existsSync(file)) throw new Error('Missing security file: ' + file);
 
           const runtime = fs.readFileSync('src/server-v15.js', 'utf8');
