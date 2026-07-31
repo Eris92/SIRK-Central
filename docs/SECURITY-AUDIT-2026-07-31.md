@@ -1,142 +1,139 @@
 # SIRK Central — audyt bezpieczeństwa i gotowości
 
 Data: 2026-07-31  
-Gałąź: `feat/central-production-hardening`  
-Aktywny runtime: `src/server-v15.js`
-
-## Status
-
-Projekt nie jest jeszcze zatwierdzony do wdrożenia produkcyjnego. Kod, dokumentacja i automatyczne kontrole są przygotowane, ale wymagane są rzeczywiste wyniki GitHub Actions oraz testy na kontrolowanym VPS.
-
-## Zakres audytu
-
-- uwierzytelnianie lokalne, Entra i Break-Glass,
-- sesje i CSRF,
-- WebAuthn/passkeys i recovery codes,
-- RBAC i separation of duties,
-- Centrum Akceptacji,
-- heartbeat i uwierzytelnianie Portali,
-- kolejka poleceń Portali,
-- projekcja i synchronizacja zgłoszeń,
-- polityki publikacji danych zgłoszeń,
-- backup, restore, update i rollback,
-- audyt i integralność danych,
-- Docker/Compose/Caddy,
-- zależności i committed secrets,
-- interfejs oraz testy przycisków.
-
-## Znalezione i poprawione problemy
-
-### Krytyczne / wysokie
-
-1. **Wielokrotne użycie akceptacji wysokiego ryzyka**  
-   Zatwierdzony wniosek `operation.high-risk` mógł zostać użyty do utworzenia więcej niż jednego polecenia.  
-   **Poprawka:** akceptacja dokładnie wskazuje `portalId` i typ operacji, nie może mieć wcześniejszego `execution`, a po utworzeniu polecenia jest trwale wiązana z `commandId`.
-
-2. **Rozbieżność aktywnego runtime**  
-   `package.json`, Dockerfile, CI i dokumentacja wskazywały różne wersje runtime.  
-   **Poprawka:** kanoniczny entry point, skrypt startowy, `Dockerfile.portal-runtime`, CI i acceptance test wskazują `server-v15.js`.
-
-3. **Brak realnego build-testu kontenerów w CI**  
-   Compose był tylko renderowany.  
-   **Poprawka:** CI buduje `central`, `auth` i `updater`, sprawdza użytkownika `node` i wykonuje kontrolę składni runtime wewnątrz obrazu.
-
-### Średnie
-
-4. **Monitoring Portali nie był dołączony do produkcyjnego bundla**  
-   Kod UI istniał, ale nie był ładowany.  
-   **Poprawka:** skrypt i CSS są dołączone do bundla oraz sprawdzane przez `/readyz` i CI.
-
-5. **Brak automatycznego skanowania kodu i zależności**  
-   **Poprawka:** dodano `npm audit`, CodeQL, skan kluczy prywatnych/sekretów oraz kontrolę niebezpiecznego dynamicznego wykonywania kodu.
-
-6. **Nieaktualna dokumentacja**  
-   README wskazywało runtime v2, a opis PR v14.  
-   **Poprawka:** dodano kanoniczne dokumenty dla runtime v15, protokołu Portali, zgłoszeń, testów i wznowienia pracy.
-
-## Mechanizmy bezpieczeństwa obecne w projekcie
-
-- sesje przechowywane jako hashe tokenów,
-- idle timeout i absolutny czas życia sesji,
-- `HttpOnly`, `Secure`, `SameSite` dla cookie sesji,
-- globalna ochrona CSRF dla modyfikujących endpointów API,
-- walidacja `Origin` i `Sec-Fetch-Site`,
-- limity rozmiaru request body,
-- rate limiting logowania lokalnego,
-- WebAuthn ES256/P-256, UP/UV, challenge binding i ochrona replay,
-- recovery codes przechowywane jako hashe scrypt,
-- unieważnianie sesji po operacjach bezpieczeństwa,
-- RBAC i zakaz samodzielnej akceptacji,
-- trwały audit log,
-- podpisany heartbeat z timestamp, nonce i ochroną clock-skew,
-- tokeny Portali przechowywane jako hashe,
-- kolejka komend bez obsługi dowolnego shell/PowerShell,
-- redakcja pól `token`, `password`, `secret` i podobnych w payloadach,
-- dokładne i jednorazowe zgody high-risk,
-- projekcja zgłoszeń oddzielona od sekretów zewnętrznych connectorów,
-- polityki ograniczające opis i dane zgłaszającego przesyłane do Central,
-- odrzucanie starszych aktualizacji projekcji,
-- kontener aplikacji uruchamiany jako użytkownik `node`,
-- `no-new-privileges` i `cap_drop: ALL` dla Central/Auth.
-
-## Obszary wymagające szczególnej weryfikacji
-
-### Portal API
-
-- rate limiting heartbeat, polling komend i ingestion zgłoszeń,
-- replay i nonce heartbeat,
-- izolacja poleceń między Portalami,
-- idempotencja ACK,
-- limit aktywnych komend per Portal,
-- odporność na reconnect i duplikaty.
-
-### Zgłoszenia
-
-- maksymalny rozmiar snapshotu,
-- ochrona przed masowym tworzeniem projekcji,
-- walidacja wszystkich pól i dat,
-- brak HTML/XSS w tytułach, opisach, komentarzach i nazwach,
-- brak sekretów connectorów w przesyłanych danych,
-- ochrona danych osobowych zgodnie z polityką Portalu,
-- izolacja Tenant/Customer/Site,
-- uprawnienia do centralnych zmian statusu i przypisania,
-- konflikt i kolejność zdarzeń,
-- retencja zamkniętych zgłoszeń.
-
-### Updater
-
-Updater posiada dostęp do `/var/run/docker.sock`; jest to świadomie uprzywilejowana usługa. Port 8090 musi pozostać wyłącznie w sieci wewnętrznej i wymagać silnego tokenu. Należy zweryfikować brak ścieżki SSRF lub obejścia autoryzacji prowadzącej do updatera.
-
-## Ryzyka pozostające do zweryfikowania
-
-1. Rzeczywisty wynik wszystkich GitHub Actions dla aktualnego HEAD.
-2. Realny test YubiKey w Edge i Chrome.
-3. Restore drill na kopii środowiska.
-4. Update/rollback drill.
-5. Caddy/TLS i CSP z zewnętrznego klienta.
-6. Symulator Portalu: heartbeat, zgłoszenia, komendy i ACK.
-7. Pełna macierz RBAC dla wszystkich endpointów.
-8. Layout PL/EN na desktopie, tablecie i telefonie.
-9. Zachowanie pod równoległymi requestami i restartami procesu.
-10. Polityka retencji audytu, komend, heartbeat i zgłoszeń.
-
-## Kryteria blokujące merge
-
-- jakikolwiek czerwony wymagany workflow,
-- podatność `high` lub `critical` bez udokumentowanego wyjątku,
-- błąd CodeQL o wysokiej ważności,
-- nieudany backup/restore albo update/rollback,
-- możliwość wykonania high-risk command bez nowej akceptacji,
-- możliwość ponownego wykorzystania akceptacji,
-- możliwość zatwierdzenia własnego wniosku,
-- naruszenie izolacji między Portalami lub Tenantami,
-- przyjęcie niepodpisanego/replay heartbeat,
-- nieautoryzowana zmiana zgłoszenia,
-- błąd konsoli lub HTTP 5xx w Playwright,
-- niepoprawne nagłówki bezpieczeństwa lub brak HTTPS,
-- brak działającego Break-Glass MFA.
+Branch: `feat/central-production-hardening`  
+PR: #45 (draft)  
+Runtime: `src/server-v15.js`  
+Version: `1.0.0-rc.24`
 
 ## Decyzja
 
-**Aktualny status: CONDITIONAL / NOT READY FOR PRODUCTION.**  
-Przejście do `READY` jest możliwe dopiero po wykonaniu pełnej listy z `docs/TESTING.md` i `deploy/acceptance-test.sh`, uzyskaniu rzeczywistych zielonych statusów CI oraz zakończeniu testów środowiskowych.
+**CONDITIONAL / NOT READY FOR PRODUCTION.**
+
+Pozostałe znane problemy techniczne zostały naprawione w kodzie i testach, ale wynik nie jest produkcyjnie potwierdzony bez merge z aktualnym `main`, zielonych GitHub Actions i testów środowiskowych.
+
+## Naprawione problemy krytyczne/wysokie
+
+- high-risk approval jest exact-scope, single-use i zużywany dopiero przy utworzeniu command;
+- retry `update/restart/diagnostics` wymaga nowej zgody;
+- identity `pending/conflict/disabled` nie otrzymuje uprawnień;
+- Portal commands/tickets/telemetry respektują access scope;
+- Tenant/Customer/Site dla ticketów pochodzi z canonical Portal assignment;
+- ticket publication defaults są fail-closed;
+- event/cursor replay jest związany z digestem payloadu;
+- legacy approval mutations są wyłączone;
+- updater path/origin ma exact allowlist;
+- publiczny internal SSO logout relay jest ukryty przez Caddy;
+- backup archives mają checksum/manifest/path/type validation i transactional rollback.
+
+## Naprawione problemy z ostatniej iteracji
+
+### File-backed storage
+
+Ryzyko multi-writer silent corruption zostało zamknięte przez runtime single-writer lease:
+
+```text
+/var/lib/sirk-central/.sirk-central-runtime.lock/owner.json
+```
+
+Drugi runtime na tym samym storage nie startuje. Fresh malformed lock jest fail-closed; stale lock jest odzyskiwany po quarantine. Wyłączenie locka jest zabronione w production.
+
+### Command cancellation
+
+Wprowadzono cooperative cancellation:
+
+```text
+queued -> cancelled
+delivered/running -> cancel_requested -> cancelled
+```
+
+Portal dostaje idempotentny control message `control: "cancel"`. Central nie deklaruje `cancelled` przed ACK. Portal nie może samodzielnie anulować command bez requestu Central. `completed/failed` może wygrać race.
+
+### Ticket HTTP semantics
+
+- pojedynczy event zachowuje właściwy `400/409/429/5xx`;
+- HTTP `207` dotyczy wyłącznie jawnego partial batch;
+- per-item wynik zawiera `status`, `code` i `retryable`;
+- replay z innym payloadem zwraca `409 TICKET_EVENT_REPLAY_CONFLICT`.
+
+### Docker socket
+
+Updater nie jest stale uruchomiony:
+
+```yaml
+profiles: ["maintenance"]
+restart: "no"
+user: "0:0"
+```
+
+Normalny stack nie tworzy kontenera updatera. Jawne maintenance window otwierają/zamykają `deploy/maintenance-up.sh` i `deploy/maintenance-down.sh`. Acceptance sprawdza brak updatera przed i po operacji.
+
+### Concurrency
+
+Dodano deterministyczny suite dla równoległych heartbeat, ticket events, command polling i terminal ACK oraz testy runtime lease/cancellation/event semantics.
+
+## Mechanizmy obecne
+
+- hashowane persistent sessions z idle/absolute expiry;
+- `HttpOnly`, `Secure`, `SameSite`;
+- CSRF + Origin + Sec-Fetch-Site;
+- login/Portal/Entra rate limiting;
+- WebAuthn ES256/P-256, UP/UV, challenge binding i replay protection;
+- scrypt recovery codes;
+- RBAC, separation of duties i self-approval protection;
+- tamper-evident audit;
+- signed heartbeat HMAC/timestamp/nonce;
+- zamknięta allowlista command types, bez arbitrary shell;
+- payload/result secret redaction i prototype pollution protection;
+- ticket privacy policies, ordering, replay i capacity fail-closed;
+- non-root Central/Auth, dropped capabilities i no-new-privileges;
+- updater internal-only, maintenance-only i bez host port;
+- npm audit, SBOM, secret scan i CodeQL.
+
+## Otwarte ryzyka i ograniczenia
+
+### Wymagające środowiska
+
+- brak potwierdzonego wyniku Actions dla finalnego HEAD;
+- PR nadal ma konflikt z `main` w package metadata;
+- brak wykonanego VPS acceptance;
+- brak destructive restore/rollback drill;
+- brak update/rollback drill z updater self-recreate;
+- brak realnego YubiKey Edge/Chrome;
+- brak pełnego Entra pending/conflict/disabled/logout workflow;
+- brak external TLS/CSP validation;
+- brak finalnego PL/EN/responsive review.
+
+### Residual architectural risk
+
+- file-backed stores są single-writer, nie active-active HA;
+- updater w czasie otwartego maintenance window jest root-equivalent przez Docker socket;
+- Portal-side Jira/ServiceDesk/GLPI connector nie należy do tego repo i nie jest jeszcze wdrożony.
+
+## Blockery merge
+
+- branch nie zawiera aktualnego `main`;
+- dowolny czerwony required workflow;
+- High/Critical dependency lub CodeQL issue bez wyjątku;
+- nieudany acceptance, backup/restore lub update/rollback;
+- naruszenie Portal/Tenant isolation;
+- high-risk command bez nowej zgody lub reuse approval;
+- unsigned/replayed heartbeat accepted;
+- command cancellation deklarowana przed Portal ACK;
+- nieprecyzyjny single-event HTTP 207;
+- running updater poza maintenance window;
+- brak działającego BreakGlass MFA.
+
+## Wymagane następne kroki
+
+```bash
+cd /opt/sirk-central
+bash scripts/sync-main.sh
+npm ci
+npm run check:syntax
+SIRK_CONCURRENCY_TEST_REQUESTS=24 npm test
+npm audit --omit=dev --audit-level=high
+git push origin feat/central-production-hardening
+```
+
+Następnie uruchomić `deploy/acceptance-test.sh` na kontrolowanym VPS i wykonać pełną listę z `docs/TESTING.md`.
