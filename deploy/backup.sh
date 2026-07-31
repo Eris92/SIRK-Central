@@ -27,7 +27,7 @@ command -v sha256sum >/dev/null 2>&1 || { echo "sha256sum is required." >&2; exi
 [[ "${REQUIRE_ENCRYPTION}" =~ ^(auto|true|false)$ ]] || { echo "SIRK_BACKUP_REQUIRE_ENCRYPTION must be auto, true or false." >&2; exit 1; }
 
 if [[ "${REQUIRE_ENCRYPTION}" == "auto" ]]; then
-  if grep -Eq '^[[:space:]]*NODE_ENV[[:space:]]*=[[:space:]]*["'"']?production["'"']?[[:space:]]*$' "${INSTALL_DIR}/.env"; then
+  if grep -Eq '^[[:space:]]*NODE_ENV[[:space:]]*=[[:space:]]*production[[:space:]]*$' "${INSTALL_DIR}/.env"; then
     REQUIRE_ENCRYPTION=true
   else
     REQUIRE_ENCRYPTION=false
