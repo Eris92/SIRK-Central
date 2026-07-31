@@ -39,10 +39,12 @@ function createRuntimeApp(config) {
         publicPath("admin-tools-ui.js"),
         publicPath("security-sessions-ui.js"),
         publicPath("approval-center-ui.js"),
-        publicPath("portal-operations-ui.js")
+        publicPath("portal-operations-ui.js"),
+        publicPath("portal-monitoring-ui.js")
     ];
     const dashboardStylePath = publicPath("dashboard-ui.css");
     const adminToolsStylePath = publicPath("admin-tools-ui.css");
+    const portalMonitoringStylePath = publicPath("portal-monitoring-ui.css");
     const server = http.createServer((req, res) => {
         try {
             const url = new URL(req.url, "http://central.local");
@@ -69,6 +71,7 @@ function createRuntimeApp(config) {
                     passkeyUi: [bridgePath, ...scriptPaths].every(fs.existsSync),
                     dashboardStyle: fs.existsSync(dashboardStylePath),
                     adminToolsStyle: fs.existsSync(adminToolsStylePath),
+                    portalMonitoringStyle: fs.existsSync(portalMonitoringStylePath),
                     attestationBridge: fs.existsSync(bridgePath),
                     attestationParser: true
                 };
