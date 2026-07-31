@@ -28,10 +28,8 @@
     let allowed = new Set(Array.isArray(bootstrap.workspaces) ? bootstrap.workspaces : ["portals"]);
     const currentPath = window.location.pathname.toLowerCase();
     const currentWorkspace = Object.keys(routes).find(key => routes[key] === currentPath) || "portals";
-    let reconcileQueued = false;
+    let identityRefresh = null;
     let openTimer = null;
-    let identityRefreshInProgress = false;
-    let dashboardWasVisible = false;
 
     function workspacesFromIdentity(identity) {
         if (!identity || !identity.ok) return ["portals"];
@@ -44,26 +42,13 @@
         return result;
     }
 
-    function desiredHidden(workspace) {
-        return !allowed.has(workspace);
-    }
-
     function synchronizeMenu() {
         for (const [id, workspace] of Object.entries(buttonWorkspaces)) {
             const button = document.getElementById(id);
             if (!button) continue;
-            const hidden = desiredHidden(workspace);
+            const hidden = !allowed.has(workspace);
             if (button.hidden !== hidden) button.hidden = hidden;
         }
-    }
-
-    function queueSynchronizeMenu() {
-        if (reconcileQueued) return;
-        reconcileQueued = true;
-        window.requestAnimationFrame(function () {
-            reconcileQueued = false;
-            synchronizeMenu();
-        });
     }
 
     function isWorkspaceOpen(workspace) {
@@ -93,54 +78,58 @@
         return isWorkspaceOpen(currentWorkspace);
     }
 
+    function stopOpenTimer() {
+        if (openTimer) window.clearInterval(openTimer);
+        openTimer = null;
+    }
+
     function enforceCurrentWorkspace() {
-        if (activateCurrentWorkspace()) {
-            if (openTimer) window.clearInterval(openTimer);
-            openTimer = null;
-            return;
-        }
-        if (!openTimer) {
-            let attempts = 0;
-            openTimer = window.setInterval(function () {
-                attempts += 1;
-                synchronizeMenu();
-                if (activateCurrentWorkspace() || attempts >= 60) {
-                    window.clearInterval(openTimer);
-                    openTimer = null;
-                }
-            }, 100);
-        }
+        if (activateCurrentWorkspace()) return stopOpenTimer();
+        if (openTimer) return;
+        let attempts = 0;
+        openTimer = window.setInterval(function () {
+            attempts += 1;
+            synchronizeMenu();
+            if (activateCurrentWorkspace() || attempts >= 60) stopOpenTimer();
+        }, 100);
     }
 
     async function refreshAllowedFromSession() {
-        if (identityRefreshInProgress) return;
-        identityRefreshInProgress = true;
-        try {
-            const response = await fetch("/api/session", {
-                credentials: "same-origin",
-                cache: "no-store",
-                headers: { Accept: "application/json" }
-            });
-            if (!response.ok) return;
-            const identity = await response.json();
-            allowed = new Set(workspacesFromIdentity(identity));
-            window.__SIRK_WORKSPACE_BOOTSTRAP = {
-                authenticated: Boolean(identity && identity.ok),
-                workspaces: Array.from(allowed)
-            };
-            synchronizeMenu();
-            enforceCurrentWorkspace();
-        } catch (_) {
-        } finally {
-            identityRefreshInProgress = false;
-        }
+        if (identityRefresh) return identityRefresh;
+        identityRefresh = (async function () {
+            try {
+                const response = await fetch("/api/session", {
+                    credentials: "same-origin",
+                    cache: "no-store",
+                    headers: { Accept: "application/json" }
+                });
+                if (!response.ok) return;
+                const identity = await response.json();
+                allowed = new Set(workspacesFromIdentity(identity));
+                window.__SIRK_WORKSPACE_BOOTSTRAP = {
+                    authenticated: Boolean(identity && identity.ok),
+                    workspaces: Array.from(allowed)
+                };
+                synchronizeMenu();
+                enforceCurrentWorkspace();
+            } catch (_) {
+                // The base UI owns authentication errors and login rendering.
+            }
+        }()).finally(function () {
+            identityRefresh = null;
+        });
+        return identityRefresh;
     }
 
-    function refreshWhenDashboardBecomesVisible() {
+    function dashboardVisible() {
         const dashboard = document.getElementById("dashboardView");
-        const visible = Boolean(dashboard && !dashboard.hidden);
-        if (visible && !dashboardWasVisible) refreshAllowedFromSession();
-        dashboardWasVisible = visible;
+        return Boolean(dashboard && !dashboard.hidden);
+    }
+
+    function dashboardBecameVisible() {
+        if (!dashboardVisible()) return;
+        refreshAllowedFromSession();
+        enforceCurrentWorkspace();
     }
 
     document.addEventListener("click", function (event) {
@@ -164,33 +153,26 @@
 
     function initialize() {
         synchronizeMenu();
-        refreshWhenDashboardBecomesVisible();
         enforceCurrentWorkspace();
 
-        const observer = new MutationObserver(function () {
-            refreshWhenDashboardBecomesVisible();
-            queueSynchronizeMenu();
-            enforceCurrentWorkspace();
-        });
-        observer.observe(document.documentElement, {
-            childList: true,
-            subtree: true,
-            attributes: true,
-            attributeFilter: ["hidden"]
-        });
+        const dashboard = document.getElementById("dashboardView");
+        if (dashboard) {
+            const observer = new MutationObserver(dashboardBecameVisible);
+            observer.observe(dashboard, { attributes: true, attributeFilter: ["hidden"] });
+        }
 
-        for (const delay of [0, 50, 150, 350, 700, 1200, 2000]) {
+        dashboardBecameVisible();
+        for (const delay of [0, 100, 350, 800, 1600]) {
             window.setTimeout(function () {
-                refreshWhenDashboardBecomesVisible();
                 synchronizeMenu();
-                enforceCurrentWorkspace();
+                dashboardBecameVisible();
             }, delay);
         }
     }
 
     if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", initialize, { once: true });
     else initialize();
-})();
+}());
 
 (function () {
     let transactionToken = "";
@@ -302,4 +284,4 @@
 
     if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", initializeMfaLogin, { once: true });
     else initializeMfaLogin();
-})();
+}());
