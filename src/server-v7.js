@@ -37,7 +37,8 @@ function createRuntimeApp(config) {
         publicPath("dashboard-ui.js"),
         publicPath("admin-tools-css-loader.js"),
         publicPath("admin-tools-ui.js"),
-        publicPath("security-sessions-ui.js")
+        publicPath("security-sessions-ui.js"),
+        publicPath("approval-center-ui.js")
     ];
     const dashboardStylePath = publicPath("dashboard-ui.css");
     const adminToolsStylePath = publicPath("admin-tools-ui.css");
