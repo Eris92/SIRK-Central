@@ -47,10 +47,14 @@ function hasPermission(identity, permission) {
 
 function canAssignRole(actor, targetRole, currentRole) {
     const role = normalizeRole(targetRole);
+    const current = currentRole ? normalizeRole(currentRole) : "";
     if (!identityActive(actor)) return false;
-    if (actor.builtIn || actor.role === "SecAdmin") return true;
+    if (actor.builtIn === true) return true;
+    if (actor.role === "SecAdmin") {
+        return role === "SecAdmin" && current !== "Admin";
+    }
     if (actor.role !== "Admin") return false;
-    if (role === "SecAdmin" || currentRole === "SecAdmin") return false;
+    if (role === "SecAdmin" || current === "SecAdmin") return false;
     return true;
 }
 
