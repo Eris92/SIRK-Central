@@ -87,7 +87,7 @@ for (const required of [
   'updater/backup-archive.js','updater/restore-transaction.js',
   'public/approval-center-ui.js','public/portal-operations-ui.js','public/portal-monitoring-ui.js','public/portal-monitoring-ui.css',
   'public/tickets-ui.js','public/tickets-ui.css','scripts/portal-simulator.js',
-  'test/api-authorization.test.js','test/request-rate-limiter.test.js','test/ticket-projection-store.test.js',
+  'test/api-authorization.test.js','test/protocol-http.test.js','test/request-rate-limiter.test.js','test/ticket-projection-store.test.js',
   'test/updater-client-security.test.js','test/e2e/ui-buttons.spec.js','docs/SECURITY-AUDIT-2026-07-31.md'
 ]) if (!fs.existsSync(required)) throw new Error('Missing ' + required);
 const compose = fs.readFileSync('docker-compose.yml', 'utf8');
@@ -141,7 +141,7 @@ log "Updater Docker socket access"
 docker exec "$updater_id" docker version --format '{{.Server.Version}}' >/dev/null
 
 log "Non-destructive backup API check"
-docker exec "$updater_id" node - <<'NODE'
+docker exec -i "$updater_id" node - <<'NODE'
 const token = process.env.SIRK_UPDATER_TOKEN;
 if (!token || token.length < 43) throw new Error('Updater token is missing.');
 fetch('http://127.0.0.1:8090/backup/status', { headers: { Authorization: 'Bearer ' + token } })
