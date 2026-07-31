@@ -159,7 +159,7 @@ test("parallel command polling delivers one command only once within its lease",
         payload: { scope: "runtime" },
         ttlMinutes: 10
     }, h.actor);
-    const results = await Promise.all(Array.from({ length: REQUESTS }, () => h.request("/api/portal/v1/commands/poll?limit=1", {
+    const results = await Promise.all(Array.from({ length: REQUESTS }, () => h.request("/api/portal/v1/commands?limit=1", {
         headers: { Authorization: h.authorization }
     })));
 
