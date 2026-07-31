@@ -6,7 +6,7 @@ const path = require("node:path");
 const { createAttestationApp } = require("./server-v6");
 const { loadConfig } = require("./server-v1");
 
-const VERSION = "1.0.0-rc.10";
+const VERSION = "1.0.0-rc.24";
 
 function securityHeaders() {
     return { "X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY", "Referrer-Policy": "no-referrer", "Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-Resource-Policy": "same-origin", "Strict-Transport-Security": "max-age=31536000; includeSubDomains" };
@@ -24,6 +24,7 @@ function createRuntimeApp(config) {
     const publicPath = name => path.join(__dirname, "..", "public", name);
     const bridgePath = publicPath("passkey-attestation-bridge.js");
     const scriptPaths = [
+        publicPath("access-url-cleanup.js"),
         publicPath("passkey-ui.js"), publicPath("passkey-ui-polish.js"), publicPath("passkey-list-cleanup.js"),
         publicPath("operations-ui.js"), publicPath("operations-actions.js"), publicPath("central-ux.js"), publicPath("operations-bootstrap.js"),
         publicPath("update-status-resilience.js"), publicPath("audit-ui.js"), publicPath("dashboard-css-loader.js"), publicPath("dashboard-ui.js"),
@@ -51,7 +52,11 @@ function createRuntimeApp(config) {
                 const ok = Object.values(checks).every(Boolean); return json(res, ok ? 200 : 503, { ok, version: VERSION, checks });
             }
             return inner(req, res);
-        } catch (error) { if (!res.headersSent) return json(res, 500, { ok: false, error: error.message || "Request failed." }); res.destroy(error); }
+        } catch (error) {
+            process.stderr.write("[server-v7] " + String(error.stack || error) + "\n");
+            if (!res.headersSent) return json(res, 500, { ok: false, error: "Internal server error." });
+            res.destroy(error);
+        }
     });
     server.on("upgrade", (req, socket, head) => app.server.emit("upgrade", req, socket, head));
     return Object.assign({}, app, { server, version: VERSION });
