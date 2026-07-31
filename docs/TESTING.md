@@ -1,161 +1,159 @@
 # Testy SIRK Central
 
-## Cel
+## Zasada
 
-Dokument opisuje testy wymagane przed oznaczeniem PR #45 jako gotowego do merge. Sam fakt istnienia testu w repozytorium nie oznacza, że został zaliczony.
+Istnienie testu w repo nie oznacza zaliczenia. PR #45 pozostaje draftem, dopóki rzeczywiste workflow i testy środowiskowe nie są zielone dla tego samego HEAD.
 
-## 1. Przygotowanie gałęzi
+## 1. Synchronizacja z `main`
+
+Na runnerze z działającym DNS:
 
 ```bash
 cd /opt/sirk-central
-
 git fetch origin
 git checkout feat/central-production-hardening
 git reset --hard origin/feat/central-production-hardening
-
-git status --short
-git rev-parse HEAD
+bash scripts/sync-main.sh
 ```
 
-Repozytorium powinno być czyste. Nie wykonuj tego w katalogu zawierającym niewypchnięte zmiany.
+Skrypt:
 
-## 2. Testy lokalne Node.js
+- wymaga czystego working tree i właściwej gałęzi;
+- tworzy safety branch;
+- wykonuje merge `origin/main` bez rebase/force push;
+- automatycznie rozwiązuje wyłącznie oczekiwany konflikt `package.json`/`package-lock.json` wersją brancha;
+- przerywa przy każdym innym konflikcie;
+- potwierdza, że entry point nadal wskazuje `src/server-v15.js`.
+
+Po synchronizacji:
+
+```bash
+git status --short
+git log -1 --oneline
+```
+
+## 2. Testy lokalne
 
 ```bash
 npm ci
 npm run check:syntax
-npm test
+SIRK_CONCURRENCY_TEST_REQUESTS=24 npm test
 npm audit --omit=dev --audit-level=high
 ```
 
-Wymagany wynik:
+`check:syntax` obejmuje:
 
-- zero błędów składni,
-- wszystkie testy zaliczone,
-- brak podatności High/Critical,
-- brak nieobsłużonych rejection i warningów wskazujących regresję.
+- shell w `deploy/` i `scripts/`;
+- JavaScript w `src/`, `auth/`, `updater/`, `scripts/`, `public/`, `test/`;
+- Python backup archive validator.
 
-## 3. Pełny acceptance test
+Wymagane: zero błędów, zero High/Critical dependency vulnerabilities i brak unhandled rejection/warnings wskazujących regresję.
+
+## 3. Security regression suite
+
+```bash
+node --test \
+  test/runtime-lock.test.js \
+  test/portal-command-cancellation.test.js \
+  test/ticket-event-http-semantics.test.js \
+  test/protocol-concurrency.test.js
+```
+
+Sprawdza:
+
+- jeden owner file-backed storage;
+- stale/malformed lock recovery;
+- cooperative cancellation i race handling;
+- pojedyncze `400/409` vs batch `207`;
+- równoległe heartbeat, ticket events, command polling i terminal ACK.
+
+## 4. Pełny acceptance test VPS
 
 ```bash
 cd /opt/sirk-central
-
 export SIRK_ACCEPTANCE_PUBLIC_URL='https://central.sirkportal.com'
-
 bash deploy/acceptance-test.sh
 ```
 
 Skrypt wykonuje:
 
-- shell syntax,
-- JavaScript syntax,
-- testy jednostkowe i HTTP,
-- npm audit,
-- kontrakt runtime v15,
-- renderowanie Compose,
-- build obrazów,
-- start usług,
-- oczekiwanie na healthcheck,
-- `/readyz`,
-- kontrolę użytkownika kontenera,
-- `no-new-privileges`,
-- zewnętrzny HTTPS i nagłówki bezpieczeństwa.
+- syntax, unit, HTTP, concurrency i npm audit;
+- dwa renderingi Compose;
+- normalny stack bez updatera;
+- maintenance stack z updaterem;
+- build obrazów i kontrolę users;
+- health/readiness wszystkich usług;
+- runtime single-writer owner file;
+- internal SSO logout contract;
+- security options i brak nieautoryzowanych host ports;
+- maintenance lifecycle: updater absent → start → socket/API test → stop/remove;
+- external TLS/CSP/security headers, gdy podano URL.
 
-Opcje:
+Nie ustawiaj `SIRK_ACCEPTANCE_SKIP_BUILD=true` ani `SIRK_ACCEPTANCE_SKIP_LIVE=true` dla finalnej akceptacji.
+
+## 5. Maintenance window
+
+Poza acceptance updater nie może działać stale.
 
 ```bash
-export SIRK_ACCEPTANCE_SKIP_BUILD='true'
-export SIRK_ACCEPTANCE_SKIP_LIVE='true'
+sudo bash deploy/maintenance-up.sh
+# wykonaj dokładnie zaplanowaną operację
+sudo bash deploy/maintenance-down.sh
 ```
 
-Stosować tylko świadomie; pełna akceptacja nie powinna pomijać build ani live checks.
+Weryfikacja:
 
-## 4. Symulator Portalu
+```bash
+docker ps --format '{{.Names}}' | grep updater && exit 1 || true
+```
 
-Najpierw utwórz testowy Portal i pobierz jego token.
+Po zamknięciu nie może istnieć running updater z zamontowanym Docker socket.
+
+## 6. Portal simulator
 
 ```bash
 export SIRK_SIMULATOR_ORIGIN='https://central.sirkportal.com'
 export SIRK_SIMULATOR_PORTAL_ID='<PORTAL_ID>'
 export SIRK_SIMULATOR_PORTAL_TOKEN='<PORTAL_TOKEN>'
-
 node scripts/portal-simulator.js
 ```
 
-Sprawdzić:
+Portal musi mieć active Tenant/Customer/Site assignment i ticket policy inną niż `none`.
 
-- heartbeat accepted,
-- Portal widoczny jako online,
-- telemetryka na kafelku,
-- policy endpoint,
-- snapshot zgłoszeń,
-- event status change,
-- zgłoszenie widoczne w Central,
-- pobranie komendy,
-- ACK running/completed,
-- audyt zdarzeń.
+Sprawdź heartbeat, telemetrykę, snapshot/event, command delivery, ACK i audit. Negatywnie: zły token/HMAC/nonce/timestamp, obcy Portal ACK, replay digest conflict, body limit i rate limit.
 
-Testy negatywne:
+## 7. Cooperative cancellation manual test
 
-- zły token,
-- zły podpis heartbeat,
-- ponowne użycie nonce,
-- timestamp poza oknem,
-- zbyt duży body,
-- command ACK dla innego Portalu,
-- nieznany status zgłoszenia,
-- starszy event próbujący nadpisać nowszy.
+1. Utwórz command i pobierz go przez Portal.
+2. Ustaw ACK `running`.
+3. W Central wybierz cancel.
+4. Potwierdź stan `cancel_requested`.
+5. Poll Portalu musi zwrócić ten sam command z `control: "cancel"`.
+6. Portal zatrzymuje operację i wysyła `cancelled`.
+7. Powtórzony identyczny terminal ACK ma być idempotentny.
+8. `cancelled` bez wcześniejszego request ma zwrócić `409 COMMAND_CANCEL_NOT_REQUESTED`.
+9. Sprawdź race, gdzie operacja zdążyła zwrócić `completed` albo `failed`.
 
-## 5. Playwright i testy przycisków
+## 8. Ticket event semantics
 
-Workflow `.github/workflows/ui-e2e.yml` uruchamia Chromium i mock backend.
+Pojedynczy event:
 
-Sprawdza:
+- invalid schema/type → 400;
+- replay z innym payloadem → 409;
+- rate limit → 429;
+- transient server error → 5xx;
+- nigdy 207.
 
-- główną nawigację,
-- dashboard,
-- audyt,
-- Centrum Akceptacji,
-- operacje Portali,
-- ustawienia,
-- backup/update,
-- sesje,
-- zgłoszenia,
-- błędy konsoli,
-- page errors,
-- HTTP 5xx.
+Jawny batch:
 
-Po błędzie pobierz artefakt:
+- `events` musi być tablicą;
+- partial failure → 207;
+- każdy wynik ma `index`, `status`, `code`, `retryable`;
+- ponawiaj wyłącznie elementy `retryable: true`.
 
-```text
-sirk-central-ui-e2e
-```
+## 9. Approval Center i RBAC
 
-Przejrzyj trace, screenshot, video i log mock backendu.
-
-## 6. Testy Centrum Akceptacji
-
-Wykonać osobno:
-
-1. utworzenie zwykłego wniosku,
-2. jedna akceptacja,
-3. dwie akceptacje,
-4. self-approval — musi zostać odrzucone,
-5. drugi głos tego samego użytkownika — musi zostać odrzucony,
-6. reject,
-7. cancel przez wnioskodawcę,
-8. próba cancel przez inną osobę,
-9. expiry,
-10. role.assignment i rzeczywista zmiana roli,
-11. operation.high-risk dla właściwego Portalu i typu,
-12. użycie zgody drugi raz — musi zostać odrzucone,
-13. próba użycia zgody dla innego Portalu,
-14. próba użycia zgody dla innego typu operacji,
-15. kontrola wpisów audytu.
-
-## 7. Macierz RBAC
-
-Przetestować każdą istotną trasę jako:
+Role:
 
 ```text
 brak sesji
@@ -169,142 +167,81 @@ SecAdmin
 BreakGlass
 ```
 
-Obszary:
+Sprawdź wszystkie istotne read/write endpointy, CSRF, obcy Origin, self-approval, drugi głos tej samej identity, exact-scope, single-use oraz retry wymagający nowej high-risk approval.
 
-- `/api/session`,
-- użytkownicy i role,
-- organizacje,
-- approvals,
-- audit,
-- backup/update/restore,
-- aktywne sesje,
-- telemetryka Portali,
-- operacje Portali,
-- zgłoszenia,
-- polityki zgłoszeń,
-- eksporty.
+## 10. Backup/restore drill
 
-Każdy endpoint modyfikujący sprawdzić również bez CSRF i z obcym Origin.
+Wyłącznie na środowisku testowym:
 
-## 8. Backup i restore drill
+1. utwórz znany dataset;
+2. backup + checksum + archive validation;
+3. zmień dane;
+4. restore;
+5. `/readyz` i integralność wszystkich store;
+6. permissions 0600/0700;
+7. wymuś awarię restore i potwierdź safety-backup rollback;
+8. po operacji zamknij maintenance window;
+9. potwierdź audit.
 
-1. Utworzyć dane testowe.
-2. Wykonać backup.
-3. Sprawdzić checksum i zawartość archiwum.
-4. Zmienić/usunąć dane testowe.
-5. Wykonać restore z wymaganym potwierdzeniem.
-6. Sprawdzić `/readyz`.
-7. Sprawdzić odtworzenie sesji/store zgodnie z założeniami.
-8. Sprawdzić prawa plików.
-9. Sprawdzić wpis audytu.
+## 11. Update/rollback drill
 
-Nie wykonywać pierwszego drill na produkcji.
+1. zapisz HEAD i wersję;
+2. otwórz maintenance window;
+3. update do kontrolowanego commita;
+4. sprawdź build, health, UI, dane i audit;
+5. rollback;
+6. zasymuluj awarię checkout/build/start;
+7. potwierdź data rollback i updater self-recreate;
+8. zamknij maintenance window.
 
-## 9. Update i rollback drill
+## 12. YubiKey/BreakGlass
 
-1. Zapisać bieżący commit i wersję.
-2. Wykonać update do kontrolowanego commita.
-3. Sprawdzić health, UI, dane i audyt.
-4. Wykonać rollback.
-5. Sprawdzić powrót do poprzedniego commita i danych.
-6. Zasymulować błąd build/start i sprawdzić automatyczną reakcję.
+Edge i Chrome:
 
-## 10. YubiKey i Break-Glass
+- rejestracja pierwszego passkey i YubiKey;
+- logowanie passkey/YubiKey;
+- recovery code i jednorazowość;
+- rotacja codes;
+- próba usunięcia ostatniej metody;
+- signature counter;
+- wrong origin/RP ID;
+- expired/replayed challenge.
 
-W Edge i Chrome:
+## 13. Entra
 
-- rejestracja pierwszego passkey,
-- rejestracja YubiKey,
-- logowanie passkey,
-- logowanie YubiKey,
-- recovery code,
-- jednorazowość recovery code,
-- rotacja recovery codes,
-- próba usunięcia ostatniej metody MFA,
-- signature counter,
-- zły origin/RP ID,
-- wygasła transakcja,
-- ponowne użycie challenge.
-
-## 11. Entra ID
-
-- login z właściwego tenantu,
-- login z innego dozwolonego tenantu,
-- konto bez roli,
-- standardowa rola z grupy,
-- `Admin` pending,
-- `SecAdmin` pending,
-- konflikt wielu ról,
-- approve/reject,
-- logout i front-channel logout,
+- właściwy i inny dozwolony tenant;
+- konto bez roli;
+- standard role;
+- Admin/SecAdmin pending;
+- approve/reject;
+- role conflict i disabled;
+- logout oraz signed front-channel logout;
 - unieważnienie sesji po zmianie roli.
 
-## 12. UI manualne
+## 14. UI i TLS
 
-Rozdzielczości:
+Rozdzielczości: 1920x1080, 1366x768, tablet, telefon. Sprawdź PL/EN, keyboard/focus, contrast, długie/puste/duże listy, error/loading, dialogs, wszystkie buttons i CSP.
 
-```text
-1920x1080
-1366x768
-tablet
-telefon
-```
+Z zewnętrznej sieci sprawdź valid chain, HTTP→HTTPS, HSTS, CSP, X-Content-Type-Options, X-Frame-Options, Referrer-Policy, brak portu 8080 i poprawny WebSocket upgrade.
 
-Sprawdzić:
+## 15. GitHub Actions
 
-- PL i EN,
-- długie nazwy,
-- puste listy,
-- setki rekordów,
-- loading/error states,
-- focus i obsługę klawiaturą,
-- kontrast,
-- modal/dialog,
-- brak inline style blokowanego przez CSP,
-- wszystkie przyciski i linki powrotu.
+Wymagane zielone:
 
-## 13. Caddy/TLS
+- CI;
+- UI E2E;
+- Security Audit;
+- CodeQL;
+- branch protection checks.
 
-Z zewnętrznej sieci:
+Po naprawie konfliktu z `main` wypchnij merge commit:
 
 ```bash
-curl -I https://central.sirkportal.com/
-curl -fsS https://central.sirkportal.com/readyz
+git push origin feat/central-production-hardening
 ```
 
-Sprawdzić:
+Nie oznaczaj PR jako ready, jeśli statusy nie dotyczą aktualnego HEAD.
 
-- ważny certyfikat,
-- pełny chain,
-- redirect HTTP→HTTPS,
-- HSTS,
-- X-Content-Type-Options,
-- X-Frame-Options,
-- CSP,
-- brak publikacji portu 8080,
-- poprawny WebSocket upgrade.
+## 16. Raport końcowy
 
-## 14. GitHub Actions
-
-Wymagane zielone workflow:
-
-- CI,
-- UI E2E,
-- Security Audit/CodeQL,
-- inne workflow wymagane przez branch protection.
-
-Nie oznaczać PR jako ready, jeżeli API GitHub nie pokazuje rzeczywiście zaliczonych statusów.
-
-## 15. Raport końcowy
-
-Po testach uzupełnić:
-
-- commit testowany,
-- środowisko,
-- wersje Docker/Node/przeglądarek,
-- wynik każdego bloku,
-- linki do workflow i artefaktów,
-- wykryte błędy,
-- poprawki i commity,
-- ryzyka zaakceptowane,
-- decyzję: BLOCK / READY FOR REVIEW / READY TO DEPLOY.
+Zapisz HEAD, środowisko, wersje Node/Docker/browser, wynik każdego bloku, workflow/artifacts, błędy, poprawki, zaakceptowane ryzyka i decyzję: `BLOCK`, `READY FOR REVIEW` albo `READY TO DEPLOY`.
