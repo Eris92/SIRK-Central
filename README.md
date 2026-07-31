@@ -3,13 +3,12 @@
 SIRK Central jest wielotenantowym management plane dla instalacji SIRK Portal.
 
 ```text
-Branch: feat/central-production-hardening
-PR: #45 (draft)
+Branch: main
 Runtime: src/server-v15.js
-Version: 1.0.0-rc.24
+Version: 1.0.0-rc.25
 ```
 
-PR pozostaje draftem do czasu zielonego CI, VPS acceptance oraz testów backup/restore, update/rollback, YubiKey i Entra.
+Gałąź `main` jest kanonicznym kodem SIRK Central. Wersja pozostaje release candidate do czasu zielonego CI, VPS acceptance oraz testów backup/restore, update/rollback, YubiKey i Entra.
 
 ## Dokumentacja
 
@@ -26,7 +25,7 @@ PR pozostaje draftem do czasu zielonego CI, VPS acceptance oraz testów backup/r
 src/server-v15.js
 ```
 
-Ten sam entry point jest wymagany przez `package.json`, Dockerfile, CI, Security Audit i acceptance. Pliki legacy są zachowane wyłącznie dla zgodności z `main`.
+Ten sam entry point jest wymagany przez `package.json`, Dockerfile, CI, Security Audit i acceptance. Pliki legacy są zachowane wyłącznie dla zgodności i migracji.
 
 ## Bezpieczeństwo i tożsamość
 
@@ -171,17 +170,10 @@ bash deploy/acceptance-test.sh
 
 Acceptance sprawdza single-writer lock oraz lifecycle: gateway `409` → worker maintenance → gateway `200` → worker removed → gateway `409`.
 
-## Synchronizacja z `main`
+## Kod główny i walidacja
 
-```bash
-bash scripts/sync-main.sh
-npm ci
-npm test
-git push origin feat/central-production-hardening
-```
-
-Skrypt tworzy safety branch i automatycznie rozwiązuje wyłącznie oczekiwany konflikt `package.json`/`package-lock.json`.
+`main` jest jedyną kanoniczną gałęzią wdrożeniową. Zmiany funkcjonalne należy prowadzić przez krótkie branche i scalać dopiero po testach. Bieżący RC wymaga jeszcze pełnego CI i testów środowiskowych opisanych w `docs/CURRENT-STATUS.md`.
 
 ## SIRK Portal
 
-Nie modyfikować repozytorium SIRK Portal. Integracja jest obecnie weryfikowana przez testy HTTP i symulator w repo SIRK Central.
+Nie modyfikować repozytorium SIRK Portal w ramach zmian dotyczących Central. Integracja jest obecnie weryfikowana przez testy HTTP i symulator w repo SIRK Central.
