@@ -6,7 +6,7 @@ const commandStoreFactory = require("./portal-command-store");
 const { loadConfig } = require("./server-v1");
 const { parseCookies } = require("./server-v8");
 
-const VERSION = "1.0.0-rc.19";
+const VERSION = "1.0.0-rc.20";
 const HIGH_RISK = new Set(["update", "restart", "diagnostics"]);
 
 function json(res, status, body) {
@@ -23,19 +23,22 @@ function json(res, status, body) {
 }
 function readBody(req, limit = 65536) {
     return new Promise((resolve, reject) => {
-        const chunks = []; let size = 0;
+        const chunks = []; let size = 0; let settled = false;
         req.on("data", chunk => {
+            if (settled) return;
             size += chunk.length;
             if (size > limit) {
+                settled = true;
                 reject(Object.assign(new Error("Request body is too large."), { statusCode: 413 }));
-                req.destroy();
+                req.resume();
             } else chunks.push(chunk);
         });
         req.on("end", () => {
+            if (settled) return;
             try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}")); }
             catch (_) { reject(Object.assign(new Error("Invalid JSON body."), { statusCode: 400 })); }
         });
-        req.on("error", reject);
+        req.on("error", error => { if (!settled) reject(error); });
     });
 }
 function actorFor(app, req) {
@@ -46,7 +49,7 @@ function canRead(actor) {
     return Boolean(actor && (actor.builtIn === true || ["Admin", "SecAdmin", "Auditor", "OperatorL1", "SupportL2", "EngineerL3"].includes(actor.role)));
 }
 function canWrite(actor) {
-    return Boolean(actor && (actor.builtIn === true || ["Admin", "SecAdmin", "SupportL2", "EngineerL3"].includes(actor.role)));
+    return Boolean(actor && (actor.builtIn === true || ["Admin", "SupportL2", "EngineerL3"].includes(actor.role)));
 }
 function csrfAccepted(req, config) {
     const cookies = parseCookies(req);
@@ -59,7 +62,7 @@ function csrfAccepted(req, config) {
     return !site || site === "same-origin" || site === "none";
 }
 function portalCredential(req) {
-    const match = String(req.headers.authorization || "").match(/^SIRK-Portal ([A-Za-z0-9_-]+)$/);
+    const match = String(req.headers.authorization || "").match(/^SIRK-Portal ([A-Za-z0-9_-]{8,8192})$/);
     if (!match) return null;
     try {
         const decoded = Buffer.from(match[1], "base64url").toString("utf8");
@@ -101,12 +104,33 @@ function approvedOperation(app, approvalId, portalId, type) {
 function approvalAccepted(app, approvalId, portalId, type) {
     return Boolean(approvedOperation(app, approvalId, portalId, type));
 }
+function consumeApproval(app, approvalId, command, actor, commands) {
+    if (!approvalId || !app.approvals || typeof app.approvals.markExecution !== "function") return;
+    try {
+        app.approvals.markExecution(approvalId, {
+            state: "completed",
+            action: "portal.command.queued",
+            portalId: command.portalId,
+            commandType: command.type,
+            commandId: command.id,
+            executedBy: actor.identityKey || actor.username || "system"
+        });
+    } catch (error) {
+        try { commands.cancel(command.id, { username: "approval-rollback", identityKey: "system:approval-rollback" }); } catch (_) { /* best effort */ }
+        throw error;
+    }
+}
 
 function createPortalOperationsRuntime(config) {
     const app = createApprovalRuntime(config);
     const inner = app.server.listeners("request")[0];
     if (typeof inner !== "function") throw new Error("SIRK Central v13 request handler is unavailable.");
-    const commands = commandStoreFactory.create({ dataDir: config.dataDir });
+    const commands = commandStoreFactory.create({
+        dataDir: config.dataDir,
+        maxCommands: Number(config.env.SIRK_PORTAL_COMMAND_MAX || 10000),
+        maxActivePerPortal: Number(config.env.SIRK_PORTAL_COMMAND_MAX_ACTIVE || 50),
+        deliveryLeaseMs: Number(config.env.SIRK_PORTAL_COMMAND_DELIVERY_LEASE_MS || 60000)
+    });
 
     const server = http.createServer(async (req, res) => {
         try {
@@ -156,16 +180,7 @@ function createPortalOperationsRuntime(config) {
                     return json(res, 404, { ok: false, error: "Portal not found." });
                 }
                 const command = commands.enqueue(body, actor);
-                if (approval && app.approvals && typeof app.approvals.markExecution === "function") {
-                    app.approvals.markExecution(body.approvalId, {
-                        state: "completed",
-                        action: "portal.command.queued",
-                        portalId: command.portalId,
-                        commandType: command.type,
-                        commandId: command.id,
-                        executedBy: actor.identityKey || actor.username || "system"
-                    });
-                }
+                if (approval) consumeApproval(app, body.approvalId, command, actor, commands);
                 audit(app, "portal.command_queued", actor, req, { portalId: command.portalId, commandId: command.id, type: command.type, approvalId: command.approvalId });
                 return json(res, 201, { ok: true, command });
             }
@@ -173,8 +188,21 @@ function createPortalOperationsRuntime(config) {
             if (req.method === "POST" && actionMatch) {
                 if (!canWrite(actor)) return json(res, 403, { ok: false, error: "Permission denied." });
                 if (!csrfAccepted(req, config)) return json(res, 403, { ok: false, error: "CSRF validation failed." });
-                const command = actionMatch[2] === "cancel" ? commands.cancel(actionMatch[1], actor) : commands.retry(actionMatch[1], actor);
-                audit(app, "portal.command_" + actionMatch[2], actor, req, { portalId: command.portalId, commandId: command.id, type: command.type });
+                let command;
+                if (actionMatch[2] === "cancel") {
+                    command = commands.cancel(actionMatch[1], actor);
+                } else {
+                    const source = commands.get(actionMatch[1]);
+                    if (!source) return json(res, 404, { ok: false, error: "Command not found." });
+                    const body = await readBody(req, 16384);
+                    const approval = approvedOperation(app, body.approvalId, source.portalId, source.type);
+                    if (HIGH_RISK.has(source.type) && !approval) {
+                        return json(res, 409, { ok: false, code: "APPROVAL_REQUIRED", error: "Retrying this high-risk command requires a new, unused approval." });
+                    }
+                    command = commands.retry(actionMatch[1], actor, { approvalId: approval ? body.approvalId : "", ttlMinutes: body.ttlMinutes });
+                    if (approval) consumeApproval(app, body.approvalId, command, actor, commands);
+                }
+                audit(app, "portal.command_" + actionMatch[2], actor, req, { portalId: command.portalId, commandId: command.id, type: command.type, approvalId: command.approvalId });
                 return json(res, 200, { ok: true, command });
             }
             return json(res, 404, { ok: false, error: "Not found." });
@@ -193,4 +221,4 @@ if (require.main === module) {
     app.server.listen(config.port, config.bindHost, () => process.stdout.write("SIRK Central v14 listening on " + config.bindHost + ":" + config.port + "\n"));
 }
 
-module.exports = { createPortalOperationsRuntime, VERSION, approvedOperation, approvalAccepted, canRead, canWrite };
+module.exports = { createPortalOperationsRuntime, VERSION, HIGH_RISK, approvedOperation, approvalAccepted, consumeApproval, canRead, canWrite };
