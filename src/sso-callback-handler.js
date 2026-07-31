@@ -32,7 +32,7 @@ function create(options) {
     const app = options.app;
     const config = options.config;
     if (!app || !app.sessions || !app.userStore) throw new Error("SSO callback dependencies are unavailable.");
-    const replay = replayStoreFactory.create({
+    const replay = options.replay || replayStoreFactory.create({
         dataDir: config.dataDir,
         maxEntries: Number(config.env.SIRK_SSO_REPLAY_MAX_ENTRIES || 10000)
     });
@@ -46,7 +46,8 @@ function create(options) {
         }
         const ticket = verifySsoTicket(rawTicket, config.ssoSharedSecret, {
             issuer: config.authOrigin,
-            audience: config.publicOrigin
+            audience: config.publicOrigin,
+            type: "login"
         });
         if (!replay.consume(ticket.jti, ticket.exp * 1000)) {
             throw Object.assign(new Error("SSO ticket was already used."), { statusCode: 401, code: "SSO_TICKET_REPLAY" });
@@ -62,6 +63,8 @@ function create(options) {
             identityKey,
             tenantId: String(ticket.tid),
             objectId: String(ticket.oid),
+            entraSessionId: String(ticket.sid || "").slice(0, 512),
+            entraIssuer: String(ticket.providerIssuer || "").slice(0, 512),
             source: "entra",
             role: state.role,
             status: state.status,
@@ -79,7 +82,8 @@ function create(options) {
             app.securityCenter.audit("authentication.entra.success", identity, {
                 ip: requestIp(req, config),
                 claimedRoles: state.claimedRoles,
-                status: state.status
+                status: state.status,
+                frontChannelLogoutBound: Boolean(identity.entraSessionId && identity.entraIssuer)
             });
         }
         redirect(res, "/", { "Set-Cookie": sessionCookie(issued.token, config.sessionAbsoluteHours) });
