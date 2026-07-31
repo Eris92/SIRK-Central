@@ -13,17 +13,27 @@
     }
     function age(value) {
         if (!value) return text("brak heartbeat", "no heartbeat");
-        const seconds = Math.max(0, Math.round((Date.now() - new Date(value).getTime()) / 1000));
+        const parsed = new Date(value);
+        if (Number.isNaN(parsed.getTime())) return text("brak heartbeat", "no heartbeat");
+        const seconds = Math.max(0, Math.round((Date.now() - parsed.getTime()) / 1000));
         if (seconds < 60) return seconds + " s";
         if (seconds < 3600) return Math.round(seconds / 60) + " min";
         return Math.round(seconds / 3600) + " h";
+    }
+    function bytes(value) {
+        const number = Number(value);
+        if (!Number.isFinite(number) || number < 0) return "—";
+        if (number < 1024) return number + " B";
+        if (number < 1024 ** 2) return (number / 1024).toFixed(1) + " KiB";
+        if (number < 1024 ** 3) return (number / 1024 ** 2).toFixed(1) + " MiB";
+        return (number / 1024 ** 3).toFixed(1) + " GiB";
     }
     async function load() {
         clearTimeout(timer);
         try {
             const response = await fetch("/api/portal-telemetry", { credentials: "same-origin", cache: "no-store" });
             const body = await response.json().catch(() => ({}));
-            if (response.ok) telemetry = new Map((Array.isArray(body.portals) ? body.portals : []).map(item => [item.id, item]));
+            if (response.ok) telemetry = new Map((Array.isArray(body.portals) ? body.portals : []).map(item => [String(item.id || "").toLowerCase(), item]));
             enhance();
         } catch (_) { /* preserve existing portal list */ }
         timer = setTimeout(load, 15000);
@@ -35,36 +45,47 @@
     function metric(label, value, className) {
         const row = document.createElement("div");
         row.className = "portal-metric";
-        const key = document.createElement("span"); key.className = "muted"; key.textContent = label;
-        const data = document.createElement("strong"); data.textContent = value; if (className) data.className = className;
-        row.append(key, data); return row;
+        const key = document.createElement("span");
+        key.className = "muted";
+        key.textContent = label;
+        const data = document.createElement("strong");
+        data.textContent = String(value == null || value === "" ? "—" : value);
+        if (className) data.className = className;
+        row.append(key, data);
+        return row;
     }
     function enhance() {
         for (const card of document.querySelectorAll("#portalList .portal-card")) {
-            const id = portalId(card); if (!id) continue;
+            const id = portalId(card);
+            if (!id) continue;
             let panel = card.querySelector(".portal-telemetry-panel");
-            if (!panel) { panel = document.createElement("div"); panel.className = "portal-telemetry-panel"; const button = card.querySelector("button,a.button"); card.insertBefore(panel, button || null); }
+            if (!panel) {
+                panel = document.createElement("div");
+                panel.className = "portal-telemetry-panel";
+                const button = card.querySelector("button,a.button");
+                card.insertBefore(panel, button || null);
+            }
             const item = telemetry.get(id);
             if (!item) {
                 panel.replaceChildren(metric(text("Monitoring", "Monitoring"), text("oczekuje na pierwszy heartbeat", "waiting for first heartbeat"), "overview-warn"));
                 continue;
             }
             const stateClass = item.status === "online" ? "overview-ok" : item.status === "never" ? "overview-warn" : "overview-error";
-            const heartbeat = item.telemetry || item;
-            const agents = heartbeat.agents || {};
-            const resources = heartbeat.resources || {};
-            const backup = heartbeat.backup || {};
-            const update = heartbeat.update || {};
-            const health = heartbeat.health || {};
+            const metrics = item.metrics && typeof item.metrics === "object" ? item.metrics : {};
+            const healthClass = metrics.health === "critical" ? "overview-error" : metrics.health === "warning" ? "overview-warn" : "overview-ok";
+            const backupClass = metrics.lastBackupStatus === "failed" ? "overview-error" : metrics.lastBackupStatus === "ok" ? "overview-ok" : "";
+            const memory = bytes(metrics.memoryUsedBytes) + " / " + bytes(metrics.memoryTotalBytes);
             panel.replaceChildren(
                 metric(text("Stan", "Status"), item.status || "unknown", stateClass),
-                metric(text("Wersja", "Version"), heartbeat.version || "—"),
-                metric(text("Ostatni kontakt", "Last contact"), age(item.lastSeenAtUtc || heartbeat.receivedAtUtc)),
-                metric(text("Agenci", "Agents"), String(agents.active ?? 0) + "/" + String(agents.total ?? 0)),
-                metric("CPU / RAM", String(resources.cpuPercent ?? "—") + "% / " + String(resources.memoryMb ?? "—") + " MB"),
-                metric("Health", health.status || (health.ok === true ? "healthy" : health.ok === false ? "unhealthy" : "—"), health.ok === false ? "overview-error" : ""),
-                metric("Backup", backup.status || (backup.lastSuccessAtUtc ? date(backup.lastSuccessAtUtc) : "—"), backup.status === "failed" ? "overview-error" : ""),
-                metric(text("Aktualizacja", "Update"), update.availableVersion ? text("dostępna: ", "available: ") + update.availableVersion : text("brak oczekującej", "none pending"), update.availableVersion ? "overview-warn" : "")
+                metric(text("Wersja", "Version"), metrics.portalVersion || "—"),
+                metric(text("Commit", "Commit"), metrics.buildCommit || "—"),
+                metric(text("Ostatni kontakt", "Last contact"), age(item.lastSeenAtUtc)),
+                metric(text("Agenci", "Agents"), String(metrics.onlineAgents ?? 0) + "/" + String(metrics.agentCount ?? 0)),
+                metric("CPU", Number.isFinite(Number(metrics.cpuPercent)) ? Number(metrics.cpuPercent).toFixed(1) + "%" : "—"),
+                metric("RAM", memory),
+                metric("Health", metrics.health || "unknown", healthClass),
+                metric("Backup", metrics.lastBackupStatus === "ok" && metrics.lastBackupAtUtc ? date(metrics.lastBackupAtUtc) : metrics.lastBackupStatus || "unknown", backupClass),
+                metric(text("Aktualizacja", "Update"), metrics.availableVersion ? text("dostępna: ", "available: ") + metrics.availableVersion : text("brak oczekującej", "none pending"), metrics.availableVersion ? "overview-warn" : "")
             );
         }
     }
@@ -83,5 +104,6 @@
         load();
         new MutationObserver(enhance).observe(document.documentElement, { attributes: true, attributeFilter: ["lang"] });
     }
-    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", initialize, { once: true }); else initialize();
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", initialize, { once: true });
+    else initialize();
 }());
