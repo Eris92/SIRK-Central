@@ -23,21 +23,46 @@ chmod 0700 "$STATE_DIR"
 
 write_status() {
   local state="$1" message="$2" commit="${3:-}"
-  python3 - "$STATUS_FILE" "$state" "$message" "$STARTED_AT" "$REQUESTED_BY" "$LOG_FILE" "$commit" <<'PY'
+  python3 - "$STATUS_FILE" "$state" "$message" "$STARTED_AT" "$REQUESTED_BY" "$LOG_FILE" "$commit" "$CURRENT_COMMIT" "$TARGET_COMMIT" <<'PY'
 import json, os, sys, tempfile, datetime
-path,state,message,started,requested,log,commit=sys.argv[1:]
-data={"state":state,"running":state in ("starting","running","rollback"),"message":message,"startedAtUtc":started,"requestedBy":requested,"logFile":log}
-if commit:data["commit"]=commit
-if state in ("completed","failed"):data["finishedAtUtc"]=datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00","Z")
+path,state,message,started,requested,log,commit,previous,target=sys.argv[1:]
+data={
+  "state":state,
+  "running":state in ("starting","running","rollback"),
+  "message":message,
+  "startedAtUtc":started,
+  "requestedBy":requested,
+  "logFile":log
+}
+if commit: data["commit"]=commit
+if previous: data["previousCommit"]=previous
+if target: data["targetCommit"]=target
+if state in ("completed","failed","rollback_completed"):
+  data["finishedAtUtc"]=datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00","Z")
 os.makedirs(os.path.dirname(path),exist_ok=True)
 fd,tmp=tempfile.mkstemp(dir=os.path.dirname(path),prefix="status-",text=True)
-with os.fdopen(fd,"w") as f: json.dump(data,f,indent=2); f.write("\n")
-os.chmod(tmp,0o600); os.replace(tmp,path)
+with os.fdopen(fd,"w") as f:
+  json.dump(data,f,indent=2)
+  f.write("\n")
+os.chmod(tmp,0o600)
+os.replace(tmp,path)
 PY
 }
 
 compose() {
   docker compose -f "$COMPOSE_FILE" --profile auth "$@"
+}
+
+central_healthy() {
+  local healthy=0
+  for _ in $(seq 1 60); do
+    if curl -fsS --max-time 5 http://central:8080/healthz >/dev/null 2>&1; then
+      healthy=1
+      break
+    fi
+    sleep 2
+  done
+  [[ "$healthy" -eq 1 ]]
 }
 
 rollback() {
@@ -47,21 +72,30 @@ rollback() {
   trap - ERR
   write_status rollback "Update failed. Restoring the previous version." "${CURRENT_COMMIT:-}" || true
 
+  local rollback_ok=0
   if [[ -n "$CURRENT_COMMIT" && -d "$INSTALL_DIR/.git" ]]; then
     cd "$INSTALL_DIR"
-    git reset --hard "$CURRENT_COMMIT" || true
-    if [[ -n "$BACKUP_DIR" && -f "$BACKUP_DIR/.env" ]]; then
-      cp -a "$BACKUP_DIR/.env" .env || true
-      chmod 0600 .env || true
-    fi
-    if [[ "$DEPLOY_STARTED" -eq 1 ]]; then
-      compose config >/dev/null || true
-      compose build central auth || true
-      compose up -d --force-recreate --remove-orphans central auth caddy || true
+    if git reset --hard "$CURRENT_COMMIT"; then
+      if [[ -n "$BACKUP_DIR" && -f "$BACKUP_DIR/.env" ]]; then
+        cp -a "$BACKUP_DIR/.env" .env || true
+        chmod 0600 .env || true
+      fi
+      if [[ "$DEPLOY_STARTED" -eq 1 ]]; then
+        compose config >/dev/null || true
+        compose build central auth || true
+        compose up -d --force-recreate --remove-orphans central auth caddy || true
+        if central_healthy; then rollback_ok=1; fi
+      else
+        rollback_ok=1
+      fi
     fi
   fi
 
-  write_status failed "Update failed and rollback was attempted. Check the updater log: $LOG_FILE" "${CURRENT_COMMIT:-}" || true
+  if [[ "$rollback_ok" -eq 1 ]]; then
+    write_status rollback_completed "Update failed, but the previous version was restored successfully." "${CURRENT_COMMIT:-}" || true
+  else
+    write_status failed "Update failed and the previous version could not be confirmed healthy. Check the updater log." "${CURRENT_COMMIT:-}" || true
+  fi
   exit "$original_code"
 }
 
@@ -82,13 +116,10 @@ acquire_lock() {
   if [[ -f "$LOCK_PID_FILE" ]]; then
     existing_pid="$(cat "$LOCK_PID_FILE" 2>/dev/null || true)"
   fi
-
   if [[ "$existing_pid" =~ ^[0-9]+$ ]] && kill -0 "$existing_pid" 2>/dev/null; then
     return 1
   fi
 
-  # The owner process no longer exists, or the legacy lock has no PID.
-  # Remove only the dedicated updater lock directory and retry atomically.
   rm -rf "$LOCK_DIR"
   mkdir "$LOCK_DIR"
   printf '%s\n' "$$" > "$LOCK_PID_FILE"
@@ -101,8 +132,6 @@ if ! acquire_lock; then
 fi
 trap 'rm -rf "$LOCK_DIR"' EXIT
 
-# Create and secure the log synchronously before tee starts in a process
-# substitution. Otherwise chmod can race with tee and abort the update.
 : > "$LOG_FILE"
 chmod 0600 "$LOG_FILE"
 exec > >(tee -a "$LOG_FILE") 2>&1
@@ -142,9 +171,6 @@ npm ci
 npm test
 compose config >/dev/null
 
-# The updater deliberately does not rebuild or recreate itself from inside its
-# own container. Doing so can terminate the Compose client before Docker has
-# created the replacement, leaving the updater service absent from the network.
 write_status running "Building updated application services." "$TARGET_COMMIT"
 compose build --pull central auth
 
@@ -152,16 +178,8 @@ write_status running "Deploying updated application services." "$TARGET_COMMIT"
 DEPLOY_STARTED=1
 compose up -d --force-recreate --remove-orphans central auth caddy
 
-healthy=0
-for _ in $(seq 1 60); do
-  if curl -fsS --max-time 5 http://central:8080/healthz >/dev/null 2>&1; then
-    healthy=1
-    break
-  fi
-  sleep 2
-done
-[[ "$healthy" -eq 1 ]]
+central_healthy
 CENTRAL_DOMAIN="${SIRK_CENTRAL_DOMAIN:-central.sirkportal.com}"
 curl -fsS --max-time 10 "https://${CENTRAL_DOMAIN}/healthz" >/dev/null
 
-write_status completed "Update completed successfully. The updater service remains on its current image and must be upgraded by the host deployment procedure when its own code changes." "$TARGET_COMMIT"
+write_status completed "Update completed successfully." "$TARGET_COMMIT"
