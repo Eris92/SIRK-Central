@@ -1,6 +1,6 @@
 # SIRK Central
 
-SIRK Central jest centralnym, wielotenantowym management plane dla instalacji SIRK Portal.
+SIRK Central jest wielotenantowym management plane dla instalacji SIRK Portal.
 
 ```text
 Branch: feat/central-production-hardening
@@ -26,57 +26,55 @@ PR pozostaje draftem do czasu zielonego CI, VPS acceptance oraz testów backup/r
 src/server-v15.js
 ```
 
-Ten sam entry point jest wymagany przez `package.json`, oba Dockerfile, CI, Security Audit i acceptance test. Pliki legacy są zachowane wyłącznie dla zgodności z `main`; nie są produkcyjnym entry pointem.
+Ten sam entry point jest wymagany przez `package.json`, Dockerfile, CI, Security Audit i acceptance. Pliki legacy są zachowane wyłącznie dla zgodności z `main`.
 
-## Najważniejsze mechanizmy
-
-### Identity i RBAC
+## Bezpieczeństwo i tożsamość
 
 - Entra ID Authorization Code + PKCE;
 - lokalny BreakGlass z Access URL;
 - passkeys/WebAuthn, YubiKey i recovery codes;
-- trwałe hashowane sesje z idle/absolute timeout;
+- hashowane persistent sessions z idle/absolute timeout;
 - globalny browser CSRF i Origin/Sec-Fetch-Site;
-- centralne blokowanie `pending`, `conflict` i `disabled`;
+- blokowanie `pending`, `conflict` i `disabled`;
 - separation of duties `Admin` / `SecAdmin`;
 - tamper-evident audit.
 
-### Approval Center
+## Approval Center
 
 - jedna lub dwie niezależne decyzje;
 - self-approval protection;
-- exact-scope i single-use approval;
+- exact-scope i single-use approvals;
 - high-risk approval zużywany dopiero przy utworzeniu command;
 - retry wysokiego ryzyka wymaga nowej zgody;
 - legacy approval mutations są wyłączone.
 
-### Portal monitoring i commands
+## Portal monitoring i commands
 
 - signed heartbeat HMAC, timestamp i nonce replay protection;
 - rate limiting per IP i Portal;
 - access-scope filtering;
 - trwała kolejka z delivery lease, ACK, progress, result i timeout;
-- secret redaction i prototype pollution protection;
+- secret redaction i prototype-pollution protection;
 - cooperative cancellation:
-  - `queued` → natychmiast `cancelled`,
+  - `queued` → `cancelled`,
   - `delivered/running` → `cancel_requested`,
-  - Portal otrzymuje `control: "cancel"` i kończy ACK `cancelled`;
-- `completed/failed` może bezpiecznie wygrać race z anulowaniem.
+  - Portal dostaje `control: "cancel"` i kończy ACK `cancelled`;
+- `completed/failed` może bezpiecznie wygrać race.
 
-### Tickets
+## Tickets
 
-- provider-independent projection store schema v2;
-- assignment-bound Tenant/Customer/Site;
-- fail-closed policy `none`;
-- opis/requester publikowane wyłącznie po jawnej zgodzie;
+- projection store schema v2;
+- canonical Tenant/Customer/Site assignment;
+- fail-closed publication policy `none`;
+- opis/requester tylko po jawnej zgodzie;
 - digest replay i version conflict detection;
 - full snapshot usuwa nieobecne projekcje;
-- policy tightening usuwa lub redaguje istniejące dane;
-- pojedynczy błędny event zachowuje status `400/409/429/5xx`;
-- `207 Multi-Status` jest wyłącznie dla jawnego batcha z częściowym błędem;
-- każdy element batcha ma `status`, `code` i `retryable`.
+- policy tightening usuwa/redaguje istniejące dane;
+- pojedynczy błąd zachowuje `400/409/429/5xx`;
+- `207 Multi-Status` jest wyłącznie dla partial batch;
+- każdy wynik batcha ma `status`, `code` i `retryable`.
 
-### Storage
+## Storage
 
 Dane znajdują się w `/var/lib/sirk-central`. Runtime używa fail-fast single-writer lease:
 
@@ -84,25 +82,45 @@ Dane znajdują się w `/var/lib/sirk-central`. Runtime używa fail-fast single-w
 /var/lib/sirk-central/.sirk-central-runtime.lock/owner.json
 ```
 
-Druga instancja korzystająca z tego samego file-backed storage nie uruchomi się. To blokuje silent corruption, ale nie jest active-active HA. Active-active wymaga transakcyjnej bazy danych i distributed locking.
+Druga instancja na tym samym file-backed storage nie uruchomi się. Active-active wymaga transakcyjnej bazy danych i distributed locking.
 
 ## Usługi Compose
+
+Canonical stack:
 
 ```text
 docker-compose.yml
 docker-compose.portal-runtime.yml
+--profile auth
 ```
 
-Normalny runtime:
+Base services:
 
 - `central` — v15 API/UI, `USER node`;
 - `auth` — broker Entra, `USER node`;
-- `backup-manager` — scheduler/backup metadata;
+- `updater-gateway` — minimalny, nieuprzywilejowany proxy jako `USER node`;
+- `backup-manager` — scheduler i backup metadata;
 - `caddy` — TLS i reverse proxy.
 
-### Updater maintenance window
+### Updater gateway
 
-Updater ma Docker socket i jest root-equivalent względem hosta, dlatego nie działa stale:
+Central nigdy nie łączy się bezpośrednio z rootowym workerem:
+
+```text
+Central -> updater-gateway:8092 -> updater:8090
+```
+
+Gateway:
+
+- ma osobny minimalny obraz bez Docker CLI, Git i tar;
+- nie ma wolumenów ani host ports;
+- otrzymuje wyłącznie `SIRK_UPDATER_TOKEN` i parametry proxy;
+- ma exact route/host allowlist, timeout i body limit;
+- przy zamkniętym maintenance zwraca `409 UPDATER_MAINTENANCE_REQUIRED`.
+
+### Maintenance worker
+
+Rootowy worker z Docker socket nie działa stale:
 
 ```yaml
 profiles: ["maintenance"]
@@ -110,19 +128,17 @@ restart: "no"
 user: "0:0"
 ```
 
-Otwarcie maintenance window:
+Otwarcie:
 
 ```bash
 sudo bash /opt/sirk-central/deploy/maintenance-up.sh
 ```
 
-Po update/restore natychmiast zamknij okno:
+Zamknięcie po operacji:
 
 ```bash
 sudo bash /opt/sirk-central/deploy/maintenance-down.sh
 ```
-
-Updater nie publikuje host portu, działa w internal network, wymaga silnego bearer tokenu i ma exact host/path allowlist.
 
 ## Instalacja
 
@@ -134,18 +150,16 @@ sudo bash /tmp/install-sirk-central.sh
 sudo rm -f /tmp/install-sirk-central.sh
 ```
 
-Nie używaj `curl | sudo bash`. Instalator uruchamia stack bez uprzywilejowanego updatera.
+Nie używaj `curl | sudo bash`. Instalator uruchamia base stack z gatewayem, bez rootowego workera.
 
 ## Testy
 
 ```bash
 npm ci
 npm run check:syntax
-npm test
+SIRK_CONCURRENCY_TEST_REQUESTS=24 npm test
 npm audit --omit=dev --audit-level=high
 ```
-
-`npm run check:syntax` sprawdza JavaScript, Python oraz wszystkie skrypty shell w `deploy/` i `scripts/`.
 
 VPS acceptance:
 
@@ -155,11 +169,9 @@ export SIRK_ACCEPTANCE_PUBLIC_URL='https://central.sirkportal.com'
 bash deploy/acceptance-test.sh
 ```
 
-Acceptance potwierdza również single-writer lock oraz cykl updatera: nieobecny → maintenance → usunięty.
+Acceptance sprawdza single-writer lock oraz lifecycle: gateway `409` → worker maintenance → gateway `200` → worker removed → gateway `409`.
 
-## Synchronizacja z main
-
-Gałąź ma guarded helper:
+## Synchronizacja z `main`
 
 ```bash
 bash scripts/sync-main.sh
@@ -168,8 +180,8 @@ npm test
 git push origin feat/central-production-hardening
 ```
 
-Skrypt tworzy safety branch i automatycznie rozwiązuje wyłącznie spodziewany konflikt `package.json`/`package-lock.json`. Każdy inny konflikt przerywa merge.
+Skrypt tworzy safety branch i automatycznie rozwiązuje wyłącznie oczekiwany konflikt `package.json`/`package-lock.json`.
 
-## Zasada dotycząca SIRK Portal
+## SIRK Portal
 
-Nie modyfikować repozytorium SIRK Portal. Integracja Central↔Portal jest obecnie weryfikowana przez testy HTTP i symulator w repo SIRK Central.
+Nie modyfikować repozytorium SIRK Portal. Integracja jest obecnie weryfikowana przez testy HTTP i symulator w repo SIRK Central.
