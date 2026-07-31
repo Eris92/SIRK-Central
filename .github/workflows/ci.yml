@@ -17,7 +17,7 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
         with:
@@ -33,10 +33,12 @@ jobs:
       - name: Validate shell scripts
         run: find deploy -maxdepth 1 -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
 
-      - name: Validate JavaScript syntax
+      - name: Validate JavaScript and Python syntax
         run: npm run check:syntax
 
-      - name: Run unit and HTTP regression tests
+      - name: Run unit HTTP and concurrency regression tests
+        env:
+          SIRK_CONCURRENCY_TEST_REQUESTS: '24'
         run: npm test
 
       - name: Validate package runtime UI and deployment contracts
@@ -49,44 +51,27 @@ jobs:
           if (pkg.main !== 'src/server-v15.js' || !String(pkg.scripts.start).includes('server-v15.js')) throw new Error('Canonical runtime is not v15.');
 
           for (const file of [
-            'src/server-v15.js',
-            'src/ticket-projection-store.js',
-            'src/ticket-projection-store-v2.js',
-            'src/portal-command-store.js',
-            'src/request-rate-limiter.js',
-            'src/approval-store.js',
-            'src/central-operation-guard.js',
-            'src/sso-replay-store.js',
-            'src/sso-callback-handler.js',
-            'auth/hardened-server.js',
-            'updater/backup-archive.js',
-            'updater/restore-transaction.js',
-            'public/approval-center-ui.js',
-            'public/portal-operations-ui.js',
-            'public/portal-monitoring-ui.js',
-            'public/portal-monitoring-ui.css',
-            'public/tickets-ui.js',
-            'public/tickets-ui.css',
-            'test/api-authorization.test.js',
-            'test/central-http-matrix.test.js',
-            'test/central-operation-guard-http.test.js',
-            'test/request-rate-limiter.test.js',
-            'test/ticket-projection-store.test.js',
-            'test/approval-workflow.test.js',
-            'test/portal-command-store.test.js',
-            'test/backup-archive.test.js',
-            'test/restore-transaction.test.js',
-            'test/sso-replay-store.test.js',
-            'test/sso-frontchannel-logout.test.js',
-            'test/session-store-hardening.test.js',
-            'test/user-role-boundaries.test.js',
-            'test/e2e/ui-buttons.spec.js',
-            'deploy/smoke-test.sh',
-            'deploy/acceptance-test.sh',
-            'deploy/configure-and-start.sh'
-          ]) {
-            if (!fs.existsSync(file)) throw new Error('Missing required file: ' + file);
-          }
+            'src/server-v15.js','src/runtime-lock.js',
+            'src/ticket-projection-store.js','src/ticket-projection-store-v2.js',
+            'src/portal-command-store.js','src/portal-command-store-v2.js',
+            'src/request-rate-limiter.js','src/approval-store.js','src/central-operation-guard.js',
+            'src/sso-replay-store.js','src/sso-callback-handler.js','auth/hardened-server.js',
+            'updater/backup-archive.js','updater/restore-transaction.js',
+            'public/approval-center-ui.js','public/portal-operations-ui.js',
+            'public/portal-monitoring-ui.js','public/portal-monitoring-ui.css',
+            'public/tickets-ui.js','public/tickets-ui.css',
+            'test/api-authorization.test.js','test/central-http-matrix.test.js',
+            'test/central-operation-guard-http.test.js','test/request-rate-limiter.test.js',
+            'test/runtime-lock.test.js','test/ticket-projection-store.test.js',
+            'test/ticket-event-http-semantics.test.js','test/portal-command-store.test.js',
+            'test/portal-command-cancellation.test.js','test/protocol-concurrency.test.js',
+            'test/approval-workflow.test.js','test/backup-archive.test.js',
+            'test/restore-transaction.test.js','test/sso-replay-store.test.js',
+            'test/sso-frontchannel-logout.test.js','test/session-store-hardening.test.js',
+            'test/user-role-boundaries.test.js','test/e2e/ui-buttons.spec.js',
+            'deploy/smoke-test.sh','deploy/acceptance-test.sh','deploy/configure-and-start.sh',
+            'deploy/maintenance-up.sh','deploy/maintenance-down.sh'
+          ]) if (!fs.existsSync(file)) throw new Error('Missing required file: ' + file);
 
           for (const dockerfileName of ['Dockerfile', 'Dockerfile.portal-runtime']) {
             const dockerfile = fs.readFileSync(dockerfileName, 'utf8');
@@ -94,8 +79,26 @@ jobs:
           }
 
           const compose = fs.readFileSync('docker-compose.yml', 'utf8');
-          if (!compose.includes('command: ["node", "auth/hardened-server.js"]')) throw new Error('Auth hardened runtime is not configured.');
-          if (!compose.includes('SIRK_CENTRAL_INTERNAL_ORIGIN: http://central:8080')) throw new Error('Auth front-channel logout relay is not wired to Central.');
+          for (const expected of [
+            'command: ["node", "auth/hardened-server.js"]',
+            'SIRK_CENTRAL_INTERNAL_ORIGIN: http://central:8080',
+            'profiles: ["maintenance"]',
+            'restart: "no"',
+            'SIRK_COMPOSE_PROFILES: auth,maintenance'
+          ]) if (!compose.includes(expected)) throw new Error('Compose contract missing: ' + expected);
+
+          const runtime = fs.readFileSync('src/server-v15.js', 'utf8');
+          for (const expected of [
+            '/api/portal/v1/ticket-policy','/api/portal/v1/tickets/snapshot',
+            '/api/portal/v1/tickets/events','/api/tickets',
+            'centralOperationGuard.evaluate','ssoCallback.handler',
+            'runtimeLockFactory.acquire','eventErrorResult'
+          ]) if (!runtime.includes(expected)) throw new Error('Runtime misses contract: ' + expected);
+
+          const commands = fs.readFileSync('src/portal-command-store-v2.js', 'utf8');
+          for (const expected of ['cancel_requested','control = "cancel"','COMMAND_CANCEL_NOT_REQUESTED']) {
+            if (!commands.includes(expected)) throw new Error('Cancellation contract missing: ' + expected);
+          }
 
           const restore = fs.readFileSync('deploy/restore.sh', 'utf8');
           if (!restore.includes('/readyz') || restore.includes('/healthz')) throw new Error('Restore readiness contract is invalid.');
@@ -105,20 +108,8 @@ jobs:
             if (!bundle.includes(asset)) throw new Error('Production UI bundle misses ' + asset);
           }
 
-          const runtime = fs.readFileSync('src/server-v15.js', 'utf8');
-          for (const expected of [
-            '/api/portal/v1/ticket-policy',
-            '/api/portal/v1/tickets/snapshot',
-            '/api/portal/v1/tickets/events',
-            '/api/tickets',
-            'centralOperationGuard.evaluate',
-            'ssoCallback.handler'
-          ]) {
-            if (!runtime.includes(expected)) throw new Error('Runtime misses contract: ' + expected);
-          }
-
           const auth = fs.readFileSync('auth/hardened-server.js', 'utf8');
-          for (const expected of ['__Host-sirk_auth_flow', 'relayFrontchannelLogout', 'SIRK-Logout']) {
+          for (const expected of ['__Host-sirk_auth_flow','relayFrontchannelLogout','SIRK-Logout']) {
             if (!auth.includes(expected)) throw new Error('Auth hardening misses: ' + expected);
           }
 
@@ -127,10 +118,9 @@ jobs:
           if (order.some(index => index < 0) || order.some((value, index) => index && value <= order[index - 1])) throw new Error('Browser bootstrap order is invalid.');
 
           const configure = fs.readFileSync('deploy/configure-and-start.sh', 'utf8');
-          if (!configure.includes('docker-compose.portal-runtime.yml') || !configure.includes('backup-manager')) throw new Error('Installer does not start the canonical overlay stack.');
-
+          if (!configure.includes('SERVICES=(central auth backup-manager caddy)')) throw new Error('Installer starts the privileged updater by default.');
           const acceptance = fs.readFileSync('deploy/acceptance-test.sh', 'utf8');
-          for (const expected of ['src/server-v15.js','backup-manager','Updater Docker socket access','Manual blockers remain']) {
+          for (const expected of ['Runtime single-writer lock is active','Opening explicit updater maintenance window','Closing updater maintenance window']) {
             if (!acceptance.includes(expected)) throw new Error('Acceptance test misses: ' + expected);
           }
           NODE
@@ -138,6 +128,7 @@ jobs:
       - name: Create CI environment
         run: |
           cat > .env <<'EOF'
+          NODE_ENV=production
           SIRK_ADMIN_PASSWORD_HASH=scrypt$16384$8$1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
           SIRK_ACCESS_KEY_HASH=sha256$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
           SIRK_SSO_SHARED_SECRET=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
@@ -152,17 +143,30 @@ jobs:
           EOF
           mkdir -p /tmp/sirk-business-site
 
-      - name: Validate merged Docker Compose
+      - name: Validate base Compose excludes updater
         run: |
-          docker compose -f docker-compose.yml -f docker-compose.portal-runtime.yml --profile auth config >/tmp/compose.rendered.yml
-          docker compose -f docker-compose.yml -f docker-compose.portal-runtime.yml --profile auth config --format json >/tmp/compose.rendered.json
+          docker compose -f docker-compose.yml -f docker-compose.portal-runtime.yml --profile auth config --format json >/tmp/compose.base.json
           node - <<'NODE'
           const fs = require('node:fs');
-          const compose = JSON.parse(fs.readFileSync('/tmp/compose.rendered.json', 'utf8'));
+          const compose = JSON.parse(fs.readFileSync('/tmp/compose.base.json', 'utf8'));
+          for (const service of ['central','auth','backup-manager','caddy']) {
+            if (!compose.services || !compose.services[service]) throw new Error('Missing base service: ' + service);
+          }
+          if (compose.services.updater) throw new Error('Updater must be excluded outside maintenance profile.');
+          NODE
+
+      - name: Validate maintenance Compose
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.portal-runtime.yml --profile auth --profile maintenance config >/tmp/compose.maintenance.yml
+          docker compose -f docker-compose.yml -f docker-compose.portal-runtime.yml --profile auth --profile maintenance config --format json >/tmp/compose.maintenance.json
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const compose = JSON.parse(fs.readFileSync('/tmp/compose.maintenance.json', 'utf8'));
           for (const service of ['central','auth','updater','backup-manager','caddy']) {
-            if (!compose.services || !compose.services[service]) throw new Error('Missing Compose service: ' + service);
+            if (!compose.services || !compose.services[service]) throw new Error('Missing maintenance service: ' + service);
           }
           if (String(compose.services.updater.user) !== '0:0') throw new Error('Updater privileged trust boundary is not explicit.');
+          if (compose.services.updater.restart !== 'no') throw new Error('Updater restart policy must be no.');
           if (compose.services.updater.ports && compose.services.updater.ports.length) throw new Error('Updater must not publish host ports.');
           if (compose.services['backup-manager'].ports && compose.services['backup-manager'].ports.length) throw new Error('Backup manager must not publish host ports.');
           if (!compose.services.updater.healthcheck) throw new Error('Updater healthcheck is missing.');
@@ -171,12 +175,12 @@ jobs:
           NODE
 
       - name: Build application images
-        run: docker compose -f docker-compose.yml -f docker-compose.portal-runtime.yml --profile auth build central auth updater backup-manager
+        run: docker compose -f docker-compose.yml -f docker-compose.portal-runtime.yml --profile auth --profile maintenance build central auth updater backup-manager
 
       - name: Inspect image runtimes and users
         run: |
           set -euo pipefail
-          compose=(docker compose -f docker-compose.yml -f docker-compose.portal-runtime.yml --profile auth)
+          compose=(docker compose -f docker-compose.yml -f docker-compose.portal-runtime.yml --profile auth --profile maintenance)
           central_image="$(${compose[@]} images -q central)"
           auth_image="$(${compose[@]} images -q auth)"
           updater_image="$(${compose[@]} images -q updater)"
