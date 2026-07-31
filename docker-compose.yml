@@ -65,7 +65,7 @@ services:
       SIRK_BACKUP_TIME_ZONE: ${SIRK_BACKUP_TIME_ZONE:-Europe/Warsaw}
       SIRK_COMPOSE_FILE: /opt/sirk-central/docker-compose.yml
       SIRK_INSTALL_DIR: /opt/sirk-central
-      SIRK_REPO_REF: ${SIRK_REPO_REF:-main}
+      SIRK_REPO_REF: ${SIRK_REPO_REF:-}
     volumes:
       - /opt/sirk-central:/opt/sirk-central
       - ${SIRK_BUSINESS_SITE_PATH:-/opt/sir-k.pl}:${SIRK_BUSINESS_SITE_PATH:-/opt/sir-k.pl}
