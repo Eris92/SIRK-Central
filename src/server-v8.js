@@ -5,9 +5,10 @@ const policy = require("./mfa-continuity-policy");
 const auditStoreFactory = require("./audit-store");
 const { createRuntimeApp } = require("./server-v7");
 const { loadConfig } = require("./server-v1");
-const { hasPermission } = require("./rbac");
+const { hasPermission, identityActive } = require("./rbac");
 
-const VERSION = "1.0.0-rc.20";
+const VERSION = "1.0.0-rc.21";
+const UPDATER_STATIC_PATHS = new Set(["/status", "/run", "/backup/status", "/backup/run", "/backup/restore"]);
 
 function parseCookies(req) {
     const result = {};
@@ -72,7 +73,7 @@ function readBody(req, limit = 65536) {
 }
 function providerAccess(app, req) {
     const actor = sessionActor(app, req);
-    if (!actor) return { actor: null, editable: false, securityEditable: false };
+    if (!identityActive(actor)) return { actor: null, editable: false, securityEditable: false };
     return {
         actor,
         editable: hasPermission(actor, "identity.manage"),
@@ -102,10 +103,17 @@ function updaterOrigin(config) {
     }
     return value;
 }
+function updaterPathAllowed(requestPath) {
+    const value = String(requestPath || "");
+    if (!value || value.length > 512 || !value.startsWith("/") || value.includes("?") || value.includes("#")) return false;
+    let decoded;
+    try { decoded = decodeURIComponent(value); }
+    catch (_) { return false; }
+    if (UPDATER_STATIC_PATHS.has(decoded)) return true;
+    return /^\/backup\/sirk-central-\d{8}T\d{6}(?:Z|[+-]\d{4})\.tar\.gz$/.test(decoded);
+}
 async function updaterRequest(config, requestPath, options) {
-    if (!/^\/[a-z0-9/_-]+$/i.test(String(requestPath || ""))) {
-        throw Object.assign(new Error("Updater request path is invalid."), { statusCode: 500 });
-    }
+    if (!updaterPathAllowed(requestPath)) throw Object.assign(new Error("Updater request path is invalid."), { statusCode: 500 });
     const origin = updaterOrigin(config);
     const token = String(config.env.SIRK_UPDATER_TOKEN || "");
     if (token.length < 43) throw Object.assign(new Error("Updater is not configured."), { statusCode: 503 });
@@ -124,14 +132,14 @@ async function updaterRequest(config, requestPath, options) {
 }
 function operationsActor(app, req, write) {
     const actor = sessionActor(app, req);
-    if (!actor) return null;
+    if (!identityActive(actor)) return null;
     if (actor.builtIn === true) return actor;
     if (write) return actor.role === "Admin" ? actor : null;
     return hasPermission(actor, "settings.read") ? actor : null;
 }
 function auditActor(app, req) {
     const actor = sessionActor(app, req);
-    if (!actor) return null;
+    if (!identityActive(actor)) return null;
     if (actor.builtIn === true || ["Admin", "SecAdmin", "Auditor"].includes(actor.role)) return actor;
     return hasPermission(actor, "settings.read") ? actor : null;
 }
@@ -261,9 +269,7 @@ function createContinuityApp(config) {
                 else policy.assertCanRevokeRecoveryCodes(app.passkeys, app.recoveryCodes, actor);
                 audit(app, req, { action: passkeyDelete ? "passkey.revocation_authorized" : "recovery_codes.revocation_authorized", category: "security", result: "success", target: passkeyDelete ? passkeyDelete[1] : actor.identityKey });
             }
-            if (req.method === "POST" && url.pathname === "/api/logout") {
-                audit(app, req, { action: "session.logout", category: "authentication", result: "success" });
-            }
+            if (req.method === "POST" && url.pathname === "/api/logout") audit(app, req, { action: "session.logout", category: "authentication", result: "success" });
             if (req.method === "GET" && url.pathname === "/readyz") {
                 const continuity = Boolean(app.passkeys && app.recoveryCodes && app.providerStore && app.auditStore);
                 if (!continuity) return json(res, 503, { ok: false, version: VERSION, checks: { mfaContinuityPolicy: false, identityProviderStore: Boolean(app.providerStore), auditStore: Boolean(app.auditStore) } });
@@ -301,5 +307,6 @@ module.exports = {
     providerAccess,
     testProvider,
     updaterOrigin,
+    updaterPathAllowed,
     operationsActor
 };
