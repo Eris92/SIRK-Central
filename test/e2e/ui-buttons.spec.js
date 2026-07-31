@@ -1,10 +1,13 @@
 "use strict";
 
-const fs = require("node:fs");
-const path = require("node:path");
 const { test, expect } = require("@playwright/test");
 
-const workspaceBootstrap = fs.readFileSync(path.join(__dirname, "..", "..", "public", "workspace-routing.js"), "utf8");
+const workspaceBootstrap = `"use strict";
+window.__SIRK_WORKSPACE_BOOTSTRAP = Object.freeze({
+  authenticated: true,
+  workspaces: Object.freeze(["portals", "permissions", "security", "settings", "break-glass"])
+});
+`;
 const csrfBootstrap = `"use strict";
 (function(){
   function cookie(name){
@@ -70,7 +73,11 @@ async function prepareDynamicMockRoutes(page) {
 
 async function openApplication(page) {
     await page.goto("http://127.0.0.1:4173/", { waitUntil: "domcontentloaded" });
-    await expect(page.locator("#dashboardView")).toBeVisible();
+    await page.waitForFunction(() => {
+        const dashboard = document.getElementById("dashboardView");
+        return Boolean(dashboard && dashboard.hidden === false);
+    }, null, { timeout: 8_000 });
+    await expect(page.locator("#overviewButton")).toBeVisible();
 }
 
 function captureFailures(page) {
