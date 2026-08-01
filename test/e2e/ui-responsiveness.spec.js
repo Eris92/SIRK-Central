@@ -4,7 +4,6 @@ const { test, expect } = require("@playwright/test");
 
 const bundleComponents = [
     "passkey-attestation-bridge.js",
-    "passkey-ui.js",
     "passkey-ui-polish.js",
     "passkey-list-cleanup.js",
     "operations-ui.js",
@@ -54,6 +53,20 @@ async function commonRoutes(page) {
     }));
 }
 
+async function componentSource(request, name) {
+    const response = await request.get("http://127.0.0.1:4173/" + name);
+    expect(response.ok()).toBe(true);
+    return response.text();
+}
+
+async function serveBundle(page, source) {
+    await page.route("**/passkey-ui.js", route => route.fulfill({
+        status: 200,
+        contentType: "text/javascript; charset=utf-8",
+        body: source
+    }));
+}
+
 async function assertResponsive(page) {
     await page.goto("http://127.0.0.1:4173/", { waitUntil: "domcontentloaded" });
     await new Promise(resolve => setTimeout(resolve, 750));
@@ -67,18 +80,23 @@ async function assertResponsive(page) {
     return state;
 }
 
+for (const mode of ["login", "management"]) {
+    test("renderer stays responsive with passkey " + mode + " initialization", async ({ page, request }) => {
+        test.setTimeout(10_000);
+        await commonRoutes(page);
+        let source = await componentSource(request, "passkey-ui.js");
+        if (mode === "login") source = source.replace("initializeManagement();", "");
+        else source = source.replace("initializeLogin();", "");
+        await serveBundle(page, source);
+        await assertResponsive(page);
+    });
+}
+
 for (const component of bundleComponents) {
     test("renderer stays responsive with bundle component " + component, async ({ page, request }) => {
         test.setTimeout(8_000);
         await commonRoutes(page);
-        const componentResponse = await request.get("http://127.0.0.1:4173/" + component);
-        expect(componentResponse.ok()).toBe(true);
-        const componentSource = await componentResponse.text();
-        await page.route("**/passkey-ui.js", route => route.fulfill({
-            status: 200,
-            contentType: "text/javascript; charset=utf-8",
-            body: componentSource
-        }));
+        await serveBundle(page, await componentSource(request, component));
         await assertResponsive(page);
     });
 }
