@@ -5,15 +5,12 @@ const { parseCookies, json, readBody, requestIp, csrfAccepted } = require("../ht
 const crypto = require("node:crypto");
 const passkeyStoreFactory = require("../passkey-store");
 const webauthn = require("../webauthn-es256");
+const continuityPolicy = require("../mfa-continuity-policy");
 const { verifySecret, verifyAccessKey } = require("../security");
 const { permissionsFor } = require("../rbac");
 const { digest } = require("../login-transaction-store");
 
 const { VERSION } = require("../version");
-
-
-
-
 
 function requestContext(req, config) {
     return { ip: requestIp(req, config), userAgent: String(req.headers["user-agent"] || "").slice(0, 1024) };
@@ -49,7 +46,6 @@ function breakGlassActor(app, req) {
     if (!actor || actor.builtIn !== true || actor.source !== "local" || actor.role !== "BreakGlass") return null;
     return actor;
 }
-
 
 function parseClientChallenge(encoded) {
     const raw = Buffer.from(String(encoded || ""), "base64url");
@@ -135,6 +131,7 @@ function registerWebAuthnAuthentication(app, config) {
                 }
                 const revokeMatch = url.pathname.match(/^\/api\/break-glass\/passkeys\/([A-Za-z0-9_-]{16,512})$/);
                 if (req.method === "DELETE" && revokeMatch) {
+                    continuityPolicy.assertCanRevokePasskey(passkeys, app.recoveryCodes, actor, revokeMatch[1]);
                     const record = passkeys.revoke(revokeMatch[1], actor);
                     app.securityCenter.audit("breakglass.passkey.revoked", actor, { credentialId: record.credentialId });
                     return json(res, 200, { ok: true });
@@ -174,13 +171,14 @@ function registerWebAuthnAuthentication(app, config) {
 
             return false;
         } catch (error) {
-            if (!res.headersSent) return json(res, error.statusCode || 400, { ok: false, error: error.message || "Request failed." });
+            const status = Number.isInteger(error.statusCode) ? error.statusCode : 400;
+            if (!res.headersSent) return json(res, status, { ok: false, code: error.code || "REQUEST_REJECTED", error: error.message || "Request failed." });
             res.destroy(error);
         }
     };
     app.router.prepend(handler);
     Object.assign(app, { passkeys, version: VERSION });
-    return app
+    return app;
 }
 
 module.exports = { registerWebAuthnAuthentication, VERSION };
