@@ -49,8 +49,8 @@ function create(options) {
         const plaintext = [];
         const hashes = [];
         for (let index = 0; index < number; index += 1) {
-            const raw = crypto.randomBytes(10).toString("base64url").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 16);
-            const formatted = raw.match(/.{1,4}/g).join("-");
+            const raw = crypto.randomBytes(10).toString("hex").toUpperCase();
+            const formatted = raw.match(/.{4}/g).join("-");
             plaintext.push(formatted);
             hashes.push({ hash: codeHash(owner, formatted, salt), usedAtUtc: null });
         }
