@@ -2,7 +2,7 @@
 
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { updaterPathAllowed, updaterOrigin, operationsActor } = require("../src/server-v8");
+const { updaterPathAllowed, updaterOrigin, operationsActor } = require("../src/modules/continuity");
 
 function request() {
     return { headers: { cookie: "sirk_central_session=test-session" } };

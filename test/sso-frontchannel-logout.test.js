@@ -7,8 +7,8 @@ const path = require("node:path");
 const test = require("node:test");
 const { hashAccessKey, hashSecret } = require("../src/security");
 const { sign, verify } = require("../src/sso-ticket");
-const auth = require("../auth/hardened-server");
-const { createTicketRuntime } = require("../src/server-v15");
+const auth = require("../auth/server");
+const { createCentralRuntime } = require("../src/server");
 
 const SHARED = "S".repeat(64);
 const AUTH_ORIGIN = "https://auth.example.test";
@@ -28,11 +28,16 @@ function config(dataDir) {
         adminUsername: "admin",
         adminPasswordHash: hashSecret("Correct-Horse-Battery-Staple-2026"),
         accessKeyHash: hashAccessKey("A".repeat(43)),
+        env: {
+            NODE_ENV: "test",
+            SIRK_RUNTIME_LOCK_DISABLED: "true",
+            SIRK_AUDIT_INTEGRITY_KEY: "K".repeat(48),
+            SIRK_CENTRAL_INTERNAL_ORIGIN: "http://central:8080"
+        },
         dataDir,
         sessionIdleMinutes: 30,
         sessionAbsoluteHours: 8,
-        trustProxy: false,
-        env: { NODE_ENV: "test", SIRK_CENTRAL_INTERNAL_ORIGIN: "http://central:8080" }
+        trustProxy: false
     };
 }
 
@@ -83,7 +88,7 @@ test("Central revokes every matching Entra session and rejects replay", async t 
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "sirk-frontchannel-"));
     t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
     const cfg = config(dataDir);
-    const app = createTicketRuntime(cfg);
+    const app = createCentralRuntime(cfg);
     await new Promise((resolve, reject) => {
         app.server.once("error", reject);
         app.server.listen(0, "127.0.0.1", resolve);
@@ -135,7 +140,7 @@ test("Central rejects malformed or wrong-type logout tickets as 401", async t =>
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "sirk-frontchannel-invalid-"));
     t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
     const cfg = config(dataDir);
-    const app = createTicketRuntime(cfg);
+    const app = createCentralRuntime(cfg);
     await new Promise((resolve, reject) => {
         app.server.once("error", reject);
         app.server.listen(0, "127.0.0.1", resolve);

@@ -71,10 +71,11 @@ function digest(record, algorithm, key) {
 
 function verifyState(state, key) {
     if (!state || !Array.isArray(state.events)) return { ok: false, index: -1, reason: "invalid-state" };
-    const algorithm = state.version === 1 ? "sha256" : String(state.algorithm || "sha256");
-    if (!new Set(["sha256", "hmac-sha256"]).has(algorithm)) return { ok: false, index: -1, reason: "unsupported-algorithm" };
-    if (algorithm === "hmac-sha256" && !key) return { ok: false, index: -1, reason: "integrity-key-unavailable" };
-    let previousHash = state.version === 1 ? "" : String(state.anchorHash || "");
+    if (state.version !== 2) return { ok: false, index: -1, reason: "unsupported-schema" };
+    const algorithm = String(state.algorithm || "");
+    if (algorithm !== "hmac-sha256") return { ok: false, index: -1, reason: "unsupported-algorithm" };
+    if (!key) return { ok: false, index: -1, reason: "integrity-key-unavailable" };
+    let previousHash = String(state.anchorHash || "");
     for (let index = 0; index < state.events.length; index += 1) {
         const event = state.events[index];
         if (event.previousHash !== previousHash) return { ok: false, index, reason: "previous-hash-mismatch" };
@@ -84,7 +85,7 @@ function verifyState(state, key) {
         if (digest(copy, algorithm, key) !== expected) return { ok: false, index, reason: "event-hash-mismatch" };
         previousHash = expected;
     }
-    return { ok: true, count: state.events.length, lastHash: previousHash, algorithm, anchorHash: state.version === 1 ? "" : String(state.anchorHash || "") };
+    return { ok: true, count: state.events.length, lastHash: previousHash, algorithm, anchorHash: String(state.anchorHash || "") };
 }
 
 function rechain(events, algorithm, key, anchorHash = "") {
@@ -104,12 +105,11 @@ function create(options) {
     const filePath = path.join(dataDir, "audit-events.json");
     const now = typeof options.now === "function" ? options.now : Date.now;
     const maxEvents = Math.max(100, Math.min(100000, Number(options.maxEvents || 10000)));
-    const configuredKey = options.integrityKey !== undefined
-        ? options.integrityKey
-        : process.env.SIRK_AUDIT_INTEGRITY_KEY || process.env.SIRK_UPDATER_TOKEN || "";
+    const configuredKey = options.integrityKey !== undefined ? options.integrityKey : process.env.SIRK_AUDIT_INTEGRITY_KEY || "";
     const integrityKey = deriveIntegrityKey(configuredKey);
-    const desiredAlgorithm = integrityKey ? "hmac-sha256" : "sha256";
-    let state = { version: 2, algorithm: desiredAlgorithm, anchorHash: "", legacyLastHash: "", events: [] };
+    if (!integrityKey) throw new Error("SIRK_AUDIT_INTEGRITY_KEY is required.");
+    const desiredAlgorithm = "hmac-sha256";
+    let state = { version: 2, algorithm: desiredAlgorithm, anchorHash: "", events: [] };
     let integrityFailure = null;
 
     try {
@@ -118,17 +118,6 @@ function create(options) {
         if (!verification.ok) {
             integrityFailure = verification;
             state = parsed;
-        } else if (parsed.version === 1 || parsed.algorithm !== desiredAlgorithm) {
-            const oldLastHash = verification.lastHash || "";
-            state = {
-                version: 2,
-                algorithm: desiredAlgorithm,
-                anchorHash: "",
-                legacyLastHash: oldLastHash,
-                migratedAtUtc: new Date(now()).toISOString(),
-                events: rechain(parsed.events, desiredAlgorithm, integrityKey)
-            };
-            atomicWrite(filePath, state);
         } else {
             state = parsed;
         }

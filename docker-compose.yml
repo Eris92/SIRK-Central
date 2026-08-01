@@ -10,6 +10,10 @@ services:
       SIRK_SSO_SHARED_SECRET: ${SIRK_SSO_SHARED_SECRET:-}
       SIRK_UPDATER_ORIGIN: http://updater-gateway:8092
       SIRK_UPDATER_ALLOWED_HOSTS: updater-gateway
+      SIRK_BACKUP_MANAGER_ORIGIN: http://backup-manager:8091
+    depends_on:
+      backup-manager:
+        condition: service_healthy
     volumes:
       - central-data:/var/lib/sirk-central
     networks:
@@ -29,7 +33,7 @@ services:
     profiles: ["auth"]
     build: .
     restart: unless-stopped
-    command: ["node", "auth/hardened-server.js"]
+    command: ["node", "auth/server.js"]
     env_file: .env
     environment:
       SIRK_AUTH_BIND_HOST: 0.0.0.0
@@ -96,7 +100,7 @@ services:
       SIRK_BACKUP_DIR: /var/lib/sirk-updater/backups
       SIRK_BACKUP_TIME_ZONE: ${SIRK_BACKUP_TIME_ZONE:-Europe/Warsaw}
       SIRK_BACKUP_ALLOW_LEGACY_WITHOUT_CHECKSUM: ${SIRK_BACKUP_ALLOW_LEGACY_WITHOUT_CHECKSUM:-false}
-      SIRK_COMPOSE_FILES: /opt/sirk-central/docker-compose.yml:/opt/sirk-central/docker-compose.portal-runtime.yml
+      SIRK_COMPOSE_FILE: /opt/sirk-central/docker-compose.yml
       SIRK_COMPOSE_PROFILES: auth,maintenance
       SIRK_INSTALL_DIR: /opt/sirk-central
       SIRK_REPO_REF: ${SIRK_REPO_REF:-}
@@ -118,6 +122,44 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+
+  backup-manager:
+    build:
+      context: .
+      dockerfile: updater/Dockerfile.manager
+    restart: unless-stopped
+    user: "0:0"
+    command: ["node", "/app/management-server.js"]
+    read_only: true
+    environment:
+      SIRK_UPDATER_TOKEN: ${SIRK_UPDATER_TOKEN}
+      SIRK_BACKUP_MANAGER_BIND_HOST: 0.0.0.0
+      SIRK_BACKUP_MANAGER_PORT: 8091
+      SIRK_UPDATER_STATE_DIR: /var/lib/sirk-updater
+      SIRK_BACKUP_SOURCE_DIR: /var/lib/sirk-central
+      SIRK_BACKUP_DIR: /var/lib/sirk-updater/backups
+      SIRK_BACKUP_TIME_ZONE: ${SIRK_BACKUP_TIME_ZONE:-Europe/Warsaw}
+      SIRK_BACKUP_MAX_ARCHIVE_BYTES: ${SIRK_BACKUP_MAX_ARCHIVE_BYTES:-53687091200}
+      SIRK_BACKUP_MAX_ENTRIES: ${SIRK_BACKUP_MAX_ENTRIES:-100000}
+    volumes:
+      - central-data:/var/lib/sirk-central:ro
+      - updater-state:/var/lib/sirk-updater
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8091/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 20s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - DAC_READ_SEARCH
 
   caddy:
     image: caddy:2.10.0-alpine

@@ -8,7 +8,7 @@ const path = require("node:path");
 const test = require("node:test");
 const { hashAccessKey, hashSecret } = require("../src/security");
 const telemetry = require("../src/portal-telemetry-store");
-const { createTicketRuntime } = require("../src/server-v15");
+const { createCentralRuntime } = require("../src/server");
 
 const CSRF = "C".repeat(43);
 const TENANT_ID = "00000000-0000-0000-0000-000000000001";
@@ -71,6 +71,7 @@ async function fixture(t) {
         sessionAbsoluteHours: 8,
         trustProxy: false,
         env: {
+            SIRK_AUDIT_INTEGRITY_KEY: "K".repeat(48),
             NODE_ENV: "test",
             SIRK_PORTAL_AUTH_RATE_LIMIT: "10000",
             SIRK_TICKET_INGEST_RATE_LIMIT: "10000",
@@ -78,7 +79,7 @@ async function fixture(t) {
             SIRK_PORTAL_HEARTBEAT_RATE_LIMIT: "10000"
         }
     };
-    const app = createTicketRuntime(config);
+    const app = createCentralRuntime(config);
     await new Promise((resolve, reject) => {
         app.server.once("error", reject);
         app.server.listen(0, "127.0.0.1", resolve);

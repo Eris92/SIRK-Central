@@ -2,7 +2,7 @@
 
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const flow = require("../auth/hardened-server");
+const flow = require("../auth/server");
 
 function request(cookie) {
     return { headers: { cookie: cookie || "" } };

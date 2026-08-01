@@ -5,11 +5,11 @@ const assert = require("node:assert/strict");
 const { canRead, canManage } = require("../src/organization-api");
 
 test("organization API separates read and management roles", () => {
-    const admin = { ok: true, role: "Admin", builtIn: false };
-    const secAdmin = { ok: true, role: "SecAdmin", builtIn: false };
-    const auditor = { ok: true, role: "Auditor", builtIn: false };
-    const operator = { ok: true, role: "OperatorL1", builtIn: false };
-    const breakGlass = { ok: true, role: "BreakGlass", builtIn: true };
+    const admin = { ok: true, role: "Admin", builtIn: false, status: "active", source: "entra" };
+    const secAdmin = { ok: true, role: "SecAdmin", builtIn: false, status: "active", source: "entra" };
+    const auditor = { ok: true, role: "Auditor", builtIn: false, status: "active", source: "entra" };
+    const operator = { ok: true, role: "OperatorL1", builtIn: false, status: "active", source: "entra" };
+    const breakGlass = { ok: true, role: "BreakGlass", builtIn: true, status: "active", source: "local" };
 
     assert.equal(canRead(admin), true);
     assert.equal(canRead(secAdmin), true);

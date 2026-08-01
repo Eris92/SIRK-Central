@@ -7,9 +7,11 @@ const os = require("node:os");
 const path = require("node:path");
 const WebSocket = require("ws");
 const { hashSecret, hashAccessKey } = require("../src/security");
-const { createApp } = require("../src/server");
+const { createCentralRuntime } = require("../src/server");
 
-function request(port, method, route, body, cookie, accessKey) {
+const TEST_ORIGIN = "https://central.example.test";
+
+function request(port, method, route, body, cookie, accessKey, csrfToken) {
     return new Promise((resolve, reject) => {
         const payload = body == null ? null : Buffer.from(JSON.stringify(body));
         const req = require("node:http").request({
@@ -18,12 +20,14 @@ function request(port, method, route, body, cookie, accessKey) {
             method,
             path: route,
             headers: Object.assign({
-                Origin: "http://127.0.0.1:" + port
+                Origin: TEST_ORIGIN
             }, payload ? {
                 "Content-Type": "application/json",
                 "Content-Length": payload.length
             } : {}, cookie ? { Cookie: cookie } : {}, accessKey ? {
                 "Authorization": "Bearer " + accessKey
+            } : {}, csrfToken ? {
+                "X-SIRK-CSRF": csrfToken
             } : {})
         }, (res) => {
             const chunks = [];
@@ -45,21 +49,37 @@ function request(port, method, route, body, cookie, accessKey) {
     });
 }
 
+function responseCookies(response) {
+    const values = response.headers["set-cookie"] || [];
+    return (Array.isArray(values) ? values : [values])
+        .map(value => String(value).split(";", 1)[0])
+        .filter(Boolean)
+        .join("; ");
+}
+
+function cookieValue(cookieHeader, name) {
+    const match = String(cookieHeader || "").match(new RegExp("(?:^|;\\s*)" + name + "=([^;]+)"));
+    return match ? match[1] : "";
+}
+
 test("admin login lists an authenticated outbound Portal and connects to it", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "sirk-central-http-"));
     const accessKey = "central-test-access-key-0123456789abcdef";
     const config = {
         dataDir: root,
-        publicOrigin: "",
+        publicOrigin: TEST_ORIGIN,
         adminUsername: "admin",
         adminPasswordHash: hashSecret("central-test-password"),
         accessKeyHash: hashAccessKey(accessKey),
+        sessionIdleMinutes: 30,
+        sessionAbsoluteHours: 8,
+        trustProxy: false,
+        env: { NODE_ENV: "test", SIRK_RUNTIME_LOCK_DISABLED: "true", SIRK_AUDIT_INTEGRITY_KEY: "K".repeat(48) },
         sessionHours: 1
     };
-    const app = createApp(config);
+    const app = createCentralRuntime(config);
     await new Promise((resolve) => app.server.listen(0, "127.0.0.1", resolve));
     const port = app.server.address().port;
-    config.publicOrigin = "http://127.0.0.1:" + port;
     const created = app.store.createPortal({ id: "portal-one", name: "Portal One" });
     let socket;
     try {
@@ -125,10 +145,14 @@ test("admin login lists an authenticated outbound Portal and connects to it", as
             password: "central-test-password"
         }, null, accessKey);
         assert.equal(login.statusCode, 200);
-        const cookie = login.headers["set-cookie"][0].split(";")[0];
+        const cookie = responseCookies(login);
+        const csrfToken = cookieValue(cookie, "sirk_central_csrf");
+        assert.match(cookie, /(?:^|;\s*)sirk_central_session=/);
+        assert.match(csrfToken, /^[A-Za-z0-9_-]{32,128}$/);
+
         const portals = await request(port, "GET", "/api/portals", null, cookie, accessKey);
         assert.equal(portals.body.portals[0].status, "online");
-        const connected = await request(port, "POST", "/api/portals/portal-one/connect", {}, cookie, accessKey);
+        const connected = await request(port, "POST", "/api/portals/portal-one/connect", {}, cookie, accessKey, csrfToken);
         assert.equal(connected.statusCode, 200);
         assert.equal(connected.body.portal.hostname, "local-test");
         assert.equal(connected.body.url, "/connect/portal-one/");
@@ -154,7 +178,7 @@ test("admin login lists an authenticated outbound Portal and connects to it", as
         assert.match(localLogin.headers["set-cookie"][0], /Path=\/connect\/portal-one\//);
     } finally {
         if (socket) socket.close();
-        await new Promise((resolve) => app.server.close(resolve));
+        await app.close();
         fs.rmSync(root, { recursive: true, force: true });
     }
 });

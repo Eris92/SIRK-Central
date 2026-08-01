@@ -6,7 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 const { hashSecret, hashAccessKey } = require("../src/security");
-const { createProductionApp } = require("../src/server-v3");
+const { createCentralRuntime } = require("../src/server");
 
 function cookieValue(headers, name) {
   const values = typeof headers.getSetCookie === "function"
@@ -49,15 +49,15 @@ test("BreakGlass recovery code is required before a full session is issued", asy
     sessionIdleMinutes: 30,
     sessionAbsoluteHours: 8,
     trustProxy: false,
-    env: { NODE_ENV: "test" }
+    env: { NODE_ENV: "test", SIRK_AUDIT_INTEGRITY_KEY: "K".repeat(48) }
   };
 
-  const app = createProductionApp(config);
+  const app = createCentralRuntime(config);
   await new Promise((resolve, reject) => {
     app.server.once("error", reject);
     app.server.listen(0, "127.0.0.1", resolve);
   });
-  t.after(() => new Promise(resolve => app.server.close(resolve)));
+  t.after(() => app.close());
   const origin = "http://127.0.0.1:" + app.server.address().port;
   const baseHeaders = {
     authorization: "Bearer " + accessKey,

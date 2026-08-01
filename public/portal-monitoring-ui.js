@@ -54,6 +54,28 @@
         row.append(key, data);
         return row;
     }
+    function renderValues(item) {
+        if (!item) {
+            return [{ label: text("Monitoring", "Monitoring"), value: text("oczekuje na pierwszy heartbeat", "waiting for first heartbeat"), className: "overview-warn" }];
+        }
+        const stateClass = item.status === "online" ? "overview-ok" : item.status === "never" ? "overview-warn" : "overview-error";
+        const metrics = item.metrics && typeof item.metrics === "object" ? item.metrics : {};
+        const healthClass = metrics.health === "critical" ? "overview-error" : metrics.health === "warning" ? "overview-warn" : "overview-ok";
+        const backupClass = metrics.lastBackupStatus === "failed" ? "overview-error" : metrics.lastBackupStatus === "ok" ? "overview-ok" : "";
+        const memory = bytes(metrics.memoryUsedBytes) + " / " + bytes(metrics.memoryTotalBytes);
+        return [
+            { label: text("Stan", "Status"), value: item.status || "unknown", className: stateClass },
+            { label: text("Wersja", "Version"), value: metrics.portalVersion || "—" },
+            { label: text("Commit", "Commit"), value: metrics.buildCommit || "—" },
+            { label: text("Ostatni kontakt", "Last contact"), value: age(item.lastSeenAtUtc) },
+            { label: text("Agenci", "Agents"), value: String(metrics.onlineAgents ?? 0) + "/" + String(metrics.agentCount ?? 0) },
+            { label: "CPU", value: Number.isFinite(Number(metrics.cpuPercent)) ? Number(metrics.cpuPercent).toFixed(1) + "%" : "—" },
+            { label: "RAM", value: memory },
+            { label: "Health", value: metrics.health || "unknown", className: healthClass },
+            { label: "Backup", value: metrics.lastBackupStatus === "ok" && metrics.lastBackupAtUtc ? date(metrics.lastBackupAtUtc) : metrics.lastBackupStatus || "unknown", className: backupClass },
+            { label: text("Aktualizacja", "Update"), value: metrics.availableVersion ? text("dostępna: ", "available: ") + metrics.availableVersion : text("brak oczekującej", "none pending"), className: metrics.availableVersion ? "overview-warn" : "" }
+        ];
+    }
     function enhance() {
         for (const card of document.querySelectorAll("#portalList .portal-card")) {
             const id = portalId(card);
@@ -65,28 +87,11 @@
                 const button = card.querySelector("button,a.button");
                 card.insertBefore(panel, button || null);
             }
-            const item = telemetry.get(id);
-            if (!item) {
-                panel.replaceChildren(metric(text("Monitoring", "Monitoring"), text("oczekuje na pierwszy heartbeat", "waiting for first heartbeat"), "overview-warn"));
-                continue;
-            }
-            const stateClass = item.status === "online" ? "overview-ok" : item.status === "never" ? "overview-warn" : "overview-error";
-            const metrics = item.metrics && typeof item.metrics === "object" ? item.metrics : {};
-            const healthClass = metrics.health === "critical" ? "overview-error" : metrics.health === "warning" ? "overview-warn" : "overview-ok";
-            const backupClass = metrics.lastBackupStatus === "failed" ? "overview-error" : metrics.lastBackupStatus === "ok" ? "overview-ok" : "";
-            const memory = bytes(metrics.memoryUsedBytes) + " / " + bytes(metrics.memoryTotalBytes);
-            panel.replaceChildren(
-                metric(text("Stan", "Status"), item.status || "unknown", stateClass),
-                metric(text("Wersja", "Version"), metrics.portalVersion || "—"),
-                metric(text("Commit", "Commit"), metrics.buildCommit || "—"),
-                metric(text("Ostatni kontakt", "Last contact"), age(item.lastSeenAtUtc)),
-                metric(text("Agenci", "Agents"), String(metrics.onlineAgents ?? 0) + "/" + String(metrics.agentCount ?? 0)),
-                metric("CPU", Number.isFinite(Number(metrics.cpuPercent)) ? Number(metrics.cpuPercent).toFixed(1) + "%" : "—"),
-                metric("RAM", memory),
-                metric("Health", metrics.health || "unknown", healthClass),
-                metric("Backup", metrics.lastBackupStatus === "ok" && metrics.lastBackupAtUtc ? date(metrics.lastBackupAtUtc) : metrics.lastBackupStatus || "unknown", backupClass),
-                metric(text("Aktualizacja", "Update"), metrics.availableVersion ? text("dostępna: ", "available: ") + metrics.availableVersion : text("brak oczekującej", "none pending"), metrics.availableVersion ? "overview-warn" : "")
-            );
+            const values = renderValues(telemetry.get(id));
+            const signature = JSON.stringify(values);
+            if (panel.dataset.renderSignature === signature) continue;
+            panel.dataset.renderSignature = signature;
+            panel.replaceChildren(...values.map(item => metric(item.label, item.value, item.className)));
         }
     }
     function ensureStyle() {

@@ -6,8 +6,8 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 const approvalStore = require("../src/approval-store");
-const { canDecide, executeApproved } = require("../src/server-v13");
-const { approvedOperation } = require("../src/server-v14");
+const { canDecide, executeApproved } = require("../src/modules/approvals");
+const { approvedOperation } = require("../src/modules/portal-commands");
 
 function temporaryDirectory() { return fs.mkdtempSync(path.join(os.tmpdir(), "sirk-approval-")); }
 

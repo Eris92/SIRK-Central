@@ -6,46 +6,58 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const root = path.join(__dirname, "..");
-const installer = fs.readFileSync(path.join(root, "deploy", "install.sh"), "utf8");
-const dockerfile = fs.readFileSync(path.join(root, "Dockerfile"), "utf8");
-const helpers = [
-    "configure-and-start.sh",
-    "reset-admin-password.sh",
-    "rotate-access-key.sh"
-].map((name) => ({
-    name,
-    content: fs.readFileSync(path.join(root, "deploy", name), "utf8")
-}));
+const read = relative => fs.readFileSync(path.join(root, relative), "utf8");
+const installer = read("deploy/install.sh");
+const dockerfile = read("Dockerfile");
+const resetBreakGlass = read("deploy/reset-breakglass-password.sh");
+const rotateAccessKey = read("deploy/rotate-access-key.sh");
 
-test("clean installer delegates secret generation to the interactive configurator", () => {
+test("clean installer uses only the canonical flat stack", () => {
+    assert.match(installer, /docker-compose\.yml/);
+    assert.doesNotMatch(installer, /docker-compose\.portal-runtime\.yml/);
+    assert.match(installer, /SERVICES=\(central auth updater-gateway backup-manager caddy\)/);
+    assert.match(installer, /ps -q updater/);
     assert.match(installer, /node scripts\/configure-production\.js/);
     assert.match(installer, /--user 0:0/);
     assert.match(installer, /--volume "\$\{INSTALL_DIR\}:\/config"/);
     assert.doesNotMatch(installer, /ADMIN_PASSWORD_HASH=/);
-    assert.doesNotMatch(installer, /printf '%s' "\$ADMIN_PASSWORD" \| docker run/);
 });
 
-test("clean installer verifies that .env was created before starting Compose", () => {
-    assert.match(installer, /test -s \.env \|\| die "configuration file was not created"/);
-    assert.match(installer, /docker compose config >\/dev\/null/);
-});
-
-test("source checkout uses normal permissions while .env is explicitly protected", () => {
-    assert.match(installer, /^umask 022$/m);
+test("clean installer validates and protects generated configuration", () => {
+    assert.match(installer, /\[\[ -s \.env \]\] \|\| die "configuration file was not created"/);
     assert.match(installer, /chmod 0600 \.env/);
+    assert.match(installer, /"\$\{COMPOSE\[@\]\}" config >\/dev\/null/);
+    assert.match(installer, /^umask 022$/m);
 });
 
-test("container image normalizes ownership and read permissions before USER node", () => {
+test("container image exposes only the canonical runtime", () => {
+    assert.match(dockerfile, /CMD \["node", "src\/server\.js"\]/);
     assert.match(dockerfile, /chown -R node:node \/app \/var\/lib\/sirk-central/);
     assert.match(dockerfile, /chmod -R u=rwX,g=rX,o=rX \/app/);
     assert.match(dockerfile, /USER node/);
+    assert.doesNotMatch(dockerfile, /src\/entry\.js|server-v\d+/);
 });
 
-test("all credential helpers use root only in the one-shot setup container", () => {
-    for (const helper of helpers) {
-        assert.match(helper.content, /--user 0:0/, helper.name);
-        assert.match(helper.content, /--volume (?:"\$\{INSTALL_DIR\}:\/config"|\/opt\/sirk-central:\/config)/, helper.name);
-        assert.match(helper.content, /node scripts\/configure-production\.js/, helper.name);
-        assert.match(helper.content, /chmod 0600 \.env/, helper.name);
-    }
+test("BreakGlass password reset is offline transactional and revokes sessions", () => {
+    assert.match(resetBreakGlass, /set -Eeuo pipefail/);
+    assert.doesNotMatch(resetBreakGlass, /docker-compose\.portal-runtime\.yml/);
+    assert.match(resetBreakGlass, /apply-emergency-security-reset\.js/);
+    assert.match(resetBreakGlass, /SIRK_EMERGENCY_PASSWORD_HASH/);
+    assert.match(resetBreakGlass, /stop -t 30 central/);
+    assert.match(resetBreakGlass, /State\.Health/);
+    assert.match(resetBreakGlass, /ps -q updater/);
+    assert.doesNotMatch(resetBreakGlass, /configure-production\.js/);
+});
+
+test("access key rotation is offline transactional and shows the key once", () => {
+    assert.match(rotateAccessKey, /set -Eeuo pipefail/);
+    assert.doesNotMatch(rotateAccessKey, /docker-compose\.portal-runtime\.yml/);
+    assert.match(rotateAccessKey, /randomToken, hashAccessKey/);
+    assert.match(rotateAccessKey, /apply-emergency-security-reset\.js/);
+    assert.match(rotateAccessKey, /SIRK_EMERGENCY_ACCESS_KEY_HASH/);
+    assert.match(rotateAccessKey, /stop -t 30 central/);
+    assert.match(rotateAccessKey, /State\.Health/);
+    assert.match(rotateAccessKey, /ps -q updater/);
+    assert.match(rotateAccessKey, /shown once/);
+    assert.doesNotMatch(rotateAccessKey, /configure-production\.js/);
 });

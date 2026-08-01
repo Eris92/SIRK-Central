@@ -13,9 +13,9 @@ function temporaryStore() {
     return { dataDir, store: userStore.create({ dataDir }) };
 }
 
-const breakGlass = { builtIn: true, role: "BreakGlass" };
-const secAdmin = { builtIn: false, role: "SecAdmin" };
-const admin = { builtIn: false, role: "Admin" };
+const breakGlass = { builtIn: true, role: "BreakGlass", status: "active", source: "local", username: "admin" };
+const secAdmin = { builtIn: false, role: "SecAdmin", status: "active", source: "entra", identityKey: "tenant:secadmin" };
+const admin = { builtIn: false, role: "Admin", status: "active", source: "entra", identityKey: "tenant:admin" };
 
 test("account accepts exactly one supported role", () => {
     for (const role of rbac.ASSIGNABLE_ROLES) assert.equal(rbac.normalizeRole(role), role);
@@ -45,15 +45,16 @@ test("SecAdmin and Break-Glass can create SecAdmin accounts", () => {
     }
 });
 
-test("new Entra identities are pending until an explicit role assignment", () => {
+test("new privileged Entra identities require an App Role claim and approval", () => {
     const { store } = temporaryStore();
     const identityKey = "11111111-1111-1111-1111-111111111111:22222222-2222-2222-2222-222222222222";
-    assert.equal(store.roleForEntra(identityKey, { username: "admin@example.test", displayName: "Test Admin" }), null);
-    const pending = store.listUsers()[0];
+    const pending = store.resolveEntra(identityKey, { username: "admin@example.test", displayName: "Test Admin" }, ["SecAdmin"]);
     assert.equal(pending.status, "pending");
     assert.equal(pending.role, null);
-    store.updateRole({ source: "entra", key: identityKey }, "SecAdmin", breakGlass);
-    assert.equal(store.roleForEntra(identityKey, {}), "SecAdmin");
+    assert.equal(pending.requestedRole, "SecAdmin");
+    assert.equal(store.approveEntraRole(identityKey, breakGlass).role, "SecAdmin");
+    assert.equal(store.resolveEntra(identityKey, {}, ["SecAdmin"]).role, "SecAdmin");
+    assert.throws(() => store.updateRole({ source: "entra", key: identityKey }, "Auditor", breakGlass), /managed by application role claims/i);
 });
 
 test("support-line permissions are cumulative by operational level", () => {

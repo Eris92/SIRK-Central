@@ -2,19 +2,16 @@
 
 ## Zasada
 
-Istnienie testu w repo nie oznacza zaliczenia. PR #45 pozostaje draftem, dopóki rzeczywiste workflow i testy środowiskowe nie są zielone dla tego samego HEAD.
+Istnienie testu w repo nie oznacza zaliczenia. `main` jest kodem głównym, ale wersja `1.0.0-rc.25` pozostaje RC do czasu zielonego CI i testów środowiskowych dla tego samego HEAD.
 
-## 1. Synchronizacja z `main`
+## 1. Pobranie kodu
 
 ```bash
 cd /opt/sirk-central
 git fetch origin
-git checkout feat/central-production-hardening
-git reset --hard origin/feat/central-production-hardening
-bash scripts/sync-main.sh
+git checkout main
+git reset --hard origin/main
 ```
-
-Skrypt wymaga czystego working tree, tworzy safety branch, wykonuje merge `origin/main`, automatycznie rozwiązuje wyłącznie oczekiwany konflikt `package.json`/`package-lock.json` wersją brancha i przerywa przy każdym innym konflikcie.
 
 ## 2. Testy lokalne
 
@@ -25,9 +22,24 @@ SIRK_CONCURRENCY_TEST_REQUESTS=24 npm test
 npm audit --omit=dev --audit-level=high
 ```
 
-`check:syntax` obejmuje shell w `deploy/` i `scripts/`, JavaScript oraz Python backup validator.
+`check:syntax` obejmuje shell, JavaScript, Python backup validator oraz audyt braku legacy runtime. `npm test` uruchamia ten sam audyt jako `pretest`.
 
-## 3. Security regression suite
+## 3. Audyt legacy runtime
+
+```bash
+npm run check:legacy
+```
+
+Walidator sprawdza:
+
+- brak alternatywnych entrypointów i preloadów;
+- brak starego `start:legacy`;
+- brak duplikatu persistent session map;
+- brak starych helperów sekretów;
+- płaski graf zależności od `src/server.js` i dokładnie jeden serwer HTTP;
+- brak dodatkowego nieosiągalnego pliku `server*.js`.
+
+## 4. Security regression suite
 
 ```bash
 node --test \
@@ -38,36 +50,57 @@ node --test \
   test/updater-gateway.test.js
 ```
 
-Sprawdza single-writer lease, stale/malformed lock recovery, cooperative cancellation, single-event `400/409` vs batch `207`, równoległy protokół oraz izolację gateway/worker.
-
-## 4. Pełny acceptance test VPS
+## 5. Pełny acceptance test VPS
 
 ```bash
 cd /opt/sirk-central
 export SIRK_ACCEPTANCE_PUBLIC_URL='https://central.sirkportal.com'
-bash deploy/acceptance-test.sh
+sudo bash deploy/acceptance-test.sh
 ```
 
-Acceptance wykonuje:
+Acceptance sprawdza między innymi:
 
-- syntax, unit, HTTP, security, concurrency i npm audit;
-- base Compose z `central/auth/updater-gateway/backup-manager/caddy`;
-- potwierdzenie braku rootowego `updater` w base profile;
-- maintenance Compose z workerem;
-- build i user/image checks;
-- readiness i runtime single-writer owner;
-- gateway `409 UPDATER_MAINTENANCE_REQUIRED` przy zamkniętym workerze;
-- otwarcie maintenance, Docker socket check i gateway proxy `200`;
-- usunięcie workera i ponowne gateway `409`;
-- external TLS/CSP/security headers, jeśli podano URL.
+- syntax, unit, HTTP, security i concurrency;
+- canonical Compose;
+- brak rootowego `updater` w base profile;
+- gateway `409` przy zamkniętym maintenance;
+- start workera i gateway proxy `200`;
+- usunięcie workera po zamknięciu maintenance;
+- readiness i runtime single-writer lock;
+- TLS/CSP/security headers, jeżeli podano publiczny URL.
 
 Finalna akceptacja nie może używać `SIRK_ACCEPTANCE_SKIP_BUILD=true` ani `SIRK_ACCEPTANCE_SKIP_LIVE=true`.
 
-## 5. Maintenance window
+## 6. Emergency recovery
+
+Reset BreakGlass:
+
+```bash
+sudo bash deploy/reset-breakglass-password.sh
+```
+
+Rotacja Access Key:
+
+```bash
+sudo bash deploy/rotate-access-key.sh
+```
+
+Dla obu operacji sprawdź:
+
+1. backup `.env`;
+2. zatrzymanie Central;
+3. offline update security override;
+4. unieważnienie lokalnych i BreakGlass sessions;
+5. health po restarcie;
+6. brak kontenera `updater`;
+7. poprawne logowanie nowymi danymi;
+8. brak działania starych danych i sesji.
+
+## 7. Maintenance window
 
 ```bash
 sudo bash deploy/maintenance-up.sh
-# wykonaj dokładnie zaplanowaną operację
+# wykonaj zaplanowaną operację
 sudo bash deploy/maintenance-down.sh
 ```
 
@@ -76,15 +109,15 @@ Po zamknięciu:
 ```bash
 docker compose \
   -f docker-compose.yml \
-  -f docker-compose.portal-runtime.yml \
+  -f docker-compose.yml \
   --profile auth \
   --profile maintenance \
   ps -q updater
 ```
 
-Wynik ma być pusty. `updater-gateway` pozostaje healthy i dla chronionych tras zwraca `409 UPDATER_MAINTENANCE_REQUIRED`.
+Wynik ma być pusty.
 
-## 6. Portal simulator
+## 8. Portal simulator
 
 ```bash
 export SIRK_SIMULATOR_ORIGIN='https://central.sirkportal.com'
@@ -93,38 +126,29 @@ export SIRK_SIMULATOR_PORTAL_TOKEN='<PORTAL_TOKEN>'
 node scripts/portal-simulator.js
 ```
 
-Portal musi mieć active Tenant/Customer/Site assignment i ticket policy inną niż `none`.
+Portal musi mieć active Tenant/Customer/Site assignment oraz odpowiednią ticket policy.
 
-## 7. Cooperative cancellation
+## 9. Commands i cancellation
 
-1. Utwórz command i pobierz go przez Portal.
-2. Wyślij ACK `running`.
-3. W Central wybierz cancel.
-4. Potwierdź `cancel_requested`.
-5. Poll Portalu ma zwrócić `control: "cancel"`.
-6. Portal zatrzymuje operację i wysyła `cancelled`.
-7. Powtórzony identyczny terminal ACK jest idempotentny.
-8. `cancelled` bez requestu zwraca `409 COMMAND_CANCEL_NOT_REQUESTED`.
-9. Sprawdź race `completed/failed` podczas anulowania.
+Sprawdź kolejno:
 
-## 8. Ticket event semantics
+1. enqueue;
+2. delivery;
+3. ACK `running`;
+4. cancel w Central;
+5. `cancel_requested`;
+6. poll z `control: "cancel"`;
+7. terminal ACK `cancelled`;
+8. idempotentny powtórzony ACK;
+9. race `completed/failed` podczas anulowania.
 
-Pojedynczy event:
+## 10. Tickets
 
-- invalid schema/type → 400;
-- replay z innym payloadem → 409;
-- rate limit → 429;
-- transient error → 5xx;
-- nigdy 207.
+Pojedynczy event musi zachować właściwe `400/409/429/5xx` i nigdy nie zwracać `207`.
 
-Jawny batch:
+Jawny batch może zwrócić `207`, ale każdy element musi zawierać `index`, `status`, `code` i `retryable`.
 
-- `events` musi być tablicą;
-- partial failure → 207;
-- każdy wynik ma `index`, `status`, `code`, `retryable`;
-- ponawiaj wyłącznie `retryable: true`.
-
-## 9. Approval Center i RBAC
+## 11. RBAC i approvals
 
 Przejdź role:
 
@@ -140,54 +164,24 @@ SecAdmin
 BreakGlass
 ```
 
-Sprawdź read/write endpointy, CSRF, obcy Origin, self-approval, duplicate vote, exact-scope, single-use i retry wymagający nowej high-risk approval.
+Sprawdź read/write, CSRF, obcy Origin, self-approval, duplicate vote, exact-scope, single-use oraz retry wymagający nowej approval.
 
-## 10. Backup/restore drill
+## 12. Backup/restore i update/rollback
 
-Na środowisku testowym:
+Wykonaj destructive backup/restore drill oraz update/rollback failure drill. Wymuś awarię checkout, build, start i restore. Po każdej ścieżce potwierdź prawidłowy base stack, komplet danych i brak workera maintenance.
 
-1. utwórz znany dataset;
-2. backup + checksum + archive validation;
-3. zmień dane;
-4. otwórz maintenance i wykonaj restore;
-5. sprawdź `/readyz`, dane i permissions;
-6. wymuś błąd restore i potwierdź safety rollback;
-7. potwierdź, że base stack zawiera gateway, a worker jest usunięty;
-8. sprawdź audit.
+## 13. YubiKey i Entra
 
-## 11. Update/rollback drill
+YubiKey: Edge i Chrome, rejestracja, logowanie, recovery codes, challenge replay/expiry, wrong origin/RP ID i last-method protection.
 
-1. zapisz HEAD i wersję;
-2. otwórz maintenance;
-3. update do kontrolowanego commita;
-4. sprawdź build, health, UI, dane i audit;
-5. wykonaj rollback;
-6. zasymuluj awarię checkout/build/start;
-7. potwierdź data rollback i prawidłowy base stack z gatewayem;
-8. wykonaj `maintenance-down.sh` i potwierdź brak workera.
-
-## 12. YubiKey/BreakGlass
-
-Edge i Chrome: rejestracja passkey/YubiKey, login, recovery code, jednorazowość, rotacja, last-method protection, signature counter, wrong origin/RP ID i challenge replay/expiry.
-
-## 13. Entra
-
-Sprawdź właściwy/inny dozwolony tenant, konto bez roli, standard role, Admin/SecAdmin pending, approve/reject, conflict, disabled, logout/front-channel logout i session revocation.
+Entra: pending, approved, rejected, conflict, disabled, zmiana roli, front-channel logout i unieważnienie sesji.
 
 ## 14. UI i TLS
 
-Rozdzielczości: 1920x1080, 1366x768, tablet, telefon. Sprawdź PL/EN, keyboard/focus, contrast, loading/error, długie/puste/duże listy, wszystkie buttons oraz maintenance-required state bez retry storm.
+Sprawdź PL/EN, dark/light, keyboard/focus, mobile/tablet, błędy API, długie i puste listy oraz wszystkie akcje.
 
-Z zewnętrznej sieci sprawdź valid chain, HTTP→HTTPS, HSTS, CSP, X-Content-Type-Options, X-Frame-Options, Referrer-Policy, brak portu 8080 i WebSocket upgrade.
+Z zewnętrznej sieci sprawdź valid chain, HTTP→HTTPS, HSTS, CSP, X-Content-Type-Options, X-Frame-Options, Referrer-Policy, brak publicznego 8080 i WebSocket upgrade.
 
-## 15. GitHub Actions
+## 15. Raport końcowy
 
-Wymagane zielone: CI, UI E2E, Security Audit, CodeQL i branch protection checks dla aktualnego HEAD.
-
-```bash
-git push origin feat/central-production-hardening
-```
-
-## 16. Raport końcowy
-
-Zapisz HEAD, środowisko, wersje Node/Docker/browser, wyniki, workflow/artifacts, błędy, poprawki, residual risks i decyzję: `BLOCK`, `READY FOR REVIEW` albo `READY TO DEPLOY`.
+Zapisz HEAD, środowisko, wersje Node/Docker/browser, workflow, wyniki testów, błędy, poprawki, residual risks i decyzję: `BLOCK`, `READY FOR REVIEW` albo `READY TO DEPLOY`.

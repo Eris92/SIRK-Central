@@ -6,6 +6,7 @@ on:
       - main
       - feat/**
       - fix/**
+      - refactor/**
   pull_request:
     branches:
       - main
@@ -45,8 +46,8 @@ jobs:
           done
           cat /tmp/sirk-ui-mock.log
           exit 1
-      - name: Click and accessibility audit
-        run: npx playwright test test/e2e/ui-buttons.spec.js --project=chromium --reporter=line
+      - name: Renderer isolation diagnostic
+        run: npx playwright test test/e2e/ui-responsiveness.spec.js --project=chromium --reporter=line
       - name: Upload browser report
         if: always()
         uses: actions/upload-artifact@v4

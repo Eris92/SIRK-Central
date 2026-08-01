@@ -4,11 +4,10 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const rbac = require("../src/rbac");
 const organizationApi = require("../src/organization-api");
-const approvalApi = require("../src/approval-api");
 const portalAssignmentApi = require("../src/portal-assignment-api");
-const approvalCenter = require("../src/server-v13");
-const portalOperations = require("../src/server-v14");
-const ticketApi = require("../src/server-v15");
+const approvalCenter = require("../src/modules/approvals");
+const portalOperations = require("../src/modules/portal-commands");
+const ticketApi = require("../src/modules/tickets");
 
 function identity(role, overrides = {}) {
     return Object.assign({
@@ -54,9 +53,6 @@ test("complete RBAC matrix is consistent across organization approvals operation
         assert.equal(organizationApi.canManage(row.actor), row.organizationManage, row.name + " organization manage");
         assert.equal(portalAssignmentApi.canRead(row.actor), row.organizationRead, row.name + " assignment read");
         assert.equal(portalAssignmentApi.canManage(row.actor), row.organizationManage, row.name + " assignment manage");
-        assert.equal(approvalApi.canRead(row.actor), row.approvalRead, row.name + " legacy approval read");
-        assert.equal(approvalApi.canSubmit(row.actor), row.approvalSubmit, row.name + " legacy approval submit policy");
-        assert.equal(approvalApi.canDecide(row.actor), row.approvalDecide, row.name + " legacy approval decide policy");
         assert.equal(approvalCenter.canRead(row.actor), row.approvalRead, row.name + " approval center read");
         assert.equal(approvalCenter.canSubmit(row.actor), row.approvalSubmit, row.name + " approval center submit");
         assert.equal(approvalCenter.canDecide(row.actor, independentRequest), row.approvalDecide, row.name + " approval center decide");

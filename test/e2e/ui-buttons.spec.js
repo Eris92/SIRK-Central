@@ -2,6 +2,84 @@
 
 const { test, expect } = require("@playwright/test");
 
+const workspaceBootstrap = `"use strict";
+window.__SIRK_WORKSPACE_BOOTSTRAP = Object.freeze({
+  authenticated: true,
+  workspaces: Object.freeze(["portals", "permissions", "security", "settings", "break-glass"])
+});
+`;
+const csrfBootstrap = `"use strict";
+(function(){
+  function cookie(name){
+    for(const part of document.cookie.split(";")){
+      const value=part.trim();
+      if(value.startsWith(name+"=")) return value.slice(name.length+1);
+    }
+    return "";
+  }
+  const original=window.fetch.bind(window);
+  window.fetch=function(input,init){
+    init=Object.assign({},init||{});
+    const method=String(init.method||((input&&input.method)||"GET")).toUpperCase();
+    let sameOrigin=true;
+    try {
+      const url=new URL(typeof input==="string"?input:input.url,location.href);
+      sameOrigin=url.origin===location.origin;
+    } catch (_) {}
+    if(sameOrigin&&!(["GET","HEAD","OPTIONS"].includes(method))){
+      const token=cookie("sirk_central_csrf");
+      const headers=new Headers(init.headers||((input&&input.headers)||undefined));
+      if(token) headers.set("X-SIRK-CSRF",token);
+      init.headers=headers;
+    }
+    init.credentials=init.credentials||"same-origin";
+    return original(input,init);
+  };
+}());
+`;
+
+async function prepareDynamicMockRoutes(page) {
+    await page.route("**/csrf-bootstrap.js", route => route.fulfill({
+        status: 200,
+        contentType: "text/javascript; charset=utf-8",
+        body: csrfBootstrap
+    }));
+    await page.route("**/workspace-bootstrap.js", route => route.fulfill({
+        status: 200,
+        contentType: "text/javascript; charset=utf-8",
+        body: workspaceBootstrap
+    }));
+    await page.route("**/api/break-glass/mfa/status", route => {
+        if (route.request().method() !== "GET") return route.fallback();
+        return route.fulfill({
+            status: 200,
+            contentType: "application/json; charset=utf-8",
+            body: JSON.stringify({
+                ok: true,
+                recoveryCodes: { configured: false, remaining: 0 },
+                passkeys: { configured: false, active: 0, enforcement: "not-enabled" }
+            })
+        });
+    });
+    await page.route("**/api/break-glass/passkeys", route => {
+        if (route.request().method() !== "GET") return route.fallback();
+        return route.fulfill({
+            status: 200,
+            contentType: "application/json; charset=utf-8",
+            body: JSON.stringify({ ok: true, passkeys: [], rpId: "127.0.0.1" })
+        });
+    });
+}
+
+async function openApplication(page) {
+    await page.goto("http://127.0.0.1:4173/", { waitUntil: "domcontentloaded" });
+    await page.waitForFunction(() => {
+        const dashboard = document.getElementById("dashboardView");
+        return Boolean(dashboard && dashboard.hidden === false);
+    }, null, { timeout: 8_000 });
+    await expect(page.locator("#overviewButton")).toBeVisible();
+}
+
 function captureFailures(page) {
     const pageErrors = [];
     const consoleErrors = [];
@@ -65,6 +143,7 @@ async function assertButtonsAccessibleAndSeparated(page, root = "body") {
 }
 
 test.beforeEach(async ({ page }) => {
+    await prepareDynamicMockRoutes(page);
     page.on("dialog", async dialog => {
         if (dialog.type() === "prompt") await dialog.accept("E2E confirmation");
         else await dialog.accept();
@@ -73,8 +152,7 @@ test.beforeEach(async ({ page }) => {
 
 test("administrator can navigate every module and exercise safe controls without errors", async ({ page }) => {
     const failures = captureFailures(page);
-    await page.goto("http://127.0.0.1:4173/", { waitUntil: "networkidle" });
-    await expect(page.locator("#dashboardView")).toBeVisible();
+    await openApplication(page);
 
     await open(page, "#overviewButton", "#overviewView");
     await page.locator("#overviewRefresh").click();
@@ -167,7 +245,7 @@ test("administrator can navigate every module and exercise safe controls without
 
 test("all visible buttons have accessible names usable sizes and no overlap in each view", async ({ page }) => {
     const failures = captureFailures(page);
-    await page.goto("http://127.0.0.1:4173/", { waitUntil: "networkidle" });
+    await openApplication(page);
 
     const views = [
         ["#overviewButton", "#overviewView"],
@@ -194,7 +272,7 @@ test("mutating UI requests carry CSRF and never emit secret values in DOM", asyn
             mutations.push({ url: request.url(), method: request.method(), csrf: request.headers()["x-sirk-csrf"] || "" });
         }
     });
-    await page.goto("http://127.0.0.1:4173/", { waitUntil: "networkidle" });
+    await openApplication(page);
     await open(page, "#portalOperationsButton", "#portalOperationsView");
     await page.locator("#portalCommandPortal").fill("test-portal");
     await page.locator("#portalCommandType").selectOption("backup");

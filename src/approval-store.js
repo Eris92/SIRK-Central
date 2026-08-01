@@ -42,7 +42,8 @@ function create(options) {
 
     try {
         const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
-        if (parsed && parsed.version === 1 && parsed.requests) state = parsed;
+        if (!parsed || parsed.version !== 1 || !parsed.requests || typeof parsed.requests !== "object") throw new Error("Approval store has an unsupported schema.");
+        state = parsed;
     } catch (error) {
         if (error.code !== "ENOENT") throw error;
     }

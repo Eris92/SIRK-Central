@@ -11,25 +11,28 @@ Internet
    |
 Caddy :80/:443
    |
-   +--> Central UI/API (server-v15)
+   +--> Central UI/API (flat runtime)
    +--> Auth broker (profil auth)
 
 Internal network
    +--> backup-manager
-   `--> updater (wyłącznie profil maintenance)
+   +--> updater-gateway (stale, nieuprzywilejowany)
+   `--> updater worker (wyłącznie profil maintenance)
 
 SIRK Portal ---- outbound HTTPS/WSS ----> Central
 ```
 
 ## Runtime
 
-Kanoniczny entry point:
+Kanoniczny entrypoint:
 
 ```text
-src/server-v15.js
+src/server.js
 ```
 
-Łańcuch kompozycji:
+Nie istnieje drugi produkcyjny entrypoint. `package.json`, oba Dockerfile, CI i acceptance wskazują ten sam plik.
+
+Aktywna kompozycja modułów:
 
 ```text
 v15  tickets, SSO callback, runtime storage lease
@@ -40,9 +43,18 @@ v11  admin/backup controls
 v10  heartbeat and telemetry
 v9   restore integration
 v8   identity, MFA, update and backup
+v7   UI/runtime assets and security headers
+v6   WebAuthn attestation
+v5   final UI and workspace routing
+v4   WebAuthn/passkeys
+v3   production UI wrapper
+v2   CSRF, recovery and login transactions
+v1   base stores, API and WebSocket broker
 ```
 
-Pliki legacy z `main` są zachowane dla zgodności merge, ale nie są produkcyjnym runtime.
+Pliki v1-v14 są osiągalnymi zależnościami v15, a nie alternatywnymi wdrożeniami. `scripts/validate-runtime-architecture.js` buduje graf statycznych `require()` i odrzuca nieosiągalne pliki `server*.js`.
+
+Usunięte zostały stare `entry.js`, równoległy `server.js`, preloady, wrappery hardened/production oraz duplikat sesji.
 
 ## Granice odpowiedzialności
 
@@ -96,7 +108,7 @@ Zasady:
 - SIGTERM/SIGINT zamyka HTTP server i zwalnia lease;
 - `SIRK_RUNTIME_LOCK_DISABLED=true` jest zabronione w production.
 
-Skalowanie active-active wymaga PostgreSQL/SQL Server lub innej transakcyjnej bazy, optimistic concurrency i distributed locking. Nie należy montować tego samego volume RW do dwóch replik Central.
+Skalowanie active-active wymaga transakcyjnej bazy, optimistic concurrency i distributed locking. Nie należy montować tego samego volume RW do dwóch replik Central.
 
 ## Identity i RBAC
 
@@ -116,8 +128,6 @@ Role i zakres są rozdzielone:
 
 Kolejka jest trwała i nie wykonuje arbitrary shell/PowerShell. Dozwolone typy są zamkniętą allowlistą.
 
-Lifecycle:
-
 ```text
 queued -> delivered -> running -> completed|failed
    |          |          |
@@ -125,7 +135,7 @@ queued -> delivered -> running -> completed|failed
                           `-> completed|failed (race)
 ```
 
-Dla delivered/running Central wysyła podczas pollingu `control: "cancel"`. Portal musi idempotentnie zatrzymać operację i potwierdzić `cancelled`. Dopóki nie ma ACK, Central nie deklaruje fałszywego zakończenia.
+Dla delivered/running Central wysyła podczas pollingu `control: "cancel"`. Portal musi idempotentnie zatrzymać operację i potwierdzić `cancelled`.
 
 ## Tickets
 
@@ -143,7 +153,7 @@ Ordering/replay:
 - równy timestamp z innym payloadem jest konfliktem;
 - `eventId` i snapshot cursor są wiązane z digestem payloadu;
 - pojedynczy błąd zwraca precyzyjny status HTTP;
-- HTTP 207 jest wyłącznie dla partial batch i zawiera per-item retry guidance.
+- HTTP 207 jest wyłącznie dla partial batch.
 
 ## Kontenery
 
@@ -168,15 +178,21 @@ Ordering/replay:
 - bez Docker socket;
 - brak host port.
 
+### updater-gateway
+
+- stale dostępny, `USER node`;
+- bez Docker CLI, Git i tar;
+- bez wolumenów i host ports;
+- dokładna allowlista tras i hosta workera;
+- przy zamkniętym maintenance zwraca `409 UPDATER_MAINTENANCE_REQUIRED`.
+
 ### updater
 
 - profil `maintenance`;
 - `restart: "no"`;
 - Docker socket i RW repo/data tylko podczas jawnego maintenance window;
 - root-equivalent trust boundary;
-- brak host port, internal network, token i exact allowlists.
-
-Otwarcie/zamknięcie:
+- brak host port.
 
 ```bash
 sudo bash deploy/maintenance-up.sh
@@ -187,6 +203,10 @@ sudo bash deploy/maintenance-down.sh
 
 Jedyny publiczny ingress: porty 80/443, TLS, reverse proxy i security headers.
 
+## Build context
+
+`.dockerignore` wyklucza Git, dokumentację, testy, raporty, lokalne `.env`, dane, logi i archiwa. Zmniejsza to kontekst builda i zapobiega przypadkowemu dołączeniu lokalnych danych do obrazu.
+
 ## Gotowość
 
-Architektura jest zaimplementowana statycznie, ale produkcyjna akceptacja wymaga zielonego CI, merge z aktualnym `main`, VPS acceptance, backup/restore i update/rollback drill, realnego YubiKey, Entra workflow oraz manualnego przeglądu UI/TLS.
+Kod jest na `main`, ale produkcyjna akceptacja wymaga zielonego CI dla finalnego HEAD, VPS acceptance, backup/restore i update/rollback drill, realnego YubiKey, pełnego workflow Entra oraz manualnego przeglądu UI/TLS.

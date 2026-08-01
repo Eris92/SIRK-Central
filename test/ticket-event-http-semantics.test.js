@@ -5,7 +5,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
-const { createTicketRuntime } = require("../src/server-v15");
+const { createCentralRuntime } = require("../src/server");
 
 const PUBLIC_ORIGIN = "https://central.example.test";
 
@@ -13,6 +13,7 @@ function temporaryDirectory() { return fs.mkdtempSync(path.join(os.tmpdir(), "si
 function config(dataDir) {
     const env = {
         NODE_ENV: "test",
+        SIRK_AUDIT_INTEGRITY_KEY: "K".repeat(48),
         SIRK_PUBLIC_ORIGIN: PUBLIC_ORIGIN,
         SIRK_PORTAL_AUTH_RATE_LIMIT: "1000",
         SIRK_TICKET_INGEST_RATE_LIMIT: "1000",
@@ -54,7 +55,7 @@ function ticket(ticketId, updatedAtUtc, overrides = {}) {
 
 async function harness(t) {
     const dataDir = temporaryDirectory();
-    const app = createTicketRuntime(config(dataDir));
+    const app = createCentralRuntime(config(dataDir));
     await new Promise((resolve, reject) => {
         app.server.once("error", reject);
         app.server.listen(0, "127.0.0.1", resolve);

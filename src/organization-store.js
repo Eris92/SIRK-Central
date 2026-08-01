@@ -40,7 +40,8 @@ function create(options) {
     function load() {
         try {
             const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
-            if (parsed && parsed.version === 1) state = Object.assign(state, parsed);
+            if (!parsed || parsed.version !== 1 || typeof parsed.tenants !== "object" || Array.isArray(parsed.tenants) || typeof parsed.customers !== "object" || Array.isArray(parsed.customers) || typeof parsed.sites !== "object" || Array.isArray(parsed.sites)) throw new Error("Organization store has an unsupported schema.");
+            state = parsed;
         } catch (error) {
             if (error.code !== "ENOENT") throw error;
         }

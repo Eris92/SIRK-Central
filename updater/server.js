@@ -17,7 +17,7 @@ const stateDir = path.resolve(process.env.SIRK_UPDATER_STATE_DIR || "/var/lib/si
 const dataDir = path.resolve(process.env.SIRK_BACKUP_SOURCE_DIR || "/var/lib/sirk-central");
 const backupDir = path.resolve(process.env.SIRK_BACKUP_DIR || path.join(stateDir, "backups"));
 const backupTimeZone = process.env.SIRK_BACKUP_TIME_ZONE || "Europe/Warsaw";
-const composeFiles = String(process.env.SIRK_COMPOSE_FILES || process.env.SIRK_COMPOSE_FILE || path.join(installDir, "docker-compose.yml"))
+const composeFiles = String(process.env.SIRK_COMPOSE_FILE || path.join(installDir, "docker-compose.yml"))
     .split(path.delimiter).map(value => value.trim()).filter(Boolean).map(value => path.resolve(value));
 const composeProfiles = String(process.env.SIRK_COMPOSE_PROFILES || "auth").split(",").map(value => value.trim()).filter(Boolean);
 const managedServices = ["central", ...(String(process.env.SIRK_AUTH_ORIGIN || "").trim() ? ["auth"] : [])];

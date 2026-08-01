@@ -35,7 +35,8 @@ function create(options = {}) {
 
     try {
         const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
-        if (parsed && parsed.version === 1 && parsed.tickets && typeof parsed.tickets === "object") state = parsed;
+        if (!parsed || parsed.version !== 1 || !parsed.tickets || typeof parsed.tickets !== "object") throw new Error("SSO replay store has an unsupported schema.");
+        state = parsed;
     } catch (error) {
         if (error.code !== "ENOENT") throw error;
     }

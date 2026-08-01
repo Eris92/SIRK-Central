@@ -5,7 +5,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
-const { createTicketRuntime } = require("../src/server-v15");
+const { createCentralRuntime } = require("../src/server");
 const telemetry = require("../src/portal-telemetry-store");
 
 const PUBLIC_ORIGIN = "https://central.example.test";
@@ -18,6 +18,7 @@ function temporaryDirectory() {
 function config(dataDir) {
     const env = {
         NODE_ENV: "test",
+        SIRK_AUDIT_INTEGRITY_KEY: "K".repeat(48),
         SIRK_PUBLIC_ORIGIN: PUBLIC_ORIGIN,
         SIRK_PORTAL_HEARTBEAT_RATE_LIMIT: "3",
         SIRK_PORTAL_HEARTBEAT_RATE_WINDOW_MS: "60000",
@@ -81,7 +82,7 @@ function heartbeatEnvelope(token, body, nonce, timestamp = Date.now()) {
 
 async function startHarness(t) {
     const dataDir = temporaryDirectory();
-    const app = createTicketRuntime(config(dataDir));
+    const app = createCentralRuntime(config(dataDir));
     await new Promise((resolve, reject) => {
         app.server.once("error", reject);
         app.server.listen(0, "127.0.0.1", resolve);
@@ -142,7 +143,7 @@ async function startHarness(t) {
     return { app, origin, portal, tenant, customer, site, sessions, request, sessionHeaders, portalHeaders };
 }
 
-test("canonical v15 HTTP protocol enforces authentication replay CSRF RBAC and idempotency", async t => {
+test("canonical HTTP protocol enforces authentication replay CSRF RBAC and idempotency", async t => {
     const h = await startHarness(t);
 
     await t.test("anonymous and Pending sessions cannot read ticket projections", async () => {

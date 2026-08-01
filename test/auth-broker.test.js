@@ -29,5 +29,5 @@ test("Auth Broker requires the shared SSO secret", () => {
 test("Auth Broker requires HTTPS origins", () => {
     const env = environment();
     env.SIRK_AUTH_ORIGIN = "http://auth.local";
-    assert.throws(() => loadConfig(env), /must use HTTPS/);
+    assert.throws(() => loadConfig(env), /HTTPS origin/);
 });

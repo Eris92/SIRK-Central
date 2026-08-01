@@ -20,13 +20,13 @@ trap 'on_error "$LINENO" "$BASH_COMMAND"' ERR
 
 usage() {
   cat <<'EOF'
-SIRK Central canonical v15 clean installer
+SIRK Central canonical flat runtime clean installer
 
 Usage:
   sudo bash install.sh [--force] [--no-ufw]
 
 The installer creates a clean deployment using docker-compose.yml together with
-docker-compose.portal-runtime.yml. The privileged updater worker is not started;
+docker-compose.yml. The privileged updater worker is not started;
 only the unprivileged updater gateway is part of the base stack.
 
 Optional environment variables:
@@ -122,7 +122,7 @@ if [[ -e "$INSTALL_DIR" ]]; then
   log "Stopping and archiving existing installation to ${backup_dir}"
   if [[ -f "${INSTALL_DIR}/docker-compose.yml" ]]; then
     old_compose=(docker compose -f "${INSTALL_DIR}/docker-compose.yml")
-    [[ -f "${INSTALL_DIR}/docker-compose.portal-runtime.yml" ]] && old_compose+=(-f "${INSTALL_DIR}/docker-compose.portal-runtime.yml")
+    [[ -f "${INSTALL_DIR}/docker-compose.yml" ]] && old_compose+=(-f "${INSTALL_DIR}/docker-compose.yml")
     "${old_compose[@]}" --profile auth --profile maintenance down --remove-orphans || true
   elif [[ -f "${INSTALL_DIR}/compose.yaml" ]]; then
     (cd "$INSTALL_DIR" && docker compose down --remove-orphans) || true
@@ -135,8 +135,8 @@ install -d -m 0755 "$(dirname "$INSTALL_DIR")"
 git clone --branch "$REPO_REF" --single-branch "$REPO_URL" "$INSTALL_DIR"
 cd "$INSTALL_DIR"
 
-[[ -f docker-compose.yml && -f docker-compose.portal-runtime.yml ]] || die "canonical Compose files are missing"
-[[ -f Dockerfile.portal-runtime ]] || die "canonical runtime Dockerfile is missing"
+[[ -f docker-compose.yml ]] || die "canonical Compose files are missing"
+[[ -f Dockerfile ]] || die "canonical runtime Dockerfile is missing"
 
 log "Building setup image"
 docker build --tag sirk-central:setup .
@@ -170,8 +170,8 @@ if [[ "$CONFIGURE_UFW" == "1" ]]; then
   ufw status | grep -q '^Status: active' || ufw --force enable
 fi
 
-COMPOSE=(docker compose -f docker-compose.yml -f docker-compose.portal-runtime.yml --profile auth)
-MAINTENANCE_COMPOSE=(docker compose -f docker-compose.yml -f docker-compose.portal-runtime.yml --profile auth --profile maintenance)
+COMPOSE=(docker compose -f docker-compose.yml --profile auth)
+MAINTENANCE_COMPOSE=(docker compose -f docker-compose.yml --profile auth --profile maintenance)
 SERVICES=(central auth updater-gateway backup-manager caddy)
 
 log "Validating canonical Docker Compose configuration"
