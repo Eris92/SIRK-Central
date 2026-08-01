@@ -33,9 +33,10 @@ function fileValue(content, name) {
     return value;
 }
 
-function writeAtomic(targetPath, content) {
-    const temporaryPath = targetPath + ".tmp-" + process.pid;
-    fs.writeFileSync(temporaryPath, content, { mode: 0o600, flag: "wx" });
+function writeAtomic(targetPath, content, mode = 0o600) {
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true, mode: 0o700 });
+    const temporaryPath = targetPath + ".tmp-" + process.pid + "-" + crypto.randomBytes(4).toString("hex");
+    fs.writeFileSync(temporaryPath, content, { mode, flag: "wx" });
     fs.renameSync(temporaryPath, targetPath);
 }
 
@@ -66,6 +67,38 @@ function readHidden(prompt) {
     });
 }
 
+function readPasswordFile() {
+    const configured = String(process.env.SIRK_ADMIN_PASSWORD_FILE || "").trim();
+    if (!configured) return "";
+    const passwordPath = path.resolve(configured);
+    const stat = fs.statSync(passwordPath);
+    if (!stat.isFile()) throw new Error("Break-Glass password source is not a regular file.");
+    if ((stat.mode & 0o077) !== 0) throw new Error("Break-Glass password source permissions must be 0600 or stricter.");
+    const value = fs.readFileSync(passwordPath, "utf8").replace(/[\r\n]+$/, "");
+    if (value.includes("\n") || value.includes("\r")) throw new Error("Break-Glass password source must contain one line.");
+    return value;
+}
+
+function emitInstallResult(result) {
+    const resultPath = String(process.env.SIRK_INSTALL_RESULT_FILE || "").trim();
+    if (resultPath) {
+        writeAtomic(path.resolve(resultPath), JSON.stringify(result, null, 2) + "\n");
+        return;
+    }
+    process.stdout.write("\nConfiguration saved. Store this URL now; the key is shown only once:\n\n");
+    process.stdout.write(result.accessUrl + "\n\n");
+    process.stdout.write("Break-glass username: " + result.username + "\n");
+}
+
+async function acquirePassword() {
+    const fromFile = readPasswordFile();
+    if (fromFile) return fromFile;
+    const password = await readHidden("New Central break-glass password: ");
+    const confirmation = await readHidden("Repeat break-glass password: ");
+    if (password !== confirmation) throw new Error("Passwords do not match.");
+    return password;
+}
+
 async function main() {
     const targetDirectory = path.resolve(process.env.SIRK_CONFIG_TARGET || "/config");
     const targetPath = path.join(targetDirectory, ".env");
@@ -83,14 +116,11 @@ async function main() {
         if (!/^SIRK_ACCESS_KEY_HASH=.*$/m.test(current)) throw new Error("Access key hash entry is missing.");
         writeAtomic(targetPath, current.replace(/^SIRK_ACCESS_KEY_HASH=.*$/m, replacement));
         const origin = fileValue(current, "SIRK_PUBLIC_ORIGIN") || "https://central.sirkportal.com";
-        process.stdout.write("\nURL access key rotated. Store this URL now; it is shown only once:\n\n");
-        process.stdout.write(origin.replace(/\/+$/, "") + "/#access=" + accessKey + "\n\n");
+        emitInstallResult({ accessUrl: origin.replace(/\/+$/, "") + "/#access=" + accessKey, username: fileValue(current, "SIRK_ADMIN_USERNAME") || "admin" });
         return;
     }
 
-    const password = await readHidden("New Central break-glass password: ");
-    const confirmation = await readHidden("Repeat break-glass password: ");
-    if (password !== confirmation) throw new Error("Passwords do not match.");
+    const password = await acquirePassword();
     if (password.length < 14) throw new Error("Password must contain at least 14 characters.");
 
     if (resetAdminPassword) {
@@ -118,6 +148,7 @@ async function main() {
     const accessKey = crypto.randomBytes(32).toString("base64url");
     const updaterToken = crypto.randomBytes(48).toString("base64url");
     const ssoSharedSecret = crypto.randomBytes(48).toString("base64url");
+    const auditIntegrityKey = crypto.randomBytes(48).toString("base64url");
     const lines = [
         "NODE_ENV=production",
         "SIRK_BIND_HOST=0.0.0.0",
@@ -129,6 +160,7 @@ async function main() {
         "SIRK_ADMIN_USERNAME=" + adminUsername,
         "SIRK_ADMIN_PASSWORD_HASH='" + hashSecret(password) + "'",
         "SIRK_ACCESS_KEY_HASH='" + hashAccessKey(accessKey) + "'",
+        "SIRK_AUDIT_INTEGRITY_KEY='" + auditIntegrityKey + "'",
         "SIRK_DATA_DIR=/var/lib/sirk-central",
         "SIRK_SESSION_IDLE_MINUTES=" + idleMinutes,
         "SIRK_SESSION_ABSOLUTE_HOURS=" + absoluteHours,
@@ -140,13 +172,7 @@ async function main() {
         ""
     ];
     writeAtomic(targetPath, lines.join("\n"));
-
-    process.stdout.write("\nConfiguration saved. Store this URL now; the key is shown only once:\n\n");
-    process.stdout.write(centralOrigin + "/#access=" + accessKey + "\n\n");
-    process.stdout.write("Break-glass username: " + adminUsername + "\n");
-    process.stdout.write("Password: the value you just entered\n");
-    process.stdout.write("Idle timeout: " + idleMinutes + " minutes\n");
-    process.stdout.write("Absolute lifetime: " + absoluteHours + " hours\n");
+    emitInstallResult({ accessUrl: centralOrigin + "/#access=" + accessKey, username: adminUsername });
 }
 
 main().catch(error => {
