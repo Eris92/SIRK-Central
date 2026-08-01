@@ -39,3 +39,41 @@ jobs:
           name: node-test-output
           path: test-output.log
           retention-days: 1
+
+  image-metadata:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.ref == 'refactor/remove-legacy-runtime'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create Compose environment
+        run: |
+          cat > .env <<'EOF'
+          NODE_ENV=production
+          SIRK_ADMIN_PASSWORD_HASH='scrypt$16384$8$1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+          SIRK_ACCESS_KEY_HASH='sha256$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+          SIRK_SSO_SHARED_SECRET=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+          SIRK_UPDATER_TOKEN=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+          SIRK_AUDIT_INTEGRITY_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+          SIRK_CENTRAL_DOMAIN=central.example.test
+          SIRK_PUBLIC_ORIGIN=https://central.example.test
+          SIRK_WEBSITE_DOMAIN=example.test
+          SIRK_AUTH_DOMAIN=auth.example.test
+          SIRK_AUTH_ORIGIN=https://auth.example.test
+          SIRK_ACME_EMAIL=admin@example.test
+          SIRK_BUSINESS_SITE_PATH=/tmp/sirk-business-site
+          EOF
+          mkdir -p /tmp/sirk-business-site
+      - name: Build and dump image metadata
+        shell: bash
+        run: |
+          set -euxo pipefail
+          compose=(docker compose -f docker-compose.yml --profile auth --profile maintenance)
+          "${compose[@]}" build central auth updater-gateway updater backup-manager
+          for service in central auth updater-gateway updater backup-manager; do
+            image="$(${compose[@]} images -q "$service")"
+            printf 'SERVICE=%s IMAGE=%q USER=%q WORKDIR=%q\n' \
+              "$service" "$image" \
+              "$(docker image inspect "$image" --format '{{.Config.User}}')" \
+              "$(docker image inspect "$image" --format '{{.Config.WorkingDir}}')"
+          done
