@@ -1,102 +1,92 @@
 # SIRK Central — bieżący stan
 
-Data aktualizacji: 2026-07-31
+Data aktualizacji: 2026-08-01
 
 ## Repozytorium
 
 ```text
 Repo: Eris92/SIRK-Central
-Branch: main
+Canonical branch: main
+Working branch: refactor/remove-legacy-runtime
+Draft PR: #46
 Runtime: src/server.js
-Version: 1.0.0-rc.25
+Version: 1.0.0-rc.26
 ```
 
-`main` jest kanoniczną gałęzią wdrożeniową. Repozytorium SIRK Portal nie zostało zmodyfikowane.
+PR #46 pozostaje niescalony. Repozytorium SIRK Portal nie zostało zmodyfikowane.
 
-## Canonical runtime
+## Płaski runtime
 
-Jedynym entrypointem jest `src/server.js`.
+Jedynym entrypointem jest `src/server.js`. Runtime ma:
 
-Usunięto nieużywany równoległy runtime i jego zależności:
+- jedno `http.createServer()`;
+- jeden handler WebSocket upgrade;
+- jeden dispatcher HTTP;
+- osobną kolejkę middleware transportowego;
+- wspólny transport JSON/body/cookies/CSRF/security headers;
+- nazwane moduły domenowe w `src/modules/`;
+- jedno źródło wersji w `src/version.js`.
+
+Usunięto:
 
 ```text
+server-v1.js ... server-v15.js
 src/entry.js
-src/server.js
 src/preload-api.js
 src/preload-hardening.js
 src/server-hardened.js
 src/server-production.js
-src/persistent-session-map.js
-test/persistent-session-map.test.js
+store'y i API *-v2
+alternatywne Dockerfile/Compose
+start:legacy
+etapowe uruchamianie części runtime
 ```
 
-Usunięto również alternatywne ścieżki operatorskie:
+`scripts/validate-runtime-architecture.js` blokuje powrót wersjonowanych serwerów, alternatywnych entrypointów, staged runtime, retired contracts i nieosiągalnych plików produkcyjnych.
+
+## Transport i uwierzytelnianie
+
+- CSRF obowiązuje mutacje wykonywane przez sesję przeglądarkową;
+- `/api/login/mfa/recovery` wymaga CSRF także przed wydaniem pełnej sesji;
+- podpisany namespace `/api/portal/v1/*` zachowuje własną granicę HMAC/timestamp/nonce;
+- anonimowe żądania zachowują właściwe `401/403`, zamiast być maskowane przez CSRF;
+- Auth hardening działa jako middleware przed trasami domenowymi;
+- login ma jedną aktywną implementację;
+- recovery codes mają stały format 20 znaków hex i 80 bitów entropii;
+- passkey registration weryfikuje prawdziwy WebAuthn attestation i COSE ES256;
+- MFA continuity jest egzekwowane wewnątrz operacji revoke.
+
+## Portal tunnel
+
+Moduł `src/modules/portal-tunnel.js` obsługuje:
 
 ```text
-deploy/reset-admin-password.sh
-scripts/hash-password.js
-scripts/generate-access-key.js
-package script: start:legacy
+POST /api/portals/:id/connect
+/connect/:id/*
 ```
 
-Runtime został spłaszczony do jednego entrypointu i nazwanych modułów domenowych.
+Granice:
 
-`scripts/validate-runtime-architecture.js`:
-
-- blokuje powrót usuniętych entrypointów i helperów;
-- sprawdza `package.json`;
-- buduje statyczny graf lokalnych `require()`;
-- potwierdza osiągalność warstw v1-v14 z v15;
-- odrzuca każdy dodatkowy, nieosiągalny plik `server*.js`.
-
-Audyt działa w `npm run check:syntax` oraz jako `pretest` dla `npm test`.
-
-## Optymalizacja obrazu
-
-Dodano `.dockerignore`, który wyklucza z build context między innymi:
-
-- `.git` i `.github`;
-- dokumentację i testy;
-- raporty Playwright/coverage;
-- lokalne `.env` i katalog danych;
-- archiwa, logi i lokalną stronę montowaną z hosta.
-
-Zmniejsza to build context i ogranicza ryzyko przypadkowego dołączenia danych lokalnych do obrazu.
-
-## Emergency recovery
-
-Kanoniczne procedury:
-
-```text
-deploy/reset-breakglass-password.sh
-deploy/rotate-access-key.sh
-```
-
-Rotacja Access Key została przebudowana i teraz:
-
-- używa obu canonical Compose files;
-- generuje klucz i hash w odizolowanym kontenerze;
-- aktualizuje `.env` atomowo z backupem;
-- zatrzymuje Central przed zmianą danych;
-- wykonuje offline update przez `apply-emergency-security-reset.js`;
-- unieważnia lokalne i BreakGlass sessions;
-- wykonuje health check po restarcie;
-- sprawdza, że rootowy updater nie pozostał uruchomiony;
-- pokazuje nowy Access Key dokładnie raz.
-
-Stary helper przyjmujący widoczne hasło został usunięty.
+- RBAC `portals.connect`;
+- capability `portal.connect`;
+- emergency policy lock;
+- limit body 8 MiB;
+- brak przekazywania cookie sesji Central;
+- bezpieczne przepisywanie Location, Set-Cookie Path i ścieżek w treści;
+- kontrolowane mapowanie timeout/offline/broker errors.
 
 ## Storage i concurrency
 
 - fail-fast single-writer lease w `/var/lib/sirk-central/.sirk-central-runtime.lock`;
 - druga instancja na tym samym storage kończy start `RUNTIME_STORAGE_LOCKED`;
-- heartbeat i owner identity;
 - fresh malformed lock jest fail-closed;
 - stale lock jest odzyskiwany po quarantine;
-- graceful shutdown zwalnia lease;
+- graceful shutdown zamyka HTTP, WebSockety, broker i zwalnia lease;
 - concurrency suite obejmuje heartbeat, tickets, command polling i ACK.
 
-## Portal commands
+## Portal commands i tickets
+
+Portal commands:
 
 - trwała kolejka z delivery lease;
 - ACK ordering oraz idempotent terminal ACK;
@@ -105,9 +95,9 @@ Stary helper przyjmujący widoczne hasło został usunięty.
 - Portal otrzymuje `control: cancel`;
 - `completed` lub `failed` może bezpiecznie wygrać race.
 
-## Tickets
+Tickets:
 
-- provider-independent projection schema v2;
+- provider-independent projection schema;
 - canonical Tenant/Customer/Site assignment;
 - fail-closed publication policy;
 - snapshot i event ingestion;
@@ -116,32 +106,56 @@ Stary helper przyjmujący widoczne hasło został usunięty.
 - właściwe `400/409/429/5xx` dla pojedynczego eventu;
 - `207` tylko dla jawnego partial batch.
 
-## Updater trust split
+## Stack i granice uprawnień
+
+Base stack:
 
 ```text
-Central -> updater-gateway:8092 -> updater:8090
+central
+auth
+updater-gateway
+backup-manager
+caddy
 ```
 
-`updater-gateway` działa stale jako nieuprzywilejowany `USER node`, bez Docker socket, wolumenów i host ports.
+`updater-gateway` działa stale jako `USER node`, bez Docker socketu, wolumenów i host ports.
+
+`backup-manager`:
+
+- używa osobnego minimalnego obrazu `updater/Dockerfile.manager`;
+- nie ma Docker CLI ani Docker socketu;
+- nie publikuje portów;
+- ma read-only root filesystem i tmpfs `/tmp`;
+- montuje dane Central tylko `ro`;
+- zapisuje wyłącznie do `updater-state`.
 
 `updater` działa wyłącznie w profilu `maintenance`, jako jawny root/Docker-socket trust boundary, z `restart: "no"`.
 
-## Test instalatora
+## Automatyczna walidacja
 
-`test/installer.test.js` został zaktualizowany. Usunięto stare asercje oczekujące `reset-admin-password.sh` i legacy `configure-production.js` w helperach recovery.
+Workflow CI sprawdza:
 
-Test sprawdza teraz:
+- składnię shell/JavaScript/Python;
+- pełną suite Node uruchamianą plik po pliku;
+- płaską architekturę i forward-only contracts;
+- base oraz maintenance Compose;
+- granice gateway/manager/worker;
+- budowę obrazów central, auth, gateway, updater i manager;
+- użytkowników oraz składnię runtime wewnątrz obrazów.
 
-- canonical Compose;
-- właściwy `src/server.js` w obrazie;
-- offline reset BreakGlass;
-- transakcyjną rotację Access Key;
-- health check;
-- brak workera poza maintenance.
+Security Audit sprawdza:
 
-## Walidacja do wykonania
+- regresje bezpieczeństwa i współbieżności;
+- Portal tunnel integration;
+- `npm audit --omit=dev --audit-level=high`;
+- SBOM;
+- committed secrets i dangerous execution patterns;
+- CodeQL;
+- izolację backup managera i maintenance worker boundary.
 
-Kod nie ma jeszcze potwierdzonego zielonego wyniku dla finalnego HEAD po cleanupie.
+Dokument nie zastępuje wyniku workflow dla konkretnego HEAD — przed merge należy sprawdzić aktualne CI, Security Audit i UI E2E.
+
+## Walidacja środowiskowa do wykonania
 
 ```bash
 cd /opt/sirk-central
@@ -154,11 +168,11 @@ SIRK_CONCURRENCY_TEST_REQUESTS=24 npm test
 npm audit --omit=dev --audit-level=high
 ```
 
-Następnie:
+Następnie na nieprodukcyjnym VPS:
 
-1. `deploy/acceptance-test.sh` na nieprodukcyjnym VPS;
+1. `deploy/acceptance-test.sh`;
 2. destructive backup/restore z forced rollback;
-3. update/rollback failure drill;
+3. update/rollback failure drill i potwierdzenie usunięcia workera;
 4. realny YubiKey w Edge i Chrome;
 5. pełny workflow Entra;
 6. Portal simulator z prawdziwym tokenem;
@@ -168,7 +182,7 @@ Następnie:
 ## Residual risks
 
 - file-backed stores są single-writer, nie active-active HA;
-- aktywny runtime nadal jest warstwowo złożony z modułów v1-v15; nie są to martwe pliki, ale późniejsza konsolidacja routerów może dodatkowo uprościć profil requestów;
-- worker maintenance pozostaje root-equivalent podczas otwartego okna;
+- worker maintenance pozostaje root-equivalent podczas jawnie otwartego okna;
+- realne Entra, YubiKey, TLS i rollback wymagają testów środowiskowych;
 - konektory Jira/ServiceDesk/GLPI należą do repo SIRK Portal;
-- finalny HEAD wymaga zielonego CI i walidacji środowiskowej.
+- PR #46 nie powinien być scalany bez zielonych workflow dla finalnego HEAD.
