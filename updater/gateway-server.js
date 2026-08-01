@@ -21,6 +21,7 @@ function pathAllowed(requestPath) {
     try { decoded = decodeURIComponent(value); }
     catch (_) { return false; }
     if (STATIC_PATHS.has(decoded)) return true;
+    if (/^\/backup\/file\/sirk-central-\d{8}T\d{6}Z\.tar\.gz\.age$/.test(decoded)) return true;
     return /^\/backup\/sirk-central-\d{8}T\d{6}(?:Z|[+-]\d{4})\.tar\.gz$/.test(decoded);
 }
 function workerOrigin(value, allowedHosts) {
@@ -115,7 +116,7 @@ function createGateway(options = {}) {
                     headers: {
                         Authorization: "Bearer " + token,
                         "Content-Type": "application/json",
-                        Accept: "application/json"
+                        Accept: req.method === "GET" && url.pathname.startsWith("/backup/file/") ? "application/octet-stream" : "application/json"
                     },
                     body: body && body.length ? body : undefined,
                     signal: AbortSignal.timeout(timeoutMs)
@@ -127,7 +128,11 @@ function createGateway(options = {}) {
 
             const responseBody = Buffer.from(await response.arrayBuffer());
             const retryAfter = response.headers.get("retry-after");
-            return sendBuffer(res, response.status, responseBody, response.headers.get("content-type") || "application/json; charset=utf-8", retryAfter ? { "Retry-After": retryAfter } : {});
+            const disposition = response.headers.get("content-disposition");
+            const passthrough = {};
+            if (retryAfter) passthrough["Retry-After"] = retryAfter;
+            if (disposition) passthrough["Content-Disposition"] = disposition;
+            return sendBuffer(res, response.status, responseBody, response.headers.get("content-type") || "application/json; charset=utf-8", passthrough);
         } catch (error) {
             const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
             return sendJson(res, status, {
