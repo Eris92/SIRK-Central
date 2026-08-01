@@ -54,7 +54,7 @@ function decorateResponse(res, token) {
 function csrfRequired(req, url) {
     if (SAFE_METHODS.has(req.method)) return false;
     if (!url.pathname.startsWith("/api/")) return false;
-    return url.pathname !== "/api/login" && url.pathname !== "/api/login/mfa/recovery";
+    return url.pathname !== "/api/login";
 }
 
 function breakGlassActor(app, req) {
@@ -161,7 +161,7 @@ function registerAuthHardening(app, config) {
             res.destroy(error);
         }
     };
-    app.router.prepend(handler);
+    app.router.before(handler);
     Object.assign(app, { recoveryCodes, webauthnChallenges, loginTransactions });
     return app;
 }
