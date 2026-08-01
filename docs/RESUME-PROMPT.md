@@ -12,10 +12,11 @@ Repozytorium:
 - Wersja: 1.0.0-rc.26
 - Legacy refactor PR #46: merged
 - Runtime commit z zaliczonym VPS acceptance: 8d35cab995734606b0fe8811735022ffd90c20eb
+- Backup age support commit: 9fb30b0ede42c4e5bf714820254a588dbffa2d3c
 - Acceptance log na VPS: /root/sirk-central-acceptance-final-20260801-112059.log
 
 STAN POTWIERDZONY 2026-08-01:
-- 62/62 pliki testowe Node przeszły;
+- 62/62 pliki testowe Node przeszły podczas VPS acceptance;
 - npm audit dla zależności produkcyjnych: 0 podatności;
 - central, auth, updater-gateway i backup-manager są healthy;
 - Caddy działa z katalogowym mountem ./deploy/caddy -> /etc/caddy:ro;
@@ -24,16 +25,28 @@ STAN POTWIERDZONY 2026-08-01:
 - updater działa wyłącznie w profilu maintenance i został usunięty po teście;
 - audit ma version 2, hmac-sha256 i integralność ok;
 - podstawowy VPS acceptance zakończył się statusem 0;
-- finalny szyfrowany backup jest jeszcze niewykonany, bo brakuje SIRK_BACKUP_AGE_RECIPIENT.
+- parser publicznego recipienta age i testy backupu przeszły 9/9;
+- finalny backup produkcyjny został zaszyfrowany przez age;
+- checksum pliku .age, próbne odszyfrowanie i walidacja archiwum przeszły;
+- plaintext archive został usunięty;
+- prywatna identity age nadal jest tymczasowo na VPS do czasu potwierdzenia kopii offline.
+
+ZWERYFIKOWANY BACKUP:
+- /var/backups/sirk-central/sirk-central-20260801T114404Z.tar.gz.age
+- checksum: OK
+- decrypt: OK
+- archive validation: OK
 
 WAŻNE:
-- Najpierw pobierz aktualny main. Commit 8d35cab jest punktem odniesienia zaliczonego runtime, ale dokumentacja i kolejne poprawki mogą przesunąć HEAD.
+- Najpierw pobierz aktualny main. Commity 8d35cab i 9fb30b0 są punktami odniesienia zaliczonego runtime i backupu, ale dokumentacja i kolejne poprawki mogą przesunąć HEAD.
 - Pracuj wyłącznie na aktualnym main lub na nowej krótkiej gałęzi utworzonej z aktualnego main.
 - Nie modyfikuj repozytorium SIRK Portal w ramach prac dotyczących Central.
 - Nie przywracaj server-v1..v15, alternatywnych entrypointów, preloadów, store'ów *-v2, alternatywnego Compose ani staged runtime.
 - Nie wdrażaj HA/PostgreSQL w tym etapie.
 - Nie montuj ponownie pojedynczego deploy/Caddyfile. Kanoniczna konfiguracja to deploy/caddy/Caddyfile i katalogowy bind mount.
-- Nie wyłączaj szyfrowania finalnego backupu produkcyjnego przez SIRK_BACKUP_REQUIRE_ENCRYPTION=false.
+- Nie wyłączaj szyfrowania backupu produkcyjnego przez SIRK_BACKUP_REQUIRE_ENCRYPTION=false.
+- Nie ujawniaj prywatnej identity age, zawartości .env, tokenów ani sekretów.
+- Nie usuwaj prywatnej identity age z VPS przed potwierdzeniem bezpiecznej kopii offline.
 - Nie opieraj wyniku na workflow ze starego commita. Dla każdej zmiany sprawdź dokładny HEAD i odpowiadające mu CI, Security Audit oraz UI E2E.
 - Nie uznawaj wersji 1.0.0 za gotową bez pozostałych testów środowiskowych.
 
@@ -56,6 +69,7 @@ Zweryfikuj aktualny main:
 8. deploy/reset-breakglass-password.sh i deploy/rotate-access-key.sh są kanonicznymi procedurami recovery.
 9. Base stack zawiera backup-manager bez Docker socketu i z central-data tylko ro.
 10. Rootowy updater nie działa poza profilem maintenance.
+11. deploy/backup.sh pobiera publiczny recipient bez wykonywania .env jako kodu shell.
 
 Testy lokalne:
 
@@ -74,17 +88,16 @@ export SIRK_ACCEPTANCE_PUBLIC_URL='https://central.sirkportal.com'
 export SIRK_ACCEPTANCE_SKIP_BUILD=true
 sudo bash deploy/acceptance-test.sh
 
-NASTĘPNY PRIORYTET — BACKUP AGE:
-1. wygeneruj prywatną tożsamość age poza repo;
-2. zdeponuj ją w bezpiecznym offline miejscu;
-3. wpisz tylko publicznego recipienta jako SIRK_BACKUP_AGE_RECIPIENT w .env;
-4. wykonaj deploy/backup.sh z wymaganym szyfrowaniem;
-5. zweryfikuj checksum pliku .age;
-6. nie ujawniaj prywatnego klucza ani zawartości .env.
+NASTĘPNY PRIORYTET — RESTORE I ROLLBACK DRILLS:
+1. najpierw potwierdź, że prywatna identity age ma bezpieczną kopię offline;
+2. dopiero wtedy usuń prywatną identity z VPS, pozostawiając w .env tylko publiczny recipient;
+3. wykonaj destructive restore z automatycznym safety backupem;
+4. potwierdź poprawny restore i zdrowy runtime;
+5. wymuś kontrolowaną awarię restore i potwierdź forced rollback;
+6. wykonaj update/rollback failure drill;
+7. po każdym teście potwierdź usunięcie maintenance workera i integralność audytu.
 
-Po backupie wykonaj:
-- destructive backup/restore z safety backupem i forced rollback;
-- update/rollback failure drill oraz potwierdzenie usunięcia maintenance workera;
+Po restore/rollback wykonaj:
 - Portal simulator z prawdziwym tokenem;
 - realny YubiKey w Edge i Chrome;
 - Entra pending/approved/rejected/conflict/disabled/logout;
@@ -103,5 +116,5 @@ Pracuj autonomicznie. Naprawiaj konkretne błędy z testów i workflow. Aktualiz
 ## Krótsza wersja
 
 ```text
-Kontynuuj autonomicznie SIRK Central w repo Eris92/SIRK-Central z aktualnego main. Kanoniczny runtime to src/server.js, wersja 1.0.0-rc.26. VPS acceptance przeszedł na runtime commit 8d35cab: 62/62 testy, audit HMAC v2 poprawny, publiczny logout 404, wszystkie usługi bazowe zdrowe i updater usunięty po maintenance. Następny priorytet to skonfigurowanie publicznego recipienta age, wykonanie szyfrowanego backupu produkcyjnego oraz destructive restore/update rollback drills. Nie dotykaj SIRK Portal, nie przywracaj legacy runtime, nie montuj pojedynczego Caddyfile i nie wyłączaj szyfrowania finalnego backupu.
+Kontynuuj autonomicznie SIRK Central w repo Eris92/SIRK-Central z aktualnego main. Kanoniczny runtime to src/server.js, wersja 1.0.0-rc.26. VPS acceptance przeszedł na runtime commit 8d35cab: 62/62 testy, audit HMAC v2 poprawny, publiczny logout 404, wszystkie usługi bazowe zdrowe i updater usunięty po maintenance. Szyfrowany backup produkcyjny age został wykonany i zweryfikowany checksumą, odszyfrowaniem oraz walidacją archiwum. Prywatna identity nadal jest tymczasowo na VPS do czasu potwierdzenia kopii offline. Następny priorytet to destructive restore i forced rollback, potem update rollback, Portal simulator, Entra, YubiKey i visual review. Nie dotykaj SIRK Portal, nie przywracaj legacy runtime, nie montuj pojedynczego Caddyfile i nie wyłączaj szyfrowania backupu.
 ```
