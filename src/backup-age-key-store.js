@@ -44,7 +44,10 @@ function create(options = {}) {
             throw error;
         }
         if (!value || value.version !== 1 || !validRecipient(value.recipient)) {
-            throw Object.assign(new Error("Stored age backup recipient is invalid."), { code: "BACKUP_AGE_RECIPIENT_INVALID" });
+            throw Object.assign(new Error("Stored age backup recipient is invalid."), {
+                code: "BACKUP_AGE_RECIPIENT_INVALID",
+                statusCode: 503
+            });
         }
         return {
             version: 1,
