@@ -27,6 +27,11 @@ command -v sha256sum >/dev/null 2>&1 || { echo "sha256sum is required." >&2; exi
 [[ "${RETENTION_DAYS}" =~ ^[0-9]+$ ]] || { echo "SIRK_BACKUP_RETENTION_DAYS must be an integer." >&2; exit 1; }
 [[ "${REQUIRE_ENCRYPTION}" =~ ^(auto|true|false)$ ]] || { echo "SIRK_BACKUP_REQUIRE_ENCRYPTION must be auto, true or false." >&2; exit 1; }
 
+AGE_RECIPIENT="${SIRK_BACKUP_AGE_RECIPIENT:-}"
+if [[ -z "${AGE_RECIPIENT}" ]]; then
+  AGE_RECIPIENT="$(python3 "${INSTALL_DIR}/scripts/read-env-value.py" "${INSTALL_DIR}/.env" SIRK_BACKUP_AGE_RECIPIENT)"
+fi
+
 if [[ "${REQUIRE_ENCRYPTION}" == "auto" ]]; then
   if grep -Eq '^[[:space:]]*NODE_ENV[[:space:]]*=[[:space:]]*production[[:space:]]*$' "${INSTALL_DIR}/.env"; then
     REQUIRE_ENCRYPTION=true
@@ -34,8 +39,8 @@ if [[ "${REQUIRE_ENCRYPTION}" == "auto" ]]; then
     REQUIRE_ENCRYPTION=false
   fi
 fi
-if [[ "${REQUIRE_ENCRYPTION}" == "true" && -z "${SIRK_BACKUP_AGE_RECIPIENT:-}" ]]; then
-  echo "Encrypted offline backup is required. Set SIRK_BACKUP_AGE_RECIPIENT. Use SIRK_BACKUP_REQUIRE_ENCRYPTION=false only for an explicitly accepted non-production exception." >&2
+if [[ "${REQUIRE_ENCRYPTION}" == "true" && -z "${AGE_RECIPIENT}" ]]; then
+  echo "Encrypted offline backup is required. Set SIRK_BACKUP_AGE_RECIPIENT in the process environment or production .env. Use SIRK_BACKUP_REQUIRE_ENCRYPTION=false only for an explicitly accepted non-production exception." >&2
   exit 1
 fi
 
@@ -73,10 +78,10 @@ chmod 0600 "${ARCHIVE}.sha256"
 rm -rf -- "${TARGET}"
 
 OUTPUT="${ARCHIVE}"
-if [[ -n "${SIRK_BACKUP_AGE_RECIPIENT:-}" ]]; then
+if [[ -n "${AGE_RECIPIENT}" ]]; then
   command -v age >/dev/null 2>&1 || { echo "age is required for encrypted backups." >&2; exit 1; }
   ENCRYPTED="${ARCHIVE}.age"
-  age -r "${SIRK_BACKUP_AGE_RECIPIENT}" -o "${ENCRYPTED}.partial" "${ARCHIVE}"
+  age -r "${AGE_RECIPIENT}" -o "${ENCRYPTED}.partial" "${ARCHIVE}"
   mv -- "${ENCRYPTED}.partial" "${ENCRYPTED}"
   (
     cd "${BACKUP_ROOT}"
