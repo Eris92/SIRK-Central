@@ -1,0 +1,41 @@
+name: Test Diagnostics
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-diagnostics-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  node-tests:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.ref == 'refactor/remove-legacy-runtime'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Run tests and capture output
+        shell: bash
+        run: |
+          set +e
+          npm test > test-output.log 2>&1
+          status=$?
+          tail -n 250 test-output.log
+          exit "$status"
+      - name: Upload test output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-test-output
+          path: test-output.log
+          retention-days: 1
