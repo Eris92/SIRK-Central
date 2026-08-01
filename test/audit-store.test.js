@@ -1,6 +1,7 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -9,6 +10,24 @@ const auditStoreFactory = require("../src/audit-store");
 
 function temporaryDirectory() {
     return fs.mkdtempSync(path.join(os.tmpdir(), "sirk-audit-"));
+}
+
+function legacyEvent(overrides = {}) {
+    const event = Object.assign({
+        id: "legacy-event-1",
+        timestampUtc: "2026-07-29T12:00:00.000Z",
+        action: "legacy.event",
+        category: "system",
+        result: "info",
+        actor: { username: "admin", displayName: "", identityKey: "", role: "BreakGlass", source: "local" },
+        request: { ip: "127.0.0.1", userAgent: "test", method: "POST", path: "/api/test" },
+        target: "",
+        details: { source: "v1" },
+        previousHash: ""
+    }, overrides);
+    const copy = Object.assign({}, event);
+    event.hash = crypto.createHash("sha256").update(JSON.stringify(copy), "utf8").digest("base64url");
+    return event;
 }
 
 test("audit store persists chained events redacts secrets and strips query strings", () => {
@@ -86,20 +105,49 @@ test("audit retention preserves a verifiable anchor chain", () => {
     assert.equal(persisted.events[0].previousHash, persisted.anchorHash);
 });
 
-test("legacy audit schema is rejected without automatic migration", () => {
+test("verified legacy audit schema migrates once to HMAC v2", () => {
     const dataDir = temporaryDirectory();
-    fs.mkdirSync(dataDir, { recursive: true });
+    const event = legacyEvent();
     fs.writeFileSync(path.join(dataDir, "audit-events.json"), JSON.stringify({
         version: 1,
-        algorithm: "sha256",
-        anchorHash: "",
-        events: []
+        events: [event]
     }));
+
+    const migratedAt = Date.parse("2026-08-01T10:45:00.000Z");
+    const store = auditStoreFactory.create({ dataDir, now: () => migratedAt, integrityKey: "M".repeat(64) });
+    const verification = store.verify();
+    assert.equal(verification.ok, true);
+    assert.equal(verification.algorithm, "hmac-sha256");
+    assert.equal(store.list({ limit: 10 })[0].action, "legacy.event");
+
+    const persisted = JSON.parse(fs.readFileSync(store.filePath, "utf8"));
+    assert.equal(persisted.version, 2);
+    assert.equal(persisted.algorithm, "hmac-sha256");
+    assert.equal(persisted.legacyLastHash, event.hash);
+    assert.equal(persisted.migratedAtUtc, "2026-08-01T10:45:00.000Z");
+    assert.notEqual(persisted.events[0].hash, event.hash);
+    assert.equal(persisted.events[0].previousHash, "");
+
+    const reopened = auditStoreFactory.create({ dataDir, integrityKey: "M".repeat(64) });
+    assert.equal(reopened.verify().ok, true);
+    assert.equal(JSON.parse(fs.readFileSync(store.filePath, "utf8")).migratedAtUtc, persisted.migratedAtUtc);
+});
+
+test("tampered legacy audit schema remains fail closed", () => {
+    const dataDir = temporaryDirectory();
+    const event = legacyEvent();
+    event.action = "tampered-after-hash";
+    fs.writeFileSync(path.join(dataDir, "audit-events.json"), JSON.stringify({
+        version: 1,
+        events: [event]
+    }));
+
     const store = auditStoreFactory.create({ dataDir, integrityKey: "M".repeat(64) });
     const verification = store.verify();
     assert.equal(verification.ok, false);
-    assert.equal(verification.reason, "unsupported-schema");
+    assert.equal(verification.reason, "event-hash-mismatch");
     assert.throws(() => store.append({ action: "must-not-migrate" }), /integrity verification failed/i);
+    assert.equal(JSON.parse(fs.readFileSync(store.filePath, "utf8")).version, 1);
 });
 
 test("audit filters by category result and query", () => {
