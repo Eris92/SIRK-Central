@@ -48,10 +48,10 @@ jobs:
           if (pkg.main !== 'src/server.js' || pkg.scripts.start !== 'node src/server.js') throw new Error('Canonical runtime entry is invalid.');
 
           for (const file of [
-            'src/server.js','src/application.js','src/version.js','src/http/router.js','src/http/transport.js','src/modules/tickets.js','src/runtime-lock.js','src/ticket-projection-store.js',
+            'src/server.js','src/application.js','src/version.js','src/http/router.js','src/http/transport.js','src/modules/portal-tunnel.js','src/modules/tickets.js','src/runtime-lock.js','src/ticket-projection-store.js',
             'src/portal-command-store.js','src/request-rate-limiter.js','src/approval-store.js',
             'src/central-operation-guard.js','src/sso-replay-store.js','src/sso-callback-handler.js',
-            'auth/server.js','updater/Dockerfile.gateway','updater/gateway-server.js','updater/server.js',
+            'auth/server.js','updater/Dockerfile.gateway','updater/Dockerfile.manager','updater/gateway-server.js','updater/server.js',
             'updater/management-server.js','updater/backup-archive.js','updater/restore-transaction.js',
             'test/runtime-lock.test.js','test/portal-command-cancellation.test.js',
             'test/ticket-event-http-semantics.test.js','test/protocol-concurrency.test.js',
@@ -65,6 +65,9 @@ jobs:
           const gatewayDockerfile = fs.readFileSync('updater/Dockerfile.gateway', 'utf8');
           if (!gatewayDockerfile.includes('USER node') || !gatewayDockerfile.includes('CMD ["node", "/app/gateway-server.js"]')) throw new Error('Gateway Dockerfile is not minimal/non-root.');
           if (/docker-cli|\bgit\b|\btar\b/.test(gatewayDockerfile)) throw new Error('Gateway image contains maintenance tooling.');
+          const managerDockerfile = fs.readFileSync('updater/Dockerfile.manager', 'utf8');
+          if (!managerDockerfile.includes('CMD ["node", "/app/management-server.js"]')) throw new Error('Backup manager entrypoint is invalid.');
+          if (/docker-cli|\bgit\b/.test(managerDockerfile)) throw new Error('Backup manager image contains updater tooling.');
 
           const runtime = fs.readFileSync('src/modules/tickets.js', 'utf8');
           for (const expected of ['runtimeLockFactory.acquire','eventErrorResult','SIRK_RUNTIME_LOCK_DISABLED']) {
@@ -83,6 +86,7 @@ jobs:
             'SIRK_UPDATER_ORIGIN: http://updater-gateway:8092',
             'SIRK_UPDATER_ALLOWED_HOSTS: updater-gateway',
             'dockerfile: updater/Dockerfile.gateway',
+            'dockerfile: updater/Dockerfile.manager',
             'profiles: ["maintenance"]','restart: "no"',
             'SIRK_CENTRAL_INTERNAL_ORIGIN: http://central:8080'
           ]) if (!compose.includes(expected)) throw new Error('Compose contract missing: ' + expected);
@@ -100,8 +104,8 @@ jobs:
         run: |
           cat > .env <<'EOF'
           NODE_ENV=production
-          SIRK_ADMIN_PASSWORD_HASH=scrypt$16384$8$1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-          SIRK_ACCESS_KEY_HASH=sha256$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+          SIRK_ADMIN_PASSWORD_HASH='scrypt$16384$8$1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+          SIRK_ACCESS_KEY_HASH='sha256$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
           SIRK_SSO_SHARED_SECRET=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
           SIRK_UPDATER_TOKEN=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
           SIRK_AUDIT_INTEGRITY_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
@@ -133,6 +137,7 @@ jobs:
           }
           if (String(compose.services['updater-gateway'].user) !== 'node') throw new Error('Gateway must run as node.');
           if (String(compose.services.updater.user) !== '0:0') throw new Error('Worker root boundary is not explicit.');
+          if (String(compose.services['backup-manager'].user) !== '0:0') throw new Error('Backup manager read boundary is not explicit.');
           if (compose.services.updater.restart !== 'no') throw new Error('Worker restart policy must be no.');
           for (const service of ['updater-gateway','updater','backup-manager']) {
             if (compose.services[service].ports?.length) throw new Error(service + ' publishes host ports.');
@@ -141,6 +146,10 @@ jobs:
           if (compose.services['updater-gateway'].environment.SIRK_ADMIN_PASSWORD_HASH) throw new Error('Gateway inherited unrelated .env secrets.');
           if (compose.services.central.environment.SIRK_UPDATER_ORIGIN !== 'http://updater-gateway:8092') throw new Error('Central bypasses gateway.');
           if (compose.services['updater-gateway'].environment.SIRK_UPDATER_WORKER_ORIGIN !== 'http://updater:8090') throw new Error('Gateway worker origin is invalid.');
+          const managerVolumes = compose.services['backup-manager'].volumes || [];
+          if (managerVolumes.some(volume => String(volume.source || volume).includes('docker.sock'))) throw new Error('Backup manager mounts the Docker socket.');
+          const centralData = managerVolumes.find(volume => String(volume.target || '').includes('/var/lib/sirk-central'));
+          if (!centralData || centralData.read_only !== true) throw new Error('Backup manager Central data mount must be read-only.');
           NODE
 
       - name: Build application images
@@ -154,13 +163,16 @@ jobs:
           auth_image="$(${compose[@]} images -q auth)"
           gateway_image="$(${compose[@]} images -q updater-gateway)"
           updater_image="$(${compose[@]} images -q updater)"
-          for image in "$central_image" "$auth_image" "$gateway_image" "$updater_image"; do test -n "$image"; done
+          manager_image="$(${compose[@]} images -q backup-manager)"
+          for image in "$central_image" "$auth_image" "$gateway_image" "$updater_image" "$manager_image"; do test -n "$image"; done
           test "$(docker image inspect "$central_image" --format '{{.Config.User}}')" = node
           test "$(docker image inspect "$auth_image" --format '{{.Config.User}}')" = node
           test "$(docker image inspect "$gateway_image" --format '{{.Config.User}}')" = node
           test "$(docker image inspect "$updater_image" --format '{{.Config.User}}')" = root
+          test "$(docker image inspect "$manager_image" --format '{{.Config.User}}')" = root
           docker run --rm --entrypoint node "$central_image" --check src/server.js
           docker run --rm --entrypoint node "$auth_image" --check auth/server.js
           docker run --rm --entrypoint node "$gateway_image" --check /app/gateway-server.js
           docker run --rm --entrypoint node "$updater_image" --check /app/server.js
           docker run --rm --entrypoint node "$updater_image" --check /app/management-server.js
+          docker run --rm --entrypoint node "$manager_image" --check /app/management-server.js
