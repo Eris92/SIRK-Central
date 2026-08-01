@@ -8,7 +8,6 @@ const path = require("node:path");
 const test = require("node:test");
 const { hashSecret, hashAccessKey } = require("../src/security");
 const { createCentralRuntime } = require("../src/server");
-const createFinalApp = config => createCentralRuntime(config, { through: "passkey-management" });
 
 function cookieValue(headers, name) {
     const values = typeof headers.getSetCookie === "function" ? headers.getSetCookie() : [headers.get("set-cookie") || ""];
@@ -60,12 +59,12 @@ test("BreakGlass can register, list and revoke an ES256 passkey", async t => {
         env: { NODE_ENV: "test", SIRK_RUNTIME_LOCK_DISABLED: "true", SIRK_AUDIT_INTEGRITY_KEY: "K".repeat(48) }
     };
 
-    const app = createFinalApp(config);
+    const app = createCentralRuntime(config);
     await new Promise((resolve, reject) => {
         app.server.once("error", reject);
         app.server.listen(0, "127.0.0.1", resolve);
     });
-    t.after(() => new Promise(resolve => app.server.close(resolve)));
+    t.after(() => app.close());
     const origin = "http://127.0.0.1:" + app.server.address().port;
     const userAgent = "sirk-registration-test";
 
