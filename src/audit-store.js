@@ -71,11 +71,12 @@ function digest(record, algorithm, key) {
 
 function verifyState(state, key) {
     if (!state || !Array.isArray(state.events)) return { ok: false, index: -1, reason: "invalid-state" };
-    if (state.version !== 2) return { ok: false, index: -1, reason: "unsupported-schema" };
-    const algorithm = String(state.algorithm || "");
-    if (algorithm !== "hmac-sha256") return { ok: false, index: -1, reason: "unsupported-algorithm" };
-    if (!key) return { ok: false, index: -1, reason: "integrity-key-unavailable" };
-    let previousHash = String(state.anchorHash || "");
+    const version = Number(state.version);
+    if (version !== 1 && version !== 2) return { ok: false, index: -1, reason: "unsupported-schema" };
+    const algorithm = version === 1 ? "sha256" : String(state.algorithm || "");
+    if (version === 2 && algorithm !== "hmac-sha256") return { ok: false, index: -1, reason: "unsupported-algorithm" };
+    if (algorithm === "hmac-sha256" && !key) return { ok: false, index: -1, reason: "integrity-key-unavailable" };
+    let previousHash = version === 1 ? "" : String(state.anchorHash || "");
     for (let index = 0; index < state.events.length; index += 1) {
         const event = state.events[index];
         if (event.previousHash !== previousHash) return { ok: false, index, reason: "previous-hash-mismatch" };
@@ -85,7 +86,14 @@ function verifyState(state, key) {
         if (digest(copy, algorithm, key) !== expected) return { ok: false, index, reason: "event-hash-mismatch" };
         previousHash = expected;
     }
-    return { ok: true, count: state.events.length, lastHash: previousHash, algorithm, anchorHash: String(state.anchorHash || "") };
+    return {
+        ok: true,
+        count: state.events.length,
+        lastHash: previousHash,
+        algorithm,
+        anchorHash: version === 1 ? "" : String(state.anchorHash || ""),
+        version
+    };
 }
 
 function rechain(events, algorithm, key, anchorHash = "") {
@@ -118,6 +126,16 @@ function create(options) {
         if (!verification.ok) {
             integrityFailure = verification;
             state = parsed;
+        } else if (verification.version === 1) {
+            state = {
+                version: 2,
+                algorithm: desiredAlgorithm,
+                anchorHash: "",
+                legacyLastHash: verification.lastHash || "",
+                migratedAtUtc: new Date(now()).toISOString(),
+                events: rechain(parsed.events, desiredAlgorithm, integrityKey)
+            };
+            atomicWrite(filePath, state);
         } else {
             state = parsed;
         }
