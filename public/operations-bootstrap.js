@@ -43,7 +43,7 @@
         for (const tab of [updatesTab, backupTab]) {
             if (tab.hasAttribute("hidden")) tab.removeAttribute("hidden");
             if (tab.style.display === "none") tab.style.removeProperty("display");
-            tab.setAttribute("aria-hidden", "false");
+            if (tab.getAttribute("aria-hidden") !== "false") tab.setAttribute("aria-hidden", "false");
         }
     }
 
