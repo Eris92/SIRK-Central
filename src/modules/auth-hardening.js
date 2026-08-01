@@ -136,13 +136,16 @@ function registerAuthHardening(app, config) {
                 }
             }
 
-            if (url.pathname.startsWith("/api/break-glass/mfa")) {
+            const mfaStatus = req.method === "GET" && url.pathname === "/api/break-glass/mfa/status";
+            const recoveryRotate = req.method === "POST" && url.pathname === "/api/break-glass/mfa/recovery-codes/rotate";
+            const recoveryDelete = req.method === "DELETE" && url.pathname === "/api/break-glass/mfa/recovery-codes";
+            if (mfaStatus || recoveryRotate || recoveryDelete) {
                 const actor = breakGlassActor(app, req);
                 if (!actor) return json(res, 403, { ok: false, error: "Break-Glass session required." });
-                if (req.method === "GET" && url.pathname === "/api/break-glass/mfa/status") {
+                if (mfaStatus) {
                     return json(res, 200, { ok: true, recoveryCodes: recoveryCodes.status(actor), passkeys: { configured: false, active: 0, enforcement: "not-enabled" } });
                 }
-                if (req.method === "POST" && url.pathname === "/api/break-glass/mfa/recovery-codes/rotate") {
+                if (recoveryRotate) {
                     const body = await readBody(req);
                     const count = Math.max(5, Math.min(20, Number(body.count || 10)));
                     const codes = recoveryCodes.generate(actor, count);
@@ -151,13 +154,10 @@ function registerAuthHardening(app, config) {
                     app.securityCenter.audit("breakglass.recovery_codes.rotated", actor, { count: codes.length, revokedSessions });
                     return json(res, 200, { ok: true, codes, shownOnce: true, revokedSessions });
                 }
-                if (req.method === "DELETE" && url.pathname === "/api/break-glass/mfa/recovery-codes") {
-                    continuityPolicy.assertCanRevokeRecoveryCodes(app.passkeys, recoveryCodes, actor);
-                    const removed = recoveryCodes.revoke(actor);
-                    app.securityCenter.audit("breakglass.recovery_codes.revoked", actor, { removed });
-                    return json(res, 200, { ok: true, removed });
-                }
-                return json(res, 404, { ok: false, error: "Not found." });
+                continuityPolicy.assertCanRevokeRecoveryCodes(app.passkeys, recoveryCodes, actor);
+                const removed = recoveryCodes.revoke(actor);
+                app.securityCenter.audit("breakglass.recovery_codes.revoked", actor, { removed });
+                return json(res, 200, { ok: true, removed });
             }
 
             return false;
