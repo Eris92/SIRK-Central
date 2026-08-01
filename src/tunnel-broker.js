@@ -79,8 +79,23 @@ function create(options) {
     }, 20000);
     if (heartbeat.unref) heartbeat.unref();
 
-    return { attach, list, request };
+    function close() {
+        clearInterval(heartbeat);
+        for (const [id, waiter] of pending) {
+            clearTimeout(waiter.timer);
+            pending.delete(id);
+            waiter.reject(new Error("Portal broker is shutting down."));
+        }
+        for (const state of connections.values()) {
+            try {
+                if (typeof state.socket.terminate === "function") state.socket.terminate();
+                else state.socket.close(1001, "Central is shutting down.");
+            } catch (_) { /* best effort during shutdown */ }
+        }
+        connections.clear();
+    }
+
+    return { attach, list, request, close };
 }
 
 module.exports = { create };
-
