@@ -1,6 +1,6 @@
 FROM node:22-alpine
 
-RUN apk add --no-cache bash git docker-cli docker-cli-compose curl python3 tar
+RUN apk add --no-cache age bash git docker-cli docker-cli-compose curl python3 tar
 WORKDIR /opt/sirk-central
 COPY updater/server.js /app/server.js
 COPY updater/appliance-server.js /app/appliance-server.js
