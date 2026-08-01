@@ -20,31 +20,26 @@ const { registerTickets } = require("./modules/tickets");
 
 const { VERSION } = require("./version");
 
-function createCentralRuntime(config, options = {}) {
+function createCentralRuntime(config) {
     const app = createApplication(config);
     const modules = [
-        ["break-glass-ui", registerBreakGlassUi],
-        ["workspace-authorization", registerWorkspaceAuthorization],
-        ["webauthn-authentication", registerWebAuthnAuthentication],
-        ["passkey-management", registerPasskeyManagement],
-        ["webauthn-attestation", registerWebAuthnAttestation],
-        ["ui-assets", registerUiAssets],
-        ["continuity", registerContinuity],
-        ["maintenance", registerMaintenance],
-        ["portal-telemetry", registerPortalTelemetry],
-        ["administration", registerAdministration],
-        ["security-api", registerSecurityApi],
-        ["approvals", registerApprovals],
-        ["portal-commands", registerPortalCommands],
-        ["tickets", registerTickets],
-        ["auth-hardening", registerAuthHardening]
+        registerAuthHardening,
+        registerBreakGlassUi,
+        registerWorkspaceAuthorization,
+        registerWebAuthnAuthentication,
+        registerPasskeyManagement,
+        registerWebAuthnAttestation,
+        registerUiAssets,
+        registerContinuity,
+        registerMaintenance,
+        registerPortalTelemetry,
+        registerAdministration,
+        registerSecurityApi,
+        registerApprovals,
+        registerPortalCommands,
+        registerTickets
     ];
-    const through = String(options.through || "");
-    for (const [id, register] of modules) {
-        register(app, config);
-        if (through && id === through) break;
-    }
-    if (through && !modules.some(([id]) => id === through)) throw new Error("Unknown runtime module: " + through);
+    for (const register of modules) register(app, config);
     app.version = VERSION;
     return attachRuntimeLifecycle(app);
 }
