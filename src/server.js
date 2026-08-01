@@ -3,6 +3,7 @@
 const { loadConfig, createApplication } = require("./application");
 const { attachRuntimeLifecycle } = require("./runtime-lifecycle");
 const { registerAuthHardening } = require("./modules/auth-hardening");
+const { registerCanonicalLoginRoute } = require("./modules/canonical-login-route");
 const { registerBreakGlassUi } = require("./modules/break-glass-ui");
 const { registerBackupAgeKeyManagement } = require("./modules/backup-age-key-management");
 const { registerApplianceManagement } = require("./modules/appliance-management");
@@ -27,6 +28,7 @@ function createCentralRuntime(config) {
     const app = createApplication(config);
     const modules = [
         registerAuthHardening,
+        registerCanonicalLoginRoute,
         registerBreakGlassUi,
         registerBackupAgeKeyManagement,
         registerApplianceManagement,
