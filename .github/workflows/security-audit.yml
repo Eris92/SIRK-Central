@@ -134,7 +134,11 @@ jobs:
             'central-data:/var/lib/sirk-central:ro',
             'profiles: ["maintenance"]','restart: "no"'
           ]) if (!compose.includes(expected)) throw new Error('Compose security boundary missing: ' + expected);
-          const managerBlock = compose.slice(compose.indexOf('  backup-manager:'), compose.indexOf('  caddy:'));
+          const managerStart = compose.indexOf('\n  backup-manager:\n');
+          const managerEnd = compose.indexOf('\n  caddy:\n', managerStart + 1);
+          const managerBlock = managerStart >= 0 && managerEnd > managerStart
+            ? compose.slice(managerStart, managerEnd)
+            : '';
           if (!managerBlock || managerBlock.includes('/var/run/docker.sock') || !managerBlock.includes('read_only: true')) {
             throw new Error('Backup manager isolation boundary is invalid.');
           }
