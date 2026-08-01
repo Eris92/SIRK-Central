@@ -23,7 +23,7 @@ Ten sam entrypoint jest używany przez `package.json`, obraz Central, CI, Securi
 
 Usunięto alternatywne i historyczne ścieżki:
 
-- `server-v1.js`–`server-v15.js`;
+- wszystkie wersjonowane warstwy serwera;
 - stary `entry.js` oraz równoległe serwery hardened/production;
 - preload podmieniający `http.createServer` lub `require.cache`;
 - store’y i API z sufiksem `-v2`;
