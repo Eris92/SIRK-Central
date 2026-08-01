@@ -28,6 +28,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          sha256sum -c <<'CHECKS'
+          ea8b22f049cc2e31c63af1b5ea7ad74191bc2037e18da8adb75881b10d31ce8e  .flat-runtime-payload/part-00
+          70fa61a05925bb7ab5ab4689080eb827c80f3dd9aaef79b50c4a8aa7b67751d0  .flat-runtime-payload/part-01
+          6a8c2b11a856611fd6cd10090979dc3eb5f3284d786d6a44d3744072ecfee944  .flat-runtime-payload/part-02
+          1857ff39f0a7272f7cd5aaa243deb3e8981a31622d561a08e8d4c804e27191de  .flat-runtime-payload/part-03
+          b60bc0655df489a2ecaf692c52560d4ed8aca1747fb2ac73a0a06206ed1cee9c  .flat-runtime-payload/part-04
+          58aabcb0aeb924905fc435aacaf7a822087e2348faa420bd1eb0551049b48816  .flat-runtime-payload/part-05
+          8dd85dbc3b6d8bcf8a178ddcf4f29fc0e515006a2df437edc75ebf5bcb7d8132  .flat-runtime-payload/part-06
+          CHECKS
+
           cat .flat-runtime-payload/part-* | base64 -d > /tmp/payload.tar.xz
           echo '499ee9078bd690bc4cb75a9e0fdba22e862020ee29d4d51457d70503c6e299ac  /tmp/payload.tar.xz' | sha256sum -c -
 
