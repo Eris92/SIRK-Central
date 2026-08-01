@@ -9,14 +9,14 @@ function request(method, headers = {}, cookie = "") {
     return { method, headers: Object.assign({ cookie }, headers) };
 }
 
-test("CSRF validation requires matching cookie and header for mutating API calls", () => {
+test("CSRF validation requires matching cookie and header for browser session mutations", () => {
     const token = "a".repeat(43);
     const config = { publicOrigin: "https://central.sirkportal.com" };
     const req = request("POST", {
         origin: config.publicOrigin,
         "sec-fetch-site": "same-origin",
         "x-sirk-csrf": token
-    }, "sirk_central_csrf=" + token);
+    }, "sirk_central_session=session-token; sirk_central_csrf=" + token);
 
     assert.equal(csrfRequired(req, new URL("https://local/api/organizations/tenants")), true);
     assert.equal(csrfAccepted(req, config, parseCookies(req)), true);
@@ -25,18 +25,23 @@ test("CSRF validation requires matching cookie and header for mutating API calls
     assert.equal(csrfAccepted(req, config, parseCookies(req)), false);
 });
 
-test("login and safe methods are exempt while cross-site requests are rejected", () => {
+test("anonymous, login and machine protocol requests preserve their own authentication semantics", () => {
+    const anonymous = request("POST");
+    assert.equal(csrfRequired(anonymous, new URL("https://local/api/approvals/submit")), false);
+    assert.equal(csrfRequired(request("POST"), new URL("https://local/api/login")), false);
+    assert.equal(csrfRequired(request("POST"), new URL("https://local/api/login/mfa/recovery")), true);
+    assert.equal(csrfRequired(request("POST"), new URL("https://local/api/portal/v1/heartbeat")), false);
+    assert.equal(csrfRequired(request("GET"), new URL("https://local/api/security/overview")), false);
+});
+
+test("cross-site requests are rejected", () => {
     const token = "c".repeat(43);
     const config = { publicOrigin: "https://central.sirkportal.com" };
-    const login = request("POST");
-    assert.equal(csrfRequired(login, new URL("https://local/api/login")), false);
-    assert.equal(csrfRequired(request("GET"), new URL("https://local/api/security/overview")), false);
-
     const crossSite = request("DELETE", {
         origin: "https://evil.example",
         "sec-fetch-site": "cross-site",
         "x-sirk-csrf": token
-    }, "sirk_central_csrf=" + token);
+    }, "sirk_central_session=session-token; sirk_central_csrf=" + token);
     assert.equal(csrfAccepted(crossSite, config, parseCookies(crossSite)), false);
 });
 
