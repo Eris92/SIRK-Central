@@ -29,16 +29,35 @@ jobs:
         run: |
           set -euo pipefail
           sha256sum -c <<'CHECKS'
-          ea8b22f049cc2e31c63af1b5ea7ad74191bc2037e18da8adb75881b10d31ce8e  .flat-runtime-payload/part-00
+          5a9c491ce2bcb6ae64bd94b650f040640dde69b72bedaacf344d7816443f52b1  .flat-runtime-payload/fix00-0
+          9bd5153a93252af910c949526a116f77c70c07a5326d923d9da501d909d116b8  .flat-runtime-payload/f00b-00
+          f9fd8065ee921b13b0cd33feb09dd1650aff68d4e74d1dc0c99ee64d730969da  .flat-runtime-payload/f00b-01
           70fa61a05925bb7ab5ab4689080eb827c80f3dd9aaef79b50c4a8aa7b67751d0  .flat-runtime-payload/part-01
           6a8c2b11a856611fd6cd10090979dc3eb5f3284d786d6a44d3744072ecfee944  .flat-runtime-payload/part-02
           1857ff39f0a7272f7cd5aaa243deb3e8981a31622d561a08e8d4c804e27191de  .flat-runtime-payload/part-03
-          b60bc0655df489a2ecaf692c52560d4ed8aca1747fb2ac73a0a06206ed1cee9c  .flat-runtime-payload/part-04
+          62afde037db5c448c10af94f2e64b897f32fbcbcb9854e9a416597ce720c71ca  .flat-runtime-payload/f04a-00
+          09a6dd39cfe320883c931ff4f7f66551e43462b6c20a278037e062d8b9e38  .flat-runtime-payload/f04a-01
+          456e14ba347e3faea2021deac7ebfbc1a19c341ebd88e0781c8d07593b20ff69  .flat-runtime-payload/f04b-00
+          628603e66d288b52f01f58a74007ac181313269dd966818a713425c0a6457521  .flat-runtime-payload/f04b-01
           58aabcb0aeb924905fc435aacaf7a822087e2348faa420bd1eb0551049b48816  .flat-runtime-payload/part-05
           8dd85dbc3b6d8bcf8a178ddcf4f29fc0e515006a2df437edc75ebf5bcb7d8132  .flat-runtime-payload/part-06
           CHECKS
 
-          cat .flat-runtime-payload/part-* | base64 -d > /tmp/payload.tar.xz
+          cat \
+            .flat-runtime-payload/fix00-0 \
+            .flat-runtime-payload/f00b-00 \
+            .flat-runtime-payload/f00b-01 \
+            .flat-runtime-payload/part-01 \
+            .flat-runtime-payload/part-02 \
+            .flat-runtime-payload/part-03 \
+            .flat-runtime-payload/f04a-00 \
+            .flat-runtime-payload/f04a-01 \
+            .flat-runtime-payload/f04b-00 \
+            .flat-runtime-payload/f04b-01 \
+            .flat-runtime-payload/part-05 \
+            .flat-runtime-payload/part-06 \
+            | base64 -d > /tmp/payload.tar.xz
+
           echo '499ee9078bd690bc4cb75a9e0fdba22e862020ee29d4d51457d70503c6e299ac  /tmp/payload.tar.xz' | sha256sum -c -
 
           rm -rf /tmp/flat-apply
