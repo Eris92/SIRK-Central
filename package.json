@@ -8,7 +8,7 @@
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "pretest": "node scripts/validate-runtime-architecture.js",
-    "test": "node --test",
+    "test": "node --test test/*.test.js",
     "check:syntax": "find deploy scripts -maxdepth 1 -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n && find src updater scripts public test -type f -name '*.js' -print0 | xargs -0 -n1 node --check && python3 -m py_compile scripts/validate-backup-archive.py && node scripts/validate-runtime-architecture.js",
     "check:architecture": "node scripts/validate-runtime-architecture.js",
     "check": "npm run check:syntax && npm test"
