@@ -15,7 +15,7 @@ function registerUiAssets(app, config) {
         publicPath("access-url-cleanup.js"),
         publicPath("passkey-ui.js"), publicPath("passkey-ui-polish.js"), publicPath("passkey-list-cleanup.js"),
         publicPath("operations-ui.js"), publicPath("operations-actions.js"), publicPath("central-ux.js"), publicPath("operations-bootstrap.js"),
-        publicPath("update-status-resilience.js"), publicPath("audit-ui.js"), publicPath("dashboard-css-loader.js"), publicPath("dashboard-ui.js"),
+        publicPath("update-status-resilience.js"), publicPath("appliance-system-ui.js"), publicPath("audit-ui.js"), publicPath("dashboard-css-loader.js"), publicPath("dashboard-ui.js"),
         publicPath("admin-tools-css-loader.js"), publicPath("admin-tools-ui.js"), publicPath("security-sessions-ui.js"),
         publicPath("approval-center-ui.js"), publicPath("portal-operations-ui.js"), publicPath("portal-monitoring-ui.js"), publicPath("tickets-ui.js"),
         publicPath("backup-age-ui.js")

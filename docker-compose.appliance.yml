@@ -2,6 +2,7 @@ services:
   updater:
     profiles: !reset []
     restart: unless-stopped
+    command: ["node", "/app/appliance-server.js"]
     environment:
       SIRK_UPDATER_SCRIPT: /opt/sirk-central/deploy/appliance-web-update.sh
       SIRK_COMPOSE_FILE: /opt/sirk-central/docker-compose.yml
