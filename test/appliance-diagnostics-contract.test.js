@@ -33,7 +33,7 @@ test("diagnostics stay on the allowlisted updater gateway", () => {
     assert.throws(() => updaterOrigin({ env: {
         SIRK_UPDATER_ORIGIN: "http://169.254.169.254/latest",
         SIRK_UPDATER_ALLOWED_HOSTS: "updater-gateway"
-    }));
+    } }));
 });
 
 test("worker diagnostics expose operational metadata without environment or secret values", () => {
