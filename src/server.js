@@ -17,6 +17,7 @@ const { registerSecurityApi } = require("./modules/security-api");
 const { registerApprovals } = require("./modules/approvals");
 const { registerPortalCommands } = require("./modules/portal-commands");
 const { registerTickets } = require("./modules/tickets");
+const { registerPortalTunnel } = require("./modules/portal-tunnel");
 
 const { VERSION } = require("./version");
 
@@ -37,7 +38,8 @@ function createCentralRuntime(config) {
         registerSecurityApi,
         registerApprovals,
         registerPortalCommands,
-        registerTickets
+        registerTickets,
+        registerPortalTunnel
     ];
     for (const register of modules) register(app, config);
     app.version = VERSION;
