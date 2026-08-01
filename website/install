@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+SOURCE="${SIRK_INSTALL_SOURCE:-https://raw.githubusercontent.com/Eris92/SIRK-Central/main/deploy/appliance-install.sh}"
+TMP="$(mktemp /tmp/sirk-central-install.XXXXXX)"
+cleanup() { rm -f -- "$TMP"; }
+trap cleanup EXIT
+
+curl -fsSL --proto '=https' --tlsv1.2 "$SOURCE" -o "$TMP"
+chmod 0700 "$TMP"
+exec bash "$TMP"
