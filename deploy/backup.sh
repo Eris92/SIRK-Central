@@ -15,6 +15,7 @@ cleanup() {
   [[ -d "${TARGET}" ]] && rm -rf -- "${TARGET}"
   [[ -f "${ARCHIVE}.partial" ]] && rm -f -- "${ARCHIVE}.partial"
   [[ -f "${ARCHIVE}.age.partial" ]] && rm -f -- "${ARCHIVE}.age.partial"
+  return 0
 }
 trap cleanup EXIT
 
