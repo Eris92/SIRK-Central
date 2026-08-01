@@ -29,12 +29,56 @@ async function request(origin, route, options = {}) {
     return { response, payload };
 }
 
-function registrationAuthenticatorData(rpId) {
-    const data = Buffer.alloc(37);
-    crypto.createHash("sha256").update(rpId, "utf8").digest().copy(data, 0);
-    data[32] = 0x45;
-    data.writeUInt32BE(0, 33);
-    return data;
+function cborLength(major, value) {
+    if (value < 24) return Buffer.from([(major << 5) | value]);
+    if (value <= 0xff) return Buffer.from([(major << 5) | 24, value]);
+    if (value <= 0xffff) {
+        const output = Buffer.alloc(3);
+        output[0] = (major << 5) | 25;
+        output.writeUInt16BE(value, 1);
+        return output;
+    }
+    const output = Buffer.alloc(5);
+    output[0] = (major << 5) | 26;
+    output.writeUInt32BE(value, 1);
+    return output;
+}
+
+function cbor(value) {
+    if (Number.isInteger(value)) return cborLength(value >= 0 ? 0 : 1, value >= 0 ? value : -1 - value);
+    if (Buffer.isBuffer(value)) return Buffer.concat([cborLength(2, value.length), value]);
+    if (typeof value === "string") {
+        const data = Buffer.from(value, "utf8");
+        return Buffer.concat([cborLength(3, data.length), data]);
+    }
+    if (value instanceof Map) {
+        const values = [];
+        for (const [key, item] of value.entries()) values.push(cbor(key), cbor(item));
+        return Buffer.concat([cborLength(5, value.size), ...values]);
+    }
+    throw new TypeError("Unsupported CBOR test value.");
+}
+
+function registrationAttestationObject(rpId, credentialId, jwk) {
+    const credentialBytes = Buffer.from(credentialId, "base64url");
+    const rpHash = crypto.createHash("sha256").update(rpId, "utf8").digest();
+    const fixed = Buffer.alloc(23);
+    fixed[0] = 0x45;
+    fixed.writeUInt32BE(0, 1);
+    fixed.writeUInt16BE(credentialBytes.length, 21);
+    const coseKey = cbor(new Map([
+        [1, 2],
+        [3, -7],
+        [-1, 1],
+        [-2, Buffer.from(jwk.x, "base64url")],
+        [-3, Buffer.from(jwk.y, "base64url")]
+    ]));
+    const authData = Buffer.concat([rpHash, fixed, credentialBytes, coseKey]);
+    return cbor(new Map([
+        ["fmt", "none"],
+        ["attStmt", new Map()],
+        ["authData", authData]
+    ])).toString("base64url");
 }
 
 test("BreakGlass can register, list and revoke an ES256 passkey", async t => {
@@ -104,7 +148,7 @@ test("BreakGlass can register, list and revoke an ES256 passkey", async t => {
     assert.equal(begin.payload.publicKey.pubKeyCredParams[0].alg, -7);
 
     const pair = crypto.generateKeyPairSync("ec", { namedCurve: "prime256v1" });
-    const publicKey = pair.publicKey.export({ format: "der", type: "spki" }).toString("base64url");
+    const jwk = pair.publicKey.export({ format: "jwk" });
     const credentialId = crypto.randomBytes(32).toString("base64url");
     const clientDataJSON = Buffer.from(JSON.stringify({
         type: "webauthn.create",
@@ -122,9 +166,7 @@ test("BreakGlass can register, list and revoke an ES256 passkey", async t => {
             credential: {
                 credentialId,
                 clientDataJSON,
-                authenticatorData: registrationAuthenticatorData("central.example.test").toString("base64url"),
-                publicKey,
-                publicKeyAlgorithm: -7,
+                attestationObject: registrationAttestationObject("central.example.test", credentialId, jwk),
                 transports: ["usb"]
             }
         }
