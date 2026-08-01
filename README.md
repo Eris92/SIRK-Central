@@ -3,13 +3,13 @@
 SIRK Central jest wielotenantowym management plane dla instalacji SIRK Portal.
 
 ```text
-Branch: main
+Canonical branch: main
 Runtime: src/server.js
-Version: 1.0.0-rc.25
+Version: 1.0.0-rc.26
 Storage: single-writer file-backed
 ```
 
-`main` jest jedyną kanoniczną gałęzią wdrożeniową. Wersja pozostaje RC do czasu pełnego CI oraz testów na rzeczywistym VPS.
+`main` pozostaje jedyną kanoniczną gałęzią wdrożeniową. Wersja pozostaje RC do czasu zakończenia walidacji środowiskowej na nieprodukcyjnym VPS.
 
 ## Jeden runtime
 
@@ -19,20 +19,20 @@ Jedynym entrypointem aplikacji jest:
 src/server.js
 ```
 
-Ten sam plik jest wskazany przez `package.json`, oba Dockerfile, CI, Security Audit i acceptance test.
+Ten sam entrypoint jest używany przez `package.json`, obraz Central, CI, Security Audit i acceptance test.
 
-Usunięto alternatywne i nieużywane ścieżki:
+Usunięto alternatywne i historyczne ścieżki:
 
-- stary `entry.js` i równoległy `server.js`;
-- preload podmieniający `http.createServer`;
-- preload podmieniający moduł przez `require.cache`;
-- stare wrappery `server-hardened` i `server-production`;
+- `server-v1.js`–`server-v15.js`;
+- stary `entry.js` oraz równoległe serwery hardened/production;
+- preload podmieniający `http.createServer` lub `require.cache`;
+- store’y i API z sufiksem `-v2`;
 - duplikat persistent session map;
 - legacy `start:legacy`;
-- starą nazwę resetu administratora;
-- helper pokazujący wpisywane hasło oraz redundantny generator klucza.
+- stare helpery resetu administratora i generowania sekretów;
+- etapowe uruchamianie części runtime.
 
-Central używa jednego płaskiego runtime: `src/server.js`, `src/application.js`, wspólnego transportu HTTP i nazwanych modułów w `src/modules/`.
+Central używa jednego serwera HTTP, jednego handlera WebSocket upgrade, wspólnego transportu HTTP i nazwanych modułów w `src/modules/`.
 
 ## Główne mechanizmy
 
@@ -40,22 +40,23 @@ Central używa jednego płaskiego runtime: `src/server.js`, `src/application.js`
 - BreakGlass z Access URL;
 - passkeys/WebAuthn, YubiKey i recovery codes;
 - trwałe hashowane sesje z idle i absolute expiry;
-- globalna walidacja CSRF, Origin i Sec-Fetch-Site;
+- CSRF dla mutacji sesji przeglądarkowej oraz osobna podpisana granica protokołu Portal;
 - RBAC oraz rozdzielenie Admin/SecAdmin;
 - tamper-evident audit;
 - Approval Center z exact-scope i single-use approvals;
 - podpisany protokół Portal heartbeat/telemetry/commands;
+- tunel Portal z RBAC, izolacją cookies i przepisywaniem ścieżek;
 - cooperative command cancellation;
 - provider-independent ticket projection;
 - fail-fast single-writer runtime lock;
-- updater gateway oddzielony od uprzywilejowanego workera maintenance.
+- updater gateway oddzielony od uprzywilejowanego workera maintenance;
+- izolowany backup manager bez Docker socketu.
 
 ## Canonical Compose
 
-Zawsze używaj obu plików:
+Jedyną definicją stacku jest:
 
 ```text
-docker-compose.yml
 docker-compose.yml
 ```
 
@@ -69,7 +70,7 @@ backup-manager
 caddy
 ```
 
-Rootowy worker `updater` istnieje wyłącznie w profilu `maintenance` i nie może działać po zakończeniu operacji.
+`backup-manager` nie publikuje portów, nie montuje Docker socketu i widzi dane Central tylko do odczytu. Rootowy worker `updater` istnieje wyłącznie w profilu `maintenance` i nie może działać po zakończeniu operacji.
 
 ## Instalacja
 
@@ -112,11 +113,11 @@ Obie operacje:
 ```bash
 npm ci
 npm run check:syntax
-npm test
+SIRK_CONCURRENCY_TEST_REQUESTS=24 npm test
 npm audit --omit=dev --audit-level=high
 ```
 
-`npm run check:syntax` oraz `npm test` uruchamiają także audyt braku legacy runtime.
+`npm run check:syntax` oraz `npm test` uruchamiają walidator płaskiej architektury i odrzucają powrót legacy runtime.
 
 VPS acceptance:
 
@@ -134,7 +135,7 @@ Dane znajdują się w `/var/lib/sirk-central`. Runtime utrzymuje fail-fast lease
 /var/lib/sirk-central/.sirk-central-runtime.lock/owner.json
 ```
 
-Druga instancja na tym samym file-backed storage nie uruchomi się. Active-active będzie wymagało transakcyjnej bazy danych i distributed locking.
+Druga instancja na tym samym file-backed storage nie uruchomi się. Active-active będzie wymagało transakcyjnej bazy danych i distributed locking; nie jest częścią bieżącego zakresu RC.
 
 ## Dokumentacja
 
