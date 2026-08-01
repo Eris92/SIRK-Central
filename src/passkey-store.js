@@ -30,7 +30,8 @@ function create(options) {
     let state = { version: 1, credentials: {} };
     try {
         const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
-        if (parsed && parsed.version === 1 && parsed.credentials) state = parsed;
+        if (!parsed || parsed.version !== 1 || !parsed.credentials || typeof parsed.credentials !== "object") throw new Error("Passkey store has an unsupported schema.");
+        state = parsed;
     } catch (error) {
         if (error.code !== "ENOENT") throw error;
     }

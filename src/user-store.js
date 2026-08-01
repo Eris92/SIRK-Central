@@ -40,10 +40,10 @@ function create(options) {
     function read() {
         if (!fs.existsSync(storePath)) return emptyRegistry();
         const value = JSON.parse(fs.readFileSync(storePath, "utf8"));
-        if (!value || ![1, 2].includes(value.schema) || !Array.isArray(value.localUsers) || typeof value.entraRoles !== "object") throw new Error("User registry has an unsupported format.");
-        value.schema = 2; value.breakGlassPasswordHash ||= ""; value.accessKeyHash ||= "";
+        if (!value || value.schema !== 2 || !Array.isArray(value.localUsers) || !value.entraRoles || typeof value.entraRoles !== "object") throw new Error("User registry has an unsupported schema.");
+        value.breakGlassPasswordHash ||= ""; value.accessKeyHash ||= "";
         for (const [key, raw] of Object.entries(value.entraRoles)) {
-            if (!raw || typeof raw !== "object" || Array.isArray(raw)) value.entraRoles[key] = { role: typeof raw === "string" ? raw : null };
+            if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("Entra role record has an unsupported schema: " + key);
             const item = value.entraRoles[key];
             item.claimedRoles = normalizeClaimRoles(item.claimedRoles);
             item.requestedRole ||= null;
@@ -124,22 +124,7 @@ function create(options) {
             if (!canAssignRole(actor, normalizedRole, user.role)) throw new Error("You are not allowed to change this role.");
             user.role = normalizedRole;
         } else {
-            const key = normalizeIdentityKey(identity.key); const current = registry.entraRoles[key];
-            if (!current) throw new Error("Entra identity must sign in once before a role can be assigned.");
-            if (PRIVILEGED_ROLES.has(normalizedRole)) {
-                if (current.requestedRole === normalizedRole) {
-                    if (!approvalAllowed(actor, normalizedRole, key)) throw new Error("You are not allowed to approve this privileged role.");
-                    current.role = normalizedRole; current.approvedRole = normalizedRole; current.requestedRole = null; current.status = "active"; current.roleSource = "entra-approved";
-                    current.approvedAtUtc = new Date().toISOString(); current.approvedBy = actor.builtIn ? "BreakGlass" : actor.identityKey || actor.username;
-                } else {
-                    if (!actor.builtIn) throw new Error("A privileged Entra role can only be assigned without a pending request by Break-Glass.");
-                    current.role = normalizedRole; current.roleSource = "manual"; current.status = "active"; current.requestedRole = null; current.approvedRole = null;
-                }
-            } else {
-                if (!canAssignRole(actor, normalizedRole, current.role)) throw new Error("You are not allowed to change this role.");
-                current.role = normalizedRole; current.roleSource = "manual"; current.status = "active"; current.requestedRole = null; current.approvedRole = null;
-            }
-            current.enabled = true; current.roleAssignedAtUtc = new Date().toISOString();
+            throw new Error("Entra roles are managed by application role claims and the approval workflow.");
         }
         write(registry); return { source:identity.source, key:identity.key, role:normalizedRole };
     }

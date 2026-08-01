@@ -18,8 +18,8 @@ function store(t) {
     t.after(() => fs.rmSync(dataDir, { recursive:true, force:true }));
     return userStoreFactory.create({ dataDir });
 }
-const breakGlass = { builtIn:true, role:"BreakGlass", username:"admin" };
-const secAdmin = { builtIn:false, role:"SecAdmin", identityKey:TID + ":" + OTHER, username:"secadmin" };
+const breakGlass = { builtIn:true, role:"BreakGlass", username:"admin", status:"active", source:"local" };
+const secAdmin = { builtIn:false, role:"SecAdmin", identityKey:TID + ":" + OTHER, username:"secadmin", status:"active", source:"entra" };
 
  test("Auth Broker forwards only supported unique application roles", () => {
     assert.deepEqual(normalizeAppRoles(["Auditor", "Auditor", "Unknown", "Admin"]), ["Auditor", "Admin"]);
@@ -80,11 +80,11 @@ test("removing an Entra-derived role revokes it on next sign-in", t => {
     assert.equal(state.status, "pending");
 });
 
-test("manual standard role remains a controlled fallback without App Role", t => {
+test("Entra identities without App Roles cannot receive a manual fallback role", t => {
     const users = store(t);
     users.resolveEntra(KEY, {}, []);
-    users.updateRole({ source:"entra", key:KEY }, "Auditor", breakGlass);
-    const state = users.resolveEntra(KEY, {}, []);
-    assert.equal(state.role, "Auditor");
-    assert.equal(state.roleSource, "manual");
+    assert.throws(
+        () => users.updateRole({ source:"entra", key:KEY }, "Auditor", breakGlass),
+        /managed by application role claims/i
+    );
 });

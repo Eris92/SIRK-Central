@@ -9,7 +9,6 @@ function isSensitiveWrite(method, pathname) {
         "/api/settings/update/run",
         "/api/settings/update/rollback",
         "/api/settings/backup/run",
-        "/api/settings/backup/run-v2",
         "/api/settings/backup/restore"
     ].includes(route)) return true;
     if (verb === "PUT" && [

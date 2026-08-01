@@ -1,23 +1,14 @@
 "use strict";
 
-const http = require("node:http");
-const policy = require("./mfa-continuity-policy");
-const auditStoreFactory = require("./audit-store");
-const { createRuntimeApp } = require("./server-v7");
-const { loadConfig } = require("./server-v1");
-const { hasPermission, identityActive } = require("./rbac");
+const { parseCookies, csrfAccepted, json, readBody } = require("../http/transport");
 
-const VERSION = "1.0.0-rc.21";
+const policy = require("../mfa-continuity-policy");
+const auditStoreFactory = require("../audit-store");
+const { hasPermission, identityActive } = require("../rbac");
+
+const { VERSION } = require("../version");
 const UPDATER_STATIC_PATHS = new Set(["/status", "/run", "/backup/status", "/backup/run", "/backup/restore"]);
 
-function parseCookies(req) {
-    const result = {};
-    for (const part of String(req.headers.cookie || "").split(";")) {
-        const index = part.indexOf("=");
-        if (index > 0) result[part.slice(0, index).trim()] = part.slice(index + 1).trim();
-    }
-    return result;
-}
 function sessionActor(app, req) {
     const token = parseCookies(req).sirk_central_session || "";
     return token && app.sessions ? app.sessions.get(token, true) : null;
@@ -26,50 +17,6 @@ function breakGlassActor(app, req) {
     const actor = sessionActor(app, req);
     if (!actor || actor.builtIn !== true || actor.source !== "local" || actor.role !== "BreakGlass") return null;
     return actor;
-}
-function csrfAccepted(req, config) {
-    const cookies = parseCookies(req);
-    const cookie = String(cookies.sirk_central_csrf || "");
-    const supplied = String(req.headers["x-sirk-csrf"] || "");
-    if (!/^[A-Za-z0-9_-]{32,128}$/.test(cookie) || supplied !== cookie) return false;
-    const origin = String(req.headers.origin || "");
-    if (origin && origin !== config.publicOrigin) return false;
-    const site = String(req.headers["sec-fetch-site"] || "");
-    return !site || site === "same-origin" || site === "none";
-}
-function json(res, status, body) {
-    const data = Buffer.from(JSON.stringify(body));
-    res.writeHead(status, {
-        "Content-Type": "application/json; charset=utf-8",
-        "Content-Length": String(data.length),
-        "Cache-Control": "no-store",
-        "X-Content-Type-Options": "nosniff",
-        "X-Frame-Options": "DENY",
-        "Referrer-Policy": "no-referrer"
-    });
-    res.end(data);
-}
-function readBody(req, limit = 65536) {
-    return new Promise((resolve, reject) => {
-        const chunks = [];
-        let size = 0;
-        let settled = false;
-        req.on("data", chunk => {
-            if (settled) return;
-            size += chunk.length;
-            if (size > limit) {
-                settled = true;
-                reject(Object.assign(new Error("Request body is too large."), { statusCode: 413 }));
-                req.resume();
-            } else chunks.push(chunk);
-        });
-        req.on("end", () => {
-            if (settled) return;
-            try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}")); }
-            catch (_) { reject(Object.assign(new Error("Invalid JSON body."), { statusCode: 400 })); }
-        });
-        req.on("error", error => { if (!settled) reject(error); });
-    });
 }
 function providerAccess(app, req) {
     const actor = sessionActor(app, req);
@@ -165,12 +112,9 @@ function deny(app, req, res, action, category, message) {
     return json(res, 403, { ok: false, error: message });
 }
 
-function createContinuityApp(config) {
-    const app = createRuntimeApp(config);
-    app.auditStore = auditStoreFactory.create({ dataDir: config.dataDir, maxEvents: Number(config.env.SIRK_AUDIT_MAX_EVENTS || 10000) });
-    const inner = app.server.listeners("request")[0];
-    if (typeof inner !== "function") throw new Error("SIRK Central v7 request handler is unavailable.");
-    const server = http.createServer(async (req, res) => {
+function registerContinuity(app, config) {
+    app.auditStore = auditStoreFactory.create({ dataDir: config.dataDir, maxEvents: Number(config.env.SIRK_AUDIT_MAX_EVENTS || 10000), integrityKey: config.env.SIRK_AUDIT_INTEGRITY_KEY });
+    const handler = async (req, res) => {
         try {
             const url = new URL(req.url, "http://central.local");
             const passkeyDelete = url.pathname.match(/^\/api\/break-glass\/passkeys\/([A-Za-z0-9_-]{16,512})$/);
@@ -274,7 +218,7 @@ function createContinuityApp(config) {
                 const continuity = Boolean(app.passkeys && app.recoveryCodes && app.providerStore && app.auditStore);
                 if (!continuity) return json(res, 503, { ok: false, version: VERSION, checks: { mfaContinuityPolicy: false, identityProviderStore: Boolean(app.providerStore), auditStore: Boolean(app.auditStore) } });
             }
-            return inner(req, res);
+            return false;
         } catch (error) {
             audit(app, req, {
                 action: "request.failed",
@@ -287,19 +231,14 @@ function createContinuityApp(config) {
             if (!res.headersSent) return json(res, status, { ok: false, code: error.code || (status >= 500 ? "INTERNAL_ERROR" : "REQUEST_REJECTED"), error: message });
             res.destroy(error);
         }
-    });
-    server.on("upgrade", (req, socket, head) => app.server.emit("upgrade", req, socket, head));
-    return Object.assign({}, app, { server, version: VERSION });
-}
-
-if (require.main === module) {
-    const config = loadConfig(process.env);
-    const app = createContinuityApp(config);
-    app.server.listen(config.port, config.bindHost, () => process.stdout.write("SIRK Central v8 listening on " + config.bindHost + ":" + config.port + "\n"));
+    };
+    app.router.prepend(handler);
+    Object.assign(app, { version: VERSION });
+    return app
 }
 
 module.exports = {
-    createContinuityApp,
+    registerContinuity,
     VERSION,
     parseCookies,
     breakGlassActor,

@@ -8,7 +8,7 @@ CEL: Kontynuuj autonomicznie audyt, testy i rozwój projektu SIRK Central jak co
 Repozytorium:
 - GitHub: Eris92/SIRK-Central
 - Branch: main
-- Kanoniczny runtime: src/server-v15.js
+- Kanoniczny runtime: src/server.js
 - Wersja: 1.0.0-rc.25
 
 WAŻNE:
@@ -25,7 +25,7 @@ Najpierw przeczytaj:
 - docs/SECURITY-AUDIT-2026-07-31.md
 
 Zweryfikuj:
-1. package.json, Dockerfile i Dockerfile.portal-runtime wskazują src/server-v15.js.
+1. package.json, Dockerfile i Dockerfile wskazują src/server.js.
 2. npm run check:legacy przechodzi.
 3. Nie istnieją alternatywne entrypointy: src/entry.js, src/server.js, preloady i stare wrappery runtime.
 4. deploy/reset-breakglass-password.sh i deploy/rotate-access-key.sh są jedynymi procedurami recovery.
@@ -73,5 +73,5 @@ Pracuj autonomicznie. Aktualizuj dokumentację po zmianach. Nie twierdź, że te
 ## Krótsza wersja
 
 ```text
-Kontynuuj autonomicznie SIRK Central z repo Eris92/SIRK-Central na main. Kanoniczny runtime to src/server-v15.js, wersja 1.0.0-rc.25. Przeczytaj README i docs/CURRENT-STATUS.md. Nie dotykaj repo SIRK Portal. Najpierw sprawdź workflow i uruchom npm run check:syntax, npm test oraz npm audit. Nie przywracaj usuniętego legacy runtime. Następnie wykonaj VPS acceptance, backup/restore, update/rollback, Portal simulator, Entra, YubiKey, TLS i UI.
+Kontynuuj autonomicznie SIRK Central z repo Eris92/SIRK-Central na main. Kanoniczny runtime to src/server.js, wersja 1.0.0-rc.25. Przeczytaj README i docs/CURRENT-STATUS.md. Nie dotykaj repo SIRK Portal. Najpierw sprawdź workflow i uruchom npm run check:syntax, npm test oraz npm audit. Nie przywracaj usuniętego legacy runtime. Następnie wykonaj VPS acceptance, backup/restore, update/rollback, Portal simulator, Entra, YubiKey, TLS i UI.
 ```

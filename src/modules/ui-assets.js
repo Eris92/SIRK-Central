@@ -1,27 +1,15 @@
 "use strict";
 
+const { securityHeaders, json } = require("../http/transport");
+
 const fs = require("node:fs");
-const http = require("node:http");
 const path = require("node:path");
-const { createAttestationApp } = require("./server-v6");
-const { loadConfig } = require("./server-v1");
 
-const VERSION = "1.0.0-rc.24";
+const { VERSION } = require("../version");
 
-function securityHeaders() {
-    return { "X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY", "Referrer-Policy": "no-referrer", "Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-Resource-Policy": "same-origin", "Strict-Transport-Security": "max-age=31536000; includeSubDomains" };
-}
-function json(res, status, body) {
-    const data = Buffer.from(JSON.stringify(body));
-    res.writeHead(status, Object.assign(securityHeaders(), { "Content-Type": "application/json; charset=utf-8", "Content-Length": String(data.length), "Cache-Control": "no-store" }));
-    res.end(data);
-}
 
-function createRuntimeApp(config) {
-    const app = createAttestationApp(config);
-    const inner = app.server.listeners("request")[0];
-    if (typeof inner !== "function") throw new Error("SIRK Central v6 request handler is unavailable.");
-    const publicPath = name => path.join(__dirname, "..", "public", name);
+function registerUiAssets(app, config) {
+    const publicPath = name => path.join(__dirname, "..", "..", "public", name);
     const bridgePath = publicPath("passkey-attestation-bridge.js");
     const scriptPaths = [
         publicPath("access-url-cleanup.js"),
@@ -32,7 +20,7 @@ function createRuntimeApp(config) {
         publicPath("approval-center-ui.js"), publicPath("portal-operations-ui.js"), publicPath("portal-monitoring-ui.js"), publicPath("tickets-ui.js")
     ];
     const stylePaths = [publicPath("dashboard-ui.css"), publicPath("admin-tools-ui.css"), publicPath("portal-monitoring-ui.css"), publicPath("tickets-ui.css")];
-    const server = http.createServer((req, res) => {
+    const handler = (req, res) => {
         try {
             const url = new URL(req.url, "http://central.local");
             if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/passkey-ui.js") {
@@ -51,16 +39,16 @@ function createRuntimeApp(config) {
                 const checks = { passkeyStore: Boolean(app.passkeys && app.passkeys.filePath), webauthnChallenges: Boolean(app.webauthnChallenges && app.webauthnChallenges.filePath), loginTransactions: Boolean(app.loginTransactions && app.loginTransactions.filePath), passkeyUi: [bridgePath, ...scriptPaths].every(fs.existsSync), uiStyles: stylePaths.every(fs.existsSync), attestationBridge: fs.existsSync(bridgePath), attestationParser: true };
                 const ok = Object.values(checks).every(Boolean); return json(res, ok ? 200 : 503, { ok, version: VERSION, checks });
             }
-            return inner(req, res);
+            return false;
         } catch (error) {
-            process.stderr.write("[server-v7] " + String(error.stack || error) + "\n");
+            process.stderr.write("[central] " + String(error.stack || error) + "\n");
             if (!res.headersSent) return json(res, 500, { ok: false, error: "Internal server error." });
             res.destroy(error);
         }
-    });
-    server.on("upgrade", (req, socket, head) => app.server.emit("upgrade", req, socket, head));
-    return Object.assign({}, app, { server, version: VERSION });
+    };
+    app.router.prepend(handler);
+    Object.assign(app, { version: VERSION });
+    return app
 }
 
-if (require.main === module) { const config = loadConfig(process.env); const app = createRuntimeApp(config); app.server.listen(config.port, config.bindHost, () => process.stdout.write("SIRK Central v7 listening on " + config.bindHost + ":" + config.port + "\n")); }
-module.exports = { createRuntimeApp, VERSION };
+module.exports = { registerUiAssets, VERSION };

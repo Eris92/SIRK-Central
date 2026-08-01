@@ -7,7 +7,8 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 const { hashSecret, hashAccessKey } = require("../src/security");
-const { createFinalApp } = require("../src/server-v5");
+const { createCentralRuntime } = require("../src/server");
+const createFinalApp = config => createCentralRuntime(config, { through: "passkey-management" });
 
 function cookieValue(headers, name) {
     const values = typeof headers.getSetCookie === "function" ? headers.getSetCookie() : [headers.get("set-cookie") || ""];
@@ -56,11 +57,11 @@ test("BreakGlass passkey assertion issues a session and rejects replay", async t
         adminUsername: "admin",
         adminPasswordHash: hashSecret(password),
         accessKeyHash: hashAccessKey(accessKey),
-        dataDir,
         sessionIdleMinutes: 30,
         sessionAbsoluteHours: 8,
         trustProxy: false,
-        env: { NODE_ENV: "test" }
+        dataDir,
+        env: { NODE_ENV: "test", SIRK_RUNTIME_LOCK_DISABLED: "true", SIRK_AUDIT_INTEGRITY_KEY: "K".repeat(48) }
     };
 
     const app = createFinalApp(config);
@@ -155,7 +156,6 @@ test("BreakGlass passkey assertion issues a session and rejects replay", async t
             challengeId: begin.payload.challengeId,
             credential: {
                 credentialId,
-                rawId: credentialId,
                 clientDataJSON: encodedClient,
                 authenticatorData: authData.toString("base64url"),
                 signature
@@ -179,7 +179,7 @@ test("BreakGlass passkey assertion issues a session and rejects replay", async t
         body: {
             transactionToken: pending.payload.transactionToken,
             challengeId: begin.payload.challengeId,
-            credential: { credentialId, rawId: credentialId, clientDataJSON: encodedClient, authenticatorData: authData.toString("base64url"), signature }
+            credential: { credentialId, clientDataJSON: encodedClient, authenticatorData: authData.toString("base64url"), signature }
         }
     });
     assert.notEqual(replay.response.status, 200);

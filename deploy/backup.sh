@@ -9,7 +9,7 @@ REQUIRE_ENCRYPTION="${SIRK_BACKUP_REQUIRE_ENCRYPTION:-auto}"
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 TARGET="${BACKUP_ROOT}/${TIMESTAMP}"
 ARCHIVE="${BACKUP_ROOT}/sirk-central-${TIMESTAMP}.tar.gz"
-COMPOSE=(docker compose -f docker-compose.yml -f docker-compose.portal-runtime.yml --profile auth)
+COMPOSE=(docker compose -f docker-compose.yml --profile auth)
 
 cleanup() {
   [[ -d "${TARGET}" ]] && rm -rf -- "${TARGET}"

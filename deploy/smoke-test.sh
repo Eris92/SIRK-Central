@@ -5,7 +5,6 @@ umask 077
 INSTALL_DIR="${SIRK_INSTALL_DIR:-/opt/sirk-central}"
 PUBLIC_ORIGIN="${SIRK_PUBLIC_ORIGIN:-https://central.sirkportal.com}"
 BASE_COMPOSE_FILE="${SIRK_COMPOSE_FILE:-docker-compose.yml}"
-RUNTIME_COMPOSE_FILE="${SIRK_RUNTIME_COMPOSE_FILE:-docker-compose.portal-runtime.yml}"
 RESTART_TEST="${SIRK_SMOKE_RESTART:-1}"
 BACKUP_TEST="${SIRK_SMOKE_BACKUP:-0}"
 TIMEOUT_SECONDS="${SIRK_SMOKE_TIMEOUT_SECONDS:-180}"
@@ -15,12 +14,12 @@ fail() { printf '[smoke] ERROR: %s\n' "$*" >&2; exit 1; }
 for command in docker curl node; do command -v "$command" >/dev/null 2>&1 || fail "$command is required"; done
 [[ -d "$INSTALL_DIR" ]] || fail "missing install directory: $INSTALL_DIR"
 [[ -f "$INSTALL_DIR/$BASE_COMPOSE_FILE" ]] || fail "missing Compose file: $BASE_COMPOSE_FILE"
-[[ -f "$INSTALL_DIR/$RUNTIME_COMPOSE_FILE" ]] || fail "missing runtime overlay: $RUNTIME_COMPOSE_FILE"
+[[ -f "$INSTALL_DIR/$BASE_COMPOSE_FILE" ]] || fail "missing canonical Compose file: $BASE_COMPOSE_FILE"
 [[ -f "$INSTALL_DIR/.env" ]] || fail "missing production .env"
 
 cd "$INSTALL_DIR"
-COMPOSE=(docker compose -f "$BASE_COMPOSE_FILE" -f "$RUNTIME_COMPOSE_FILE" --profile auth)
-MAINTENANCE_COMPOSE=(docker compose -f "$BASE_COMPOSE_FILE" -f "$RUNTIME_COMPOSE_FILE" --profile auth --profile maintenance)
+COMPOSE=(docker compose -f "$BASE_COMPOSE_FILE" --profile auth)
+MAINTENANCE_COMPOSE=(docker compose -f "$BASE_COMPOSE_FILE" --profile auth --profile maintenance)
 SERVICES=(central auth updater-gateway backup-manager caddy)
 
 log "validating canonical Compose configuration"
@@ -128,7 +127,7 @@ grep -qi '^x-content-type-options: nosniff' "$HEADERS_FILE" || fail "X-Content-T
 if [[ "$BACKUP_TEST" == "1" ]]; then
   [[ "$(id -u)" -eq 0 ]] || fail "backup smoke test requires root"
   log "creating and validating backup archive"
-  OUTPUT="$(SIRK_INSTALL_DIR="$INSTALL_DIR" SIRK_COMPOSE_FILE="$BASE_COMPOSE_FILE" SIRK_RUNTIME_COMPOSE_FILE="$RUNTIME_COMPOSE_FILE" deploy/backup.sh)"
+  OUTPUT="$(SIRK_INSTALL_DIR="$INSTALL_DIR" SIRK_COMPOSE_FILE="$BASE_COMPOSE_FILE"  deploy/backup.sh)"
   ARCHIVE="${OUTPUT##*: }"
   [[ -f "$ARCHIVE" ]] || fail "backup archive was not created"
   [[ ! -f "$ARCHIVE.sha256" ]] || (cd "$(dirname "$ARCHIVE")" && sha256sum -c "$(basename "$ARCHIVE.sha256")") >/dev/null

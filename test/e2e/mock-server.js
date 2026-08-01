@@ -177,7 +177,7 @@ const server = http.createServer(async (req, res) => {
             if (req.method !== "GET" && !requireCsrf(req, res)) return;
             return json(res, 200, { ok: true, policy: { enabled: true, hour: 2, minute: 0, retention: 10, minimumAgeHours: 20, timeZone: "Europe/Warsaw" }, status: { nextRunAtUtc: new Date(Date.now() + 86400000).toISOString() } });
         }
-        if (url.pathname === "/api/system/info") return json(res, 200, { ok: true, version: "1.0.0-rc.21", runtime: "server-v15", node: process.version, uptimeSeconds: 100, backupManager: true });
+        if (url.pathname === "/api/system/info") return json(res, 200, { ok: true, version: "1.0.0-rc.21", runtime: "central", node: process.version, uptimeSeconds: 100, backupManager: true });
         if (url.pathname === "/api/audit" || url.pathname.startsWith("/api/audit?")) return json(res, 200, { ok: true, events: [{ id: "evt", timestampUtc: new Date().toISOString(), action: "test.event", category: "system", result: "success", actor: { username: "admin", role: "BreakGlass" }, request: { ip: "127.0.0.1" }, details: {}, hash: "hash" }], integrity: { ok: true, count: 1 } });
         if (url.pathname === "/api/security/sessions") return json(res, 200, { ok: true, sessions: [{ id: "current-session", username: "admin", displayName: "Administrator", role: "BreakGlass", source: "local", ip: "127.0.0.1", userAgent: "Playwright", createdAtUtc: new Date().toISOString(), lastSeenAtUtc: new Date().toISOString(), idleExpiresAtUtc: new Date(Date.now() + 1800000).toISOString(), absoluteExpiresAtUtc: new Date(Date.now() + 28800000).toISOString(), current: true }] });
 

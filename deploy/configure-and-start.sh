@@ -4,7 +4,6 @@ umask 077
 
 INSTALL_DIR="${SIRK_INSTALL_DIR:-/opt/sirk-central}"
 BASE_COMPOSE_FILE="${SIRK_COMPOSE_FILE:-docker-compose.yml}"
-RUNTIME_COMPOSE_FILE="${SIRK_RUNTIME_COMPOSE_FILE:-docker-compose.portal-runtime.yml}"
 PROFILE="${SIRK_COMPOSE_PROFILE:-auth}"
 
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
@@ -16,7 +15,7 @@ require docker
 cd "$INSTALL_DIR"
 
 [[ -f "$BASE_COMPOSE_FILE" ]] || fail "Missing Compose file: $INSTALL_DIR/$BASE_COMPOSE_FILE"
-[[ -f "$RUNTIME_COMPOSE_FILE" ]] || fail "Missing runtime overlay: $INSTALL_DIR/$RUNTIME_COMPOSE_FILE"
+[[ -f "$BASE_COMPOSE_FILE" ]] || fail "Missing canonical Compose file: $INSTALL_DIR/$BASE_COMPOSE_FILE"
 if [[ -f compose.yaml && "$BASE_COMPOSE_FILE" != "compose.yaml" ]]; then
   echo "Disabling obsolete compose.yaml to prevent Docker Compose selecting the wrong stack."
   mv compose.yaml compose.yaml.disabled
@@ -58,13 +57,13 @@ docker run --rm -it \
 [[ -s .env ]] || fail "Configuration file was not created."
 chmod 0600 .env
 
-COMPOSE=(docker compose -f "$BASE_COMPOSE_FILE" -f "$RUNTIME_COMPOSE_FILE" --profile "$PROFILE")
+COMPOSE=(docker compose -f "$BASE_COMPOSE_FILE" --profile "$PROFILE")
 SERVICES=(central auth updater-gateway backup-manager caddy)
 
 printf 'Validating canonical Compose stack...\n'
 "${COMPOSE[@]}" config >/dev/null
 
-printf 'Building and starting canonical v15 services without Docker socket access...\n'
+printf 'Building and starting canonical flat runtime services without Docker socket access...\n'
 "${COMPOSE[@]}" up -d --build --remove-orphans "${SERVICES[@]}"
 "${COMPOSE[@]}" ps "${SERVICES[@]}"
 
@@ -73,7 +72,7 @@ for service in central auth updater-gateway backup-manager; do
   [[ -n "$container_id" ]] || fail "Service $service was not created."
 done
 
-if [[ -n "$(docker compose -f "$BASE_COMPOSE_FILE" -f "$RUNTIME_COMPOSE_FILE" --profile "$PROFILE" --profile maintenance ps -q updater)" ]]; then
+if [[ -n "$(docker compose -f "$BASE_COMPOSE_FILE" --profile "$PROFILE" --profile maintenance ps -q updater)" ]]; then
   fail "Privileged updater worker is unexpectedly running outside a maintenance window."
 fi
 

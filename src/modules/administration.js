@@ -1,25 +1,11 @@
 "use strict";
 
-const http = require("node:http");
-const { createPortalRuntime } = require("./server-v10");
-const { loadConfig } = require("./server-v1");
-const { parseCookies } = require("./server-v8");
-const { identityActive } = require("./rbac");
+const { json, parseCookies, csrfAccepted, readBody } = require("../http/transport");
 
-const VERSION = "1.0.0-rc.16";
+const { identityActive } = require("../rbac");
 
-function json(res, status, body) {
-    const data = Buffer.from(JSON.stringify(body));
-    res.writeHead(status, {
-        "Content-Type": "application/json; charset=utf-8",
-        "Content-Length": String(data.length),
-        "Cache-Control": "no-store",
-        "X-Content-Type-Options": "nosniff",
-        "X-Frame-Options": "DENY",
-        "Referrer-Policy": "no-referrer"
-    });
-    res.end(data);
-}
+const { VERSION } = require("../version");
+
 function sessionActor(app, req) {
     const token = parseCookies(req).sirk_central_session || "";
     return token && app.sessions ? app.sessions.get(token, true) : null;
@@ -29,38 +15,6 @@ function canRead(actor) {
 }
 function canWrite(actor) {
     return Boolean(identityActive(actor) && (actor.builtIn === true || actor.role === "Admin"));
-}
-function csrfAccepted(req, config) {
-    const cookies = parseCookies(req);
-    const cookie = String(cookies.sirk_central_csrf || "");
-    const supplied = String(req.headers["x-sirk-csrf"] || "");
-    if (!/^[A-Za-z0-9_-]{32,128}$/.test(cookie) || supplied !== cookie) return false;
-    const origin = String(req.headers.origin || "");
-    if (origin && origin !== config.publicOrigin) return false;
-    const site = String(req.headers["sec-fetch-site"] || "");
-    return !site || site === "same-origin" || site === "none";
-}
-function readBody(req, limit = 32768) {
-    return new Promise((resolve, reject) => {
-        const chunks = [];
-        let size = 0;
-        let settled = false;
-        req.on("data", chunk => {
-            if (settled) return;
-            size += chunk.length;
-            if (size > limit) {
-                settled = true;
-                reject(Object.assign(new Error("Request body is too large."), { statusCode: 413 }));
-                req.resume();
-            } else chunks.push(chunk);
-        });
-        req.on("end", () => {
-            if (settled) return;
-            try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}")); }
-            catch (_) { reject(Object.assign(new Error("Invalid JSON body."), { statusCode: 400 })); }
-        });
-        req.on("error", error => { if (!settled) reject(error); });
-    });
 }
 function managerOrigin(config) {
     const value = String(config.env.SIRK_BACKUP_MANAGER_ORIGIN || "http://backup-manager:8091").replace(/\/+$/, "");
@@ -107,12 +61,9 @@ function csvEscape(value) {
     return '"' + String(text).replace(/"/g, '""') + '"';
 }
 
-function createAdminRuntime(config) {
-    const app = createPortalRuntime(config);
-    const inner = app.server.listeners("request")[0];
-    if (typeof inner !== "function") throw new Error("SIRK Central v10 request handler is unavailable.");
+function registerAdministration(app, config) {
 
-    const server = http.createServer(async (req, res) => {
+    const handler = async (req, res) => {
         try {
             const url = new URL(req.url, "http://central.local");
             const actor = sessionActor(app, req);
@@ -130,13 +81,7 @@ function createAdminRuntime(config) {
                 audit(app, "backup.policy_updated", actor, req, { policy: result.policy, removed: result.removed });
                 return json(res, 200, result);
             }
-            if (req.method === "POST" && url.pathname === "/api/settings/backup/run-v2") {
-                if (!canWrite(actor)) return json(res, actor ? 403 : 401, { ok: false, error: actor ? "Permission denied." : "Authentication required." });
-                if (!csrfAccepted(req, config)) return json(res, 403, { ok: false, error: "CSRF validation failed." });
-                const result = await managerRequest(config, "/run", { method: "POST", body: JSON.stringify(await readBody(req)) });
-                audit(app, "backup.created", actor, req, { backup: result.backup, removed: result.removed });
-                return json(res, 201, result);
-            }
+
             const backupDownload = url.pathname.match(/^\/api\/settings\/backup\/([^/]+)\/download$/);
             if (req.method === "GET" && backupDownload) {
                 if (!canRead(actor)) return json(res, actor ? 403 : 401, { ok: false, error: actor ? "Permission denied." : "Authentication required." });
@@ -213,32 +158,27 @@ function createAdminRuntime(config) {
                 return json(res, 200, {
                     ok: true,
                     version: VERSION,
-                    runtime: "server-v11",
+                    runtime: "central",
                     node: process.version,
                     uptimeSeconds: Math.floor(process.uptime()),
                     backupManager: Boolean(update),
                     generatedAtUtc: new Date().toISOString()
                 });
             }
-            return inner(req, res);
+            return false;
         } catch (error) {
             const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
             const message = status >= 500 ? "Internal server error." : error.message || "Request failed.";
             if (!res.headersSent) return json(res, status, { ok: false, code: error.code || (status >= 500 ? "INTERNAL_ERROR" : "REQUEST_REJECTED"), error: message });
             res.destroy(error);
         }
-    });
-    server.requestTimeout = 30000;
-    server.headersTimeout = 15000;
-    server.keepAliveTimeout = 5000;
-    server.on("upgrade", (req, socket, head) => app.server.emit("upgrade", req, socket, head));
-    return Object.assign({}, app, { server, version: VERSION });
+    };
+    app.server.requestTimeout = 30000;
+    app.server.headersTimeout = 15000;
+    app.server.keepAliveTimeout = 5000;
+    app.router.prepend(handler);
+    Object.assign(app, { version: VERSION });
+    return app
 }
 
-if (require.main === module) {
-    const config = loadConfig(process.env);
-    const app = createAdminRuntime(config);
-    app.server.listen(config.port, config.bindHost, () => process.stdout.write("SIRK Central v11 listening on " + config.bindHost + ":" + config.port + "\n"));
-}
-
-module.exports = { createAdminRuntime, VERSION, canRead, canWrite, managerOrigin };
+module.exports = { registerAdministration, VERSION, canRead, canWrite, managerOrigin };

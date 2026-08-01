@@ -9,7 +9,7 @@ ALLOW_LEGACY="${SIRK_RESTORE_ALLOW_LEGACY_WITHOUT_CHECKSUM:-false}"
 WORK_DIR=""
 SAFETY_DIR=""
 ROLLBACK_ARMED=false
-COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.portal-runtime.yml)
+COMPOSE_FILES=(-f docker-compose.yml)
 PROFILE_ARGS=(--profile auth --profile maintenance)
 BASE_SERVICES=(central auth updater-gateway backup-manager caddy)
 BUILD_SERVICES=(central auth updater-gateway updater backup-manager)
@@ -75,7 +75,7 @@ rollback() {
   local safety_commit
   safety_commit="$(tr -d '[:space:]' < "$SAFETY_DIR/commit.txt")"
   git reset --hard "$safety_commit" || return 1
-  [[ -f docker-compose.portal-runtime.yml && -f updater/Dockerfile.gateway ]] || return 1
+  [[ -f docker-compose.yml && -f updater/Dockerfile.gateway ]] || return 1
   compose build "${BUILD_SERVICES[@]}" || return 1
   replace_volume_data "$SAFETY_DIR/data" || return 1
   compose rm -sf updater >/dev/null 2>&1 || true
@@ -139,14 +139,14 @@ TARGET_COMMIT="$(tr -d '[:space:]' < "$BACKUP_DIR/commit.txt")"
 [[ "$TARGET_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]] || fail "Backup commit is invalid."
 
 cd "$INSTALL_DIR"
-[[ -f docker-compose.yml && -f docker-compose.portal-runtime.yml ]] || fail "Canonical Compose files are missing."
+[[ -f docker-compose.yml ]] || fail "Canonical Compose files are missing."
 
 log "Fetching and validating target commit before stopping services"
 git fetch --prune origin
 git cat-file -e "$TARGET_COMMIT^{commit}" || fail "Backup commit is unavailable."
 for required_path in \
-  Dockerfile.portal-runtime docker-compose.yml docker-compose.portal-runtime.yml \
-  src/server-v15.js updater/Dockerfile.gateway updater/gateway-server.js; do
+  Dockerfile docker-compose.yml \
+  src/server.js updater/Dockerfile.gateway updater/gateway-server.js; do
   git cat-file -e "$TARGET_COMMIT:$required_path" || fail "Backup commit is missing: $required_path"
 done
 
@@ -161,7 +161,7 @@ log "Restoring repository and configuration"
 cp -- "$BACKUP_DIR/.env" .env
 chmod 0600 .env
 git reset --hard "$TARGET_COMMIT"
-[[ -f docker-compose.portal-runtime.yml && -f updater/Dockerfile.gateway ]] || fail "Target commit is missing canonical runtime files."
+[[ -f docker-compose.yml && -f updater/Dockerfile.gateway ]] || fail "Target commit is missing canonical runtime files."
 
 log "Building restored images"
 compose build "${BUILD_SERVICES[@]}"

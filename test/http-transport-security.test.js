@@ -2,13 +2,8 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const {
-    parseCookies,
-    validToken,
-    csrfRequired,
-    csrfAccepted,
-    securityHeaders
-} = require("../src/server-v2");
+const { parseCookies, validToken, csrfAccepted, securityHeaders } = require("../src/http/transport");
+const { csrfRequired } = require("../src/modules/auth-hardening");
 
 function request(method, headers = {}, cookie = "") {
     return { method, headers: Object.assign({ cookie }, headers) };

@@ -6,7 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 const commandStore = require("../src/portal-command-store");
-const { approvedOperation } = require("../src/server-v14");
+const { approvedOperation } = require("../src/modules/portal-commands");
 
 function temporaryDirectory() { return fs.mkdtempSync(path.join(os.tmpdir(), "sirk-command-")); }
 const actor = { username: "engineer", identityKey: "tenant:engineer", role: "EngineerL3" };
@@ -75,7 +75,7 @@ test("expired and failed commands can be retried while active commands can be ca
     const store = commandStore.create({ dataDir: temporaryDirectory(), now: () => timestamp, randomId: () => "cmd-" + (++counter) });
     const queued = store.enqueue({ portalId: "tenant-site", type: "reconnect", ttlMinutes: 5 }, actor);
     assert.equal(store.cancel(queued.id, actor).state, "cancelled");
-    const retried = store.retry(queued.id, actor);
+    const retried = store.retry(queued.id, actor, { ttlMinutes: 5 });
     assert.equal(retried.state, "queued");
     timestamp += 6 * 60 * 1000;
     store.expire();

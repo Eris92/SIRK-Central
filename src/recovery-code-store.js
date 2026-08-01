@@ -34,7 +34,8 @@ function create(options) {
 
     try {
         const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
-        if (parsed && parsed.version === 1 && parsed.owners) state = parsed;
+        if (!parsed || parsed.version !== 1 || !parsed.owners || typeof parsed.owners !== "object") throw new Error("Recovery code store has an unsupported schema.");
+        state = parsed;
     } catch (error) {
         if (error.code !== "ENOENT") throw error;
     }

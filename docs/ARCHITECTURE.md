@@ -11,7 +11,7 @@ Internet
    |
 Caddy :80/:443
    |
-   +--> Central UI/API (server-v15)
+   +--> Central UI/API (flat runtime)
    +--> Auth broker (profil auth)
 
 Internal network
@@ -27,7 +27,7 @@ SIRK Portal ---- outbound HTTPS/WSS ----> Central
 Kanoniczny entrypoint:
 
 ```text
-src/server-v15.js
+src/server.js
 ```
 
 Nie istnieje drugi produkcyjny entrypoint. `package.json`, oba Dockerfile, CI i acceptance wskazują ten sam plik.
@@ -52,7 +52,7 @@ v2   CSRF, recovery and login transactions
 v1   base stores, API and WebSocket broker
 ```
 
-Pliki v1-v14 są osiągalnymi zależnościami v15, a nie alternatywnymi wdrożeniami. `scripts/validate-no-legacy-runtime.js` buduje graf statycznych `require()` i odrzuca nieosiągalne pliki `server*.js`.
+Pliki v1-v14 są osiągalnymi zależnościami v15, a nie alternatywnymi wdrożeniami. `scripts/validate-runtime-architecture.js` buduje graf statycznych `require()` i odrzuca nieosiągalne pliki `server*.js`.
 
 Usunięte zostały stare `entry.js`, równoległy `server.js`, preloady, wrappery hardened/production oraz duplikat sesji.
 

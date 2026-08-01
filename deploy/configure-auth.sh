@@ -4,7 +4,6 @@ umask 077
 
 INSTALL_DIR="${SIRK_INSTALL_DIR:-/opt/sirk-central}"
 BASE_COMPOSE_FILE="${SIRK_COMPOSE_FILE:-docker-compose.yml}"
-RUNTIME_COMPOSE_FILE="${SIRK_RUNTIME_COMPOSE_FILE:-docker-compose.portal-runtime.yml}"
 
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 [[ "$(id -u)" -eq 0 ]] || fail "Run as root or through sudo."
@@ -12,7 +11,7 @@ fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 [[ -d "$INSTALL_DIR" ]] || fail "Missing installation directory: $INSTALL_DIR"
 cd "$INSTALL_DIR"
 [[ -f .env ]] || fail ".env is missing."
-[[ -f "$BASE_COMPOSE_FILE" && -f "$RUNTIME_COMPOSE_FILE" ]] || fail "Canonical Compose files are missing."
+[[ -f "$BASE_COMPOSE_FILE" ]] || fail "Canonical Compose files are missing."
 
 command -v openssl >/dev/null 2>&1 || {
   apt-get update
@@ -71,8 +70,8 @@ awk '!/^SIRK_AUTH_DOMAIN=|^SIRK_AUTH_ORIGIN=|^SIRK_ENTRA_TENANT=|^SIRK_ENTRA_CLI
 
 chmod 0600 "$TMP"
 # Validate the new file through canonical Compose before replacing production .env.
-COMPOSE=(docker compose -f "$BASE_COMPOSE_FILE" -f "$RUNTIME_COMPOSE_FILE" --profile auth)
-MAINTENANCE_COMPOSE=(docker compose -f "$BASE_COMPOSE_FILE" -f "$RUNTIME_COMPOSE_FILE" --profile auth --profile maintenance)
+COMPOSE=(docker compose -f "$BASE_COMPOSE_FILE" --profile auth)
+MAINTENANCE_COMPOSE=(docker compose -f "$BASE_COMPOSE_FILE" --profile auth --profile maintenance)
 mv .env .env.before-auth
 chmod 0600 .env.before-auth
 mv "$TMP" .env

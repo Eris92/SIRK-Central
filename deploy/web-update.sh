@@ -17,7 +17,7 @@ TARGET_COMMIT=""
 BACKUP_DIR=""
 ROLLBACK_RUNNING=0
 
-IFS=':' read -r -a COMPOSE_FILE_PATHS <<< "${SIRK_COMPOSE_FILES:-${INSTALL_DIR}/docker-compose.yml:${INSTALL_DIR}/docker-compose.portal-runtime.yml}"
+COMPOSE_FILE_PATHS=("${SIRK_COMPOSE_FILE:-${INSTALL_DIR}/docker-compose.yml}")
 COMPOSE_ARGS=()
 for compose_file in "${COMPOSE_FILE_PATHS[@]}"; do
   [[ -n "$compose_file" ]] || continue
@@ -201,8 +201,8 @@ git fetch --prune origin "+refs/heads/${REPO_REF}:refs/remotes/origin/${REPO_REF
 TARGET_COMMIT="$(git rev-parse "origin/${REPO_REF}")"
 [[ "$TARGET_COMMIT" =~ ^[0-9a-f]{40}$ ]]
 for required_path in \
-  Dockerfile.portal-runtime docker-compose.yml docker-compose.portal-runtime.yml \
-  src/server-v15.js updater/Dockerfile.gateway updater/gateway-server.js \
+  Dockerfile docker-compose.yml \
+  src/server.js updater/Dockerfile.gateway updater/gateway-server.js \
   updater/backup-archive.js updater/restore-transaction.js; do
   git cat-file -e "${TARGET_COMMIT}:${required_path}"
 done

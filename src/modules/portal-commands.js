@@ -1,50 +1,14 @@
 "use strict";
 
-const http = require("node:http");
-const { createApprovalRuntime } = require("./server-v13");
-const commandStoreFactory = require("./portal-command-store");
-const rateLimiterFactory = require("./request-rate-limiter");
-const { identityActive } = require("./rbac");
-const { loadConfig } = require("./server-v1");
-const { parseCookies } = require("./server-v8");
+const { json, parseCookies, readBody, csrfAccepted, requestIp } = require("../http/transport");
 
-const VERSION = "1.0.0-rc.21";
+const commandStoreFactory = require("../portal-command-store");
+const rateLimiterFactory = require("../request-rate-limiter");
+const { identityActive } = require("../rbac");
+
+const { VERSION } = require("../version");
 const HIGH_RISK = new Set(["update", "restart", "diagnostics"]);
 
-function json(res, status, body, headers = {}) {
-    const data = Buffer.from(JSON.stringify(body));
-    res.writeHead(status, Object.assign({
-        "Content-Type": "application/json; charset=utf-8",
-        "Content-Length": String(data.length),
-        "Cache-Control": "no-store",
-        "X-Content-Type-Options": "nosniff",
-        "X-Frame-Options": "DENY",
-        "Referrer-Policy": "no-referrer"
-    }, headers));
-    res.end(data);
-}
-function readBody(req, limit = 65536) {
-    return new Promise((resolve, reject) => {
-        const chunks = [];
-        let size = 0;
-        let settled = false;
-        req.on("data", chunk => {
-            if (settled) return;
-            size += chunk.length;
-            if (size > limit) {
-                settled = true;
-                reject(Object.assign(new Error("Request body is too large."), { statusCode: 413 }));
-                req.resume();
-            } else chunks.push(chunk);
-        });
-        req.on("end", () => {
-            if (settled) return;
-            try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}")); }
-            catch (_) { reject(Object.assign(new Error("Invalid JSON body."), { statusCode: 400 })); }
-        });
-        req.on("error", error => { if (!settled) reject(error); });
-    });
-}
 function actorFor(app, req) {
     const token = parseCookies(req).sirk_central_session || "";
     return token && app.sessions ? app.sessions.get(token, true) : null;
@@ -54,16 +18,6 @@ function canRead(actor) {
 }
 function canWrite(actor) {
     return Boolean(identityActive(actor) && (actor.builtIn === true || ["Admin", "SupportL2", "EngineerL3"].includes(actor.role)));
-}
-function csrfAccepted(req, config) {
-    const cookies = parseCookies(req);
-    const cookie = String(cookies.sirk_central_csrf || "");
-    const supplied = String(req.headers["x-sirk-csrf"] || "");
-    if (!/^[A-Za-z0-9_-]{32,128}$/.test(cookie) || supplied !== cookie) return false;
-    const origin = String(req.headers.origin || "");
-    if (origin && origin !== config.publicOrigin) return false;
-    const site = String(req.headers["sec-fetch-site"] || "");
-    return !site || site === "same-origin" || site === "none";
 }
 function portalCredential(req) {
     const authorization = String(req.headers.authorization || "");
@@ -81,13 +35,6 @@ function authenticatePortal(app, req) {
     const credential = portalCredential(req);
     if (!credential || !app.portalRegistry || typeof app.portalRegistry.authenticate !== "function") return null;
     return app.portalRegistry.authenticate(credential.id, credential.token);
-}
-function requestIp(req, config) {
-    if (config.trustProxy) {
-        const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
-        if (forwarded) return forwarded.slice(0, 128);
-    }
-    return String(req.socket && req.socket.remoteAddress || "unknown").slice(0, 128);
 }
 function consumeOrReject(res, limiter, key) {
     const result = limiter.consume(key);
@@ -160,10 +107,7 @@ function validateFilter(filter, commands) {
     if (filter.type && !commands.TYPES.includes(filter.type)) throw Object.assign(new Error("Command type filter is invalid."), { statusCode: 400 });
 }
 
-function createPortalOperationsRuntime(config) {
-    const app = createApprovalRuntime(config);
-    const inner = app.server.listeners("request")[0];
-    if (typeof inner !== "function") throw new Error("SIRK Central v13 request handler is unavailable.");
+function registerPortalCommands(app, config) {
     const commands = commandStoreFactory.create({
         dataDir: config.dataDir,
         maxCommands: Number(config.env.SIRK_PORTAL_COMMAND_MAX || 10000),
@@ -181,7 +125,7 @@ function createPortalOperationsRuntime(config) {
         maxEntries: Number(config.env.SIRK_PORTAL_RATE_LIMIT_MAX_KEYS || 20000)
     });
 
-    const server = http.createServer(async (req, res) => {
+    const handler = async (req, res) => {
         try {
             const url = new URL(req.url, "http://central.local");
 
@@ -205,7 +149,7 @@ function createPortalOperationsRuntime(config) {
                 return json(res, 200, { ok: true, command });
             }
 
-            if (!url.pathname.startsWith("/api/portal-operations")) return inner(req, res);
+            if (!url.pathname.startsWith("/api/portal-operations")) return false;
             const actor = actorFor(app, req);
             if (!actor) return json(res, 401, { ok: false, error: "Authentication required." });
 
@@ -278,19 +222,14 @@ function createPortalOperationsRuntime(config) {
             if (!res.headersSent) return json(res, status, { ok: false, code: error.code || (status >= 500 ? "INTERNAL_ERROR" : "REQUEST_REJECTED"), error: message });
             res.destroy(error);
         }
-    });
-    server.on("upgrade", (req, socket, head) => app.server.emit("upgrade", req, socket, head));
-    return Object.assign({}, app, { server, version: VERSION, portalCommands: commands });
-}
-
-if (require.main === module) {
-    const config = loadConfig(process.env);
-    const app = createPortalOperationsRuntime(config);
-    app.server.listen(config.port, config.bindHost, () => process.stdout.write("SIRK Central v14 listening on " + config.bindHost + ":" + config.port + "\n"));
+    };
+    app.router.prepend(handler);
+    Object.assign(app, { version: VERSION, portalCommands: commands });
+    return app
 }
 
 module.exports = {
-    createPortalOperationsRuntime,
+    registerPortalCommands,
     VERSION,
     HIGH_RISK,
     approvedOperation,

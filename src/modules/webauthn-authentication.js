@@ -1,63 +1,19 @@
 "use strict";
 
+const { parseCookies, json, readBody, requestIp, csrfAccepted } = require("../http/transport");
+
 const crypto = require("node:crypto");
-const http = require("node:http");
-const passkeyStoreFactory = require("./passkey-store");
-const webauthn = require("./webauthn-es256");
-const { verifySecret, verifyAccessKey } = require("./security");
-const { permissionsFor } = require("./rbac");
-const { digest } = require("./login-transaction-store");
-const { createProductionApp } = require("./server-v3");
-const { loadConfig } = require("./server-v1");
+const passkeyStoreFactory = require("../passkey-store");
+const webauthn = require("../webauthn-es256");
+const { verifySecret, verifyAccessKey } = require("../security");
+const { permissionsFor } = require("../rbac");
+const { digest } = require("../login-transaction-store");
 
-const VERSION = "1.0.0-rc.8";
+const { VERSION } = require("../version");
 
-function parseCookies(req) {
-    const result = {};
-    for (const part of String(req.headers.cookie || "").split(";")) {
-        const index = part.indexOf("=");
-        if (index > 0) result[part.slice(0, index).trim()] = part.slice(index + 1).trim();
-    }
-    return result;
-}
 
-function json(res, status, body, headers = {}) {
-    const data = Buffer.from(JSON.stringify(body));
-    res.writeHead(status, Object.assign({
-        "Content-Type": "application/json; charset=utf-8",
-        "Content-Length": String(data.length),
-        "Cache-Control": "no-store",
-        "X-Content-Type-Options": "nosniff"
-    }, headers));
-    res.end(data);
-}
 
-function readBody(req, limit = 65536) {
-    return new Promise((resolve, reject) => {
-        const chunks = [];
-        let size = 0;
-        req.on("data", chunk => {
-            size += chunk.length;
-            if (size > limit) {
-                reject(Object.assign(new Error("Request body is too large."), { statusCode: 413 }));
-                req.destroy();
-            } else chunks.push(chunk);
-        });
-        req.on("end", () => {
-            try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}")); }
-            catch (_) { reject(Object.assign(new Error("Invalid JSON body."), { statusCode: 400 })); }
-        });
-        req.on("error", reject);
-    });
-}
 
-function requestIp(req, config) {
-    if (config.trustProxy) {
-        const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
-        if (forwarded) return forwarded.slice(0, 128);
-    }
-    return String(req.socket.remoteAddress || "unknown").slice(0, 128);
-}
 
 function requestContext(req, config) {
     return { ip: requestIp(req, config), userAgent: String(req.headers["user-agent"] || "").slice(0, 1024) };
@@ -94,16 +50,6 @@ function breakGlassActor(app, req) {
     return actor;
 }
 
-function csrfAccepted(req, config) {
-    const cookies = parseCookies(req);
-    const cookie = String(cookies.sirk_central_csrf || "");
-    const supplied = String(req.headers["x-sirk-csrf"] || "");
-    if (!/^[A-Za-z0-9_-]{32,128}$/.test(cookie) || supplied !== cookie) return false;
-    const origin = String(req.headers.origin || "");
-    if (origin && origin !== config.publicOrigin) return false;
-    const site = String(req.headers["sec-fetch-site"] || "");
-    return !site || site === "same-origin" || site === "none";
-}
 
 function parseClientChallenge(encoded) {
     const raw = Buffer.from(String(encoded || ""), "base64url");
@@ -119,15 +65,12 @@ function rpConfiguration(config) {
     return { origin: origin.origin, rpId: origin.hostname };
 }
 
-function createWebAuthnApp(config) {
-    const app = createProductionApp(config);
-    const innerHandler = app.server.listeners("request")[0];
-    if (typeof innerHandler !== "function") throw new Error("SIRK Central v3 request handler is unavailable.");
+function registerWebAuthnAuthentication(app, config) {
     const passkeys = passkeyStoreFactory.create({ dataDir: config.dataDir });
     const failures = new Map();
     const rp = rpConfiguration(config);
 
-    const server = http.createServer(async (req, res) => {
+    const handler = async (req, res) => {
         try {
             const url = new URL(req.url, "http://central.local");
             const context = requestContext(req, config);
@@ -218,7 +161,7 @@ function createWebAuthnApp(config) {
                 const challengeValue = parseClientChallenge(body.credential && body.credential.clientDataJSON);
                 const challengeContext = app.webauthnChallenges.consume(body.challengeId, challengeValue, "authentication", identity);
                 if (challengeContext.transactionHash !== digest(body.transactionToken)) return json(res, 401, { ok: false, error: "MFA transaction binding failed." });
-                const credential = passkeys.getActive(body.credential && (body.credential.credentialId || body.credential.rawId), identity);
+                const credential = passkeys.getActive(body.credential && body.credential.credentialId, identity);
                 const verified = webauthn.authentication(body.credential || {}, credential, { challenge: challengeValue, origin: challengeContext.origin, rpId: challengeContext.rpId, requireUV: true });
                 const consumedIdentity = app.loginTransactions.consume(body.transactionToken, context);
                 if (!consumedIdentity) return json(res, 401, { ok: false, error: "MFA transaction is invalid or expired." });
@@ -229,21 +172,15 @@ function createWebAuthnApp(config) {
                 return json(res, 200, { ok: true, mfaRequired: false, method: "passkey" }, { "Set-Cookie": sessionCookie(token, config.sessionAbsoluteHours) });
             }
 
-            return innerHandler(req, res);
+            return false;
         } catch (error) {
             if (!res.headersSent) return json(res, error.statusCode || 400, { ok: false, error: error.message || "Request failed." });
             res.destroy(error);
         }
-    });
-
-    server.on("upgrade", (req, socket, head) => app.server.emit("upgrade", req, socket, head));
-    return Object.assign({}, app, { server, passkeys, version: VERSION });
+    };
+    app.router.prepend(handler);
+    Object.assign(app, { passkeys, version: VERSION });
+    return app
 }
 
-if (require.main === module) {
-    const config = loadConfig(process.env);
-    const app = createWebAuthnApp(config);
-    app.server.listen(config.port, config.bindHost, () => process.stdout.write("SIRK Central v4 listening on " + config.bindHost + ":" + config.port + "\n"));
-}
-
-module.exports = { createWebAuthnApp, VERSION };
+module.exports = { registerWebAuthnAuthentication, VERSION };

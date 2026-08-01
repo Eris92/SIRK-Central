@@ -40,7 +40,7 @@ function authenticatorData(value, rpId, requireUV = true) {
 function registration(input, options) {
     const client = clientData(input.clientDataJSON, "webauthn.create", options.challenge, options.origin);
     const auth = authenticatorData(input.authenticatorData, options.rpId, options.requireUV !== false);
-    const credentialId = String(input.credentialId || input.rawId || "");
+    const credentialId = String(input.credentialId || "");
     b64url(credentialId, "credentialId", 16, 1024);
     const publicKeyDer = b64url(input.publicKey, "publicKey", 40, 4096);
     const publicKey = crypto.createPublicKey({ key: publicKeyDer, format: "der", type: "spki" });
@@ -61,7 +61,7 @@ function registration(input, options) {
 function authentication(input, credential, options) {
     const client = clientData(input.clientDataJSON, "webauthn.get", options.challenge, options.origin);
     const auth = authenticatorData(input.authenticatorData, options.rpId, options.requireUV !== false);
-    if (String(input.credentialId || input.rawId || "") !== credential.credentialId) throw new Error("WebAuthn credential ID mismatch.");
+    if (String(input.credentialId || "") !== credential.credentialId) throw new Error("WebAuthn credential ID mismatch.");
     const clientHash = crypto.createHash("sha256").update(client.raw).digest();
     const signed = Buffer.concat([auth.raw, clientHash]);
     const signature = b64url(input.signature, "signature", 8, 1024);

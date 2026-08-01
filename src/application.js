@@ -1,7 +1,10 @@
 "use strict";
 
+const { VERSION } = require("./version");
+
 const fs = require("node:fs");
 const http = require("node:http");
+const routerFactory = require("./http/router");
 const path = require("node:path");
 const { WebSocketServer } = require("ws");
 const { verifySecret, verifyAccessKey, randomToken, hashAccessKey } = require("./security");
@@ -18,7 +21,6 @@ const organizationStoreFactory = require("./organization-store");
 const approvalStoreFactory = require("./approval-store");
 const portalAssignmentStoreFactory = require("./portal-assignment-store");
 const organizationApiFactory = require("./organization-api");
-const approvalApiFactory = require("./approval-api");
 const portalAssignmentApiFactory = require("./portal-assignment-api");
 
 function loadConfig(env = process.env) {
@@ -33,7 +35,7 @@ function loadConfig(env = process.env) {
         accessKeyHash: String(env.SIRK_ACCESS_KEY_HASH || ""),
         dataDir: path.resolve(env.SIRK_DATA_DIR || path.join(process.cwd(), "data")),
         sessionIdleMinutes: Math.max(5, Math.min(1440, Number(env.SIRK_SESSION_IDLE_MINUTES || 30))),
-        sessionAbsoluteHours: Math.max(1, Math.min(168, Number(env.SIRK_SESSION_ABSOLUTE_HOURS || env.SIRK_SESSION_HOURS || 8))),
+        sessionAbsoluteHours: Math.max(1, Math.min(168, Number(env.SIRK_SESSION_ABSOLUTE_HOURS || 8))),
         trustProxy: String(env.SIRK_TRUST_PROXY || "").toLowerCase() === "true",
         env
     };
@@ -45,7 +47,7 @@ function loadConfig(env = process.env) {
     return config;
 }
 
-function createApp(config) {
+function createApplication(config) {
     const portalStore = portalStoreFactory.create({ dataDir: config.dataDir });
     const userStore = userStoreFactory.create({ dataDir: config.dataDir });
     const providerStore = providerStoreFactory.create({ dataDir: config.dataDir, authOrigin: config.authOrigin, env: config.env });
@@ -195,16 +197,14 @@ function createApp(config) {
     };
     const readPortals = async () => broker.list(portalStore.list());
     const organizationApi = organizationApiFactory.create({ store: organizations, readIdentity, securityCenter });
-    const approvalApi = approvalApiFactory.create({ store: approvals, readIdentity, securityCenter });
     const assignmentApi = portalAssignmentApiFactory.create({ store: portalAssignments, organizations, readIdentity, readPortals });
 
     async function handler(req, res) {
         try {
             const url = new URL(req.url, "http://central.local");
-            if (req.method === "GET" && url.pathname === "/healthz") return json(res, 200, { ok: true, version: "1.0" });
+            if (req.method === "GET" && url.pathname === "/healthz") return json(res, 200, { ok: true, version: VERSION });
 
             if (await organizationApi(req, res, url)) return;
-            if (await approvalApi(req, res, url)) return;
             if (await assignmentApi(req, res, url)) return;
 
             if (req.method === "GET" && url.pathname === "/auth/sso/callback") {
@@ -382,8 +382,15 @@ function createApp(config) {
         }
     }
 
-    const server = http.createServer(handler);
-    server.on("upgrade", (req, socket, head) => {
+    const router = routerFactory.create(handler);
+    const server = http.createServer((req, res) => {
+        router.dispatch(req, res).catch(error => {
+            if (!res.headersSent) return json(res, 500, { ok: false, code: "INTERNAL_ERROR", error: "Internal server error." });
+            res.destroy(error);
+        });
+    });
+
+    let upgradeHandler = (req, socket, head) => {
         const url = new URL(req.url, "http://central.local");
         if (url.pathname !== "/tunnel") return socket.destroy();
         const credentials = portalCredentials(req);
@@ -393,15 +400,19 @@ function createApp(config) {
             return socket.destroy();
         }
         wsServer.handleUpgrade(req, socket, head, webSocket => broker.attach(portal, webSocket));
-    });
+    };
+    server.on("upgrade", (req, socket, head) => upgradeHandler(req, socket, head));
 
-    return { server, store: portalStore, portalStore, userStore, providerStore, accessStore, securityCenter, sessions, organizations, approvals, portalAssignments, broker };
+    const app = {
+        server, router, store: portalStore, portalStore, userStore, providerStore, accessStore, securityCenter,
+        sessions, organizations, approvals, portalAssignments, broker,
+        wrapUpgrade(wrapper) {
+            if (typeof wrapper !== "function") throw new TypeError("Upgrade wrapper must be a function.");
+            const previous = upgradeHandler;
+            upgradeHandler = (req, socket, head) => wrapper(req, socket, head, previous);
+        }
+    };
+    return app;
 }
 
-if (require.main === module) {
-    const config = loadConfig(process.env);
-    const app = createApp(config);
-    app.server.listen(config.port, config.bindHost, () => process.stdout.write("SIRK Central v1 listening on " + config.bindHost + ":" + config.port + "\n"));
-}
-
-module.exports = { loadConfig, createApp };
+module.exports = { loadConfig, createApplication };

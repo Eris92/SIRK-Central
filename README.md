@@ -4,7 +4,7 @@ SIRK Central jest wielotenantowym management plane dla instalacji SIRK Portal.
 
 ```text
 Branch: main
-Runtime: src/server-v15.js
+Runtime: src/server.js
 Version: 1.0.0-rc.25
 Storage: single-writer file-backed
 ```
@@ -16,7 +16,7 @@ Storage: single-writer file-backed
 Jedynym entrypointem aplikacji jest:
 
 ```text
-src/server-v15.js
+src/server.js
 ```
 
 Ten sam plik jest wskazany przez `package.json`, oba Dockerfile, CI, Security Audit i acceptance test.
@@ -32,7 +32,7 @@ Usunięto alternatywne i nieużywane ścieżki:
 - starą nazwę resetu administratora;
 - helper pokazujący wpisywane hasło oraz redundantny generator klucza.
 
-Pliki `server-v1.js` do `server-v14.js` nie są alternatywnymi runtime. Są aktywnymi warstwami importowanymi przez `server-v15.js`. Skrypt `scripts/validate-no-legacy-runtime.js` sprawdza ich osiągalność i blokuje dodanie drugiego entrypointu.
+Central używa jednego płaskiego runtime: `src/server.js`, `src/application.js`, wspólnego transportu HTTP i nazwanych modułów w `src/modules/`.
 
 ## Główne mechanizmy
 
@@ -56,7 +56,7 @@ Zawsze używaj obu plików:
 
 ```text
 docker-compose.yml
-docker-compose.portal-runtime.yml
+docker-compose.yml
 ```
 
 Base stack:

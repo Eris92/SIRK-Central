@@ -74,7 +74,7 @@ function verifyRegistration(input, options) {
     const idStart = 55, idEnd = idStart + idLength;
     if (idLength < 16 || idEnd >= authData.length) throw new Error("Attested credential ID is invalid.");
     const credentialId = authData.subarray(idStart, idEnd).toString("base64url");
-    const rawId = String(input.credentialId || input.rawId || "");
+    const rawId = String(input.credentialId || "");
     if (rawId !== credentialId) throw new Error("Attested credential ID mismatch.");
     const decodedKey = decoder(authData.subarray(idEnd));
     const publicKey = coseToSpki(decodedKey.value);

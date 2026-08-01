@@ -65,9 +65,10 @@ test("audit HMAC key rotation or loss is detected", () => {
     const wrong = auditStoreFactory.create({ dataDir, integrityKey: "B".repeat(64) }).verify();
     assert.equal(wrong.ok, false);
     assert.equal(wrong.reason, "event-hash-mismatch");
-    const missing = auditStoreFactory.create({ dataDir, integrityKey: "" }).verify();
-    assert.equal(missing.ok, false);
-    assert.equal(missing.reason, "integrity-key-unavailable");
+    assert.throws(
+        () => auditStoreFactory.create({ dataDir, integrityKey: "" }),
+        /SIRK_AUDIT_INTEGRITY_KEY is required/
+    );
 });
 
 test("audit retention preserves a verifiable anchor chain", () => {
@@ -85,18 +86,20 @@ test("audit retention preserves a verifiable anchor chain", () => {
     assert.equal(persisted.events[0].previousHash, persisted.anchorHash);
 });
 
-test("valid legacy SHA chain migrates to HMAC without losing events", () => {
+test("legacy audit schema is rejected without automatic migration", () => {
     const dataDir = temporaryDirectory();
-    const legacy = auditStoreFactory.create({ dataDir, integrityKey: "" });
-    legacy.append({ action: "legacy.one", category: "test", result: "success" });
-    legacy.append({ action: "legacy.two", category: "test", result: "success" });
-    const migrated = auditStoreFactory.create({ dataDir, integrityKey: "M".repeat(64) });
-    assert.equal(migrated.verify().ok, true);
-    assert.equal(migrated.verify().algorithm, "hmac-sha256");
-    assert.equal(migrated.list({ limit: 10 }).length, 2);
-    const state = JSON.parse(fs.readFileSync(migrated.filePath, "utf8"));
-    assert.equal(state.version, 2);
-    assert.notEqual(state.legacyLastHash, "");
+    fs.mkdirSync(dataDir, { recursive: true });
+    fs.writeFileSync(path.join(dataDir, "audit-events.json"), JSON.stringify({
+        version: 1,
+        algorithm: "sha256",
+        anchorHash: "",
+        events: []
+    }));
+    const store = auditStoreFactory.create({ dataDir, integrityKey: "M".repeat(64) });
+    const verification = store.verify();
+    assert.equal(verification.ok, false);
+    assert.equal(verification.reason, "unsupported-schema");
+    assert.throws(() => store.append({ action: "must-not-migrate" }), /integrity verification failed/i);
 });
 
 test("audit filters by category result and query", () => {

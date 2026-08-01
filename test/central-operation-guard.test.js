@@ -12,7 +12,6 @@ test("destructive Central routes are recognized without covering read-only route
         ["POST", "/api/settings/update/run"],
         ["POST", "/api/settings/update/rollback"],
         ["POST", "/api/settings/backup/run"],
-        ["POST", "/api/settings/backup/run-v2"],
         ["POST", "/api/settings/backup/restore"],
         ["PUT", "/api/settings/backup/policy"],
         ["DELETE", "/api/settings/backup/sirk-central-20260731T120000Z.tar.gz"]

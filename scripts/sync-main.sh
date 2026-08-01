@@ -61,13 +61,13 @@ fi
 node - <<'NODE'
 const pkg = require('./package.json');
 const lock = require('./package-lock.json');
-if (pkg.main !== 'src/server-v15.js') throw new Error('Main sync changed canonical runtime.');
-if (!String(pkg.scripts.start || '').includes('src/server-v15.js')) throw new Error('Main sync changed npm start.');
+if (pkg.main !== 'src/server.js') throw new Error('Main sync changed canonical runtime.');
+if (!String(pkg.scripts.start || '').includes('src/server.js')) throw new Error('Main sync changed npm start.');
 if (pkg.scripts['start:legacy']) throw new Error('Main sync restored the legacy start entrypoint.');
 if (pkg.version !== lock.version || pkg.version !== lock.packages[''].version) throw new Error('Package versions differ after main sync.');
 NODE
 
-node scripts/validate-no-legacy-runtime.js
+node scripts/validate-runtime-architecture.js
 
 printf 'Main synchronization completed.\n'
 printf 'HEAD=%s\n' "$(git rev-parse HEAD)"

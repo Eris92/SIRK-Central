@@ -1,27 +1,12 @@
 "use strict";
 
+const { json, securityHeaders, parseCookies, csrfAccepted } = require("../http/transport");
+
 const fs = require("node:fs");
-const http = require("node:http");
 const path = require("node:path");
-const {
-    createHardenedApp,
-    parseCookies,
-    csrfAccepted,
-    securityHeaders
-} = require("./server-v2");
-const { loadConfig } = require("./server-v1");
 
-const VERSION = "1.0.0-rc.6";
+const { VERSION } = require("../version");
 
-function json(res, status, body) {
-    const data = Buffer.from(JSON.stringify(body));
-    res.writeHead(status, Object.assign({}, securityHeaders(), {
-        "Content-Type": "application/json; charset=utf-8",
-        "Content-Length": String(data.length),
-        "Cache-Control": "no-store"
-    }));
-    res.end(data);
-}
 
 function staticJavaScript(res, filePath, method) {
     const data = fs.readFileSync(filePath);
@@ -33,13 +18,10 @@ function staticJavaScript(res, filePath, method) {
     res.end(method === "HEAD" ? undefined : data);
 }
 
-function createProductionApp(config) {
-    const app = createHardenedApp(config);
-    const innerHandler = app.server.listeners("request")[0];
-    if (typeof innerHandler !== "function") throw new Error("SIRK Central v2 request handler is unavailable.");
+function registerBreakGlassUi(app, config) {
 
-    const mfaUiPath = path.join(__dirname, "..", "public", "break-glass-mfa.js");
-    const server = http.createServer((req, res) => {
+    const mfaUiPath = path.join(__dirname, "..", "..", "public", "break-glass-mfa.js");
+    const handler = (req, res) => {
         try {
             const url = new URL(req.url, "http://central.local");
 
@@ -69,23 +51,15 @@ function createProductionApp(config) {
                 }
             }
 
-            return innerHandler(req, res);
+            return false;
         } catch (error) {
             if (!res.headersSent) return json(res, error.statusCode || 500, { ok: false, error: error.message || "Request failed." });
             res.destroy(error);
         }
-    });
-
-    server.on("upgrade", (req, socket, head) => app.server.emit("upgrade", req, socket, head));
-    return Object.assign({}, app, { server, version: VERSION });
+    };
+    app.router.prepend(handler);
+    Object.assign(app, { version: VERSION });
+    return app
 }
 
-if (require.main === module) {
-    const config = loadConfig(process.env);
-    const app = createProductionApp(config);
-    app.server.listen(config.port, config.bindHost, () => {
-        process.stdout.write("SIRK Central v3 listening on " + config.bindHost + ":" + config.port + "\n");
-    });
-}
-
-module.exports = { createProductionApp, VERSION };
+module.exports = { registerBreakGlassUi, VERSION };

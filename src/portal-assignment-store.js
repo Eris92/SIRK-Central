@@ -23,7 +23,8 @@ function create(options) {
 
     try {
         const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
-        if (parsed && parsed.version === 1 && parsed.assignments) state = parsed;
+        if (!parsed || parsed.version !== 1 || !parsed.assignments || typeof parsed.assignments !== "object") throw new Error("Portal assignment store has an unsupported schema.");
+        state = parsed;
     } catch (error) {
         if (error.code !== "ENOENT") throw error;
     }

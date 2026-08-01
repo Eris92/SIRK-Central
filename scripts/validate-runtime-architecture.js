@@ -5,134 +5,121 @@ const path = require("node:path");
 
 const root = path.resolve(__dirname, "..");
 const srcDir = path.join(root, "src");
-const targetEntry = path.join(srcDir, "server.js");
-const transitionalEntry = path.join(srcDir, "server-v15.js");
-const selfPath = path.resolve(__filename);
-
-// Ratchet: this number may only go down. Each migration step must remove at
-// least one server-vN layer before lowering the budget in the same commit.
-const VERSIONED_LAYER_BUDGET = 15;
-
-const forbiddenPaths = [
+const entry = path.join(srcDir, "server.js");
+const forbiddenFiles = [
     "src/entry.js",
     "src/preload-api.js",
     "src/preload-hardening.js",
     "src/server-hardened.js",
     "src/server-production.js",
     "src/persistent-session-map.js",
-    "test/persistent-session-map.test.js",
+    "src/portal-command-store-v2.js",
+    "src/ticket-projection-store-v2.js",
+    "src/approval-api.js",
+    "src/audit-key-store.js",
+    "src/system-health.js",
     "deploy/reset-admin-password.sh",
     "scripts/hash-password.js",
-    "scripts/generate-access-key.js"
+    "scripts/generate-access-key.js",
+    "Dockerfile.portal-runtime",
+    "docker-compose.portal-runtime.yml",
+    "auth/hardened-server.js"
 ];
-const forbiddenPackageScripts = ["start:legacy", "hash-password", "generate-access-key"];
+const forbiddenText = [
+    "server-v15.js",
+    "server-v1.js",
+    "/api/approvals",
+    "/api/settings/backup/run-v2",
+    "SIRK_SESSION_HOURS",
+    "portal-command-store-v2",
+    "ticket-projection-store-v2",
+    "auth/hardened-server.js"
+];
 
 function fail(message) {
     process.stderr.write("Runtime architecture validation failed: " + message + "\n");
     process.exitCode = 1;
 }
-
-function resolveLocalRequire(fromFile, request) {
+function walk(directory, output = []) {
+    if (!fs.existsSync(directory)) return output;
+    for (const entryValue of fs.readdirSync(directory, { withFileTypes: true })) {
+        const target = path.join(directory, entryValue.name);
+        if (entryValue.isDirectory()) walk(target, output);
+        else if (entryValue.isFile()) output.push(target);
+    }
+    return output;
+}
+function localDependency(fromFile, request) {
     if (!request.startsWith(".")) return null;
     const base = path.resolve(path.dirname(fromFile), request);
-    const candidates = [base, base + ".js", path.join(base, "index.js")];
-    return candidates.find(candidate => fs.existsSync(candidate) && fs.statSync(candidate).isFile()) || null;
+    for (const candidate of [base, base + ".js", path.join(base, "index.js")]) {
+        if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) return candidate;
+    }
+    return null;
 }
-
-function collectRuntimeGraph(entryFile) {
+function graph(entryFile) {
     const visited = new Set();
     const pending = [entryFile];
-    const requirePattern = /require\(\s*["']([^"']+)["']\s*\)/g;
-
+    const pattern = /require\(\s*["']([^"']+)["']\s*\)/g;
     while (pending.length) {
         const file = path.resolve(pending.pop());
         if (visited.has(file)) continue;
         visited.add(file);
         const source = fs.readFileSync(file, "utf8");
-        requirePattern.lastIndex = 0;
+        pattern.lastIndex = 0;
         let match;
-        while ((match = requirePattern.exec(source)) !== null) {
-            const dependency = resolveLocalRequire(file, match[1]);
-            if (dependency && !visited.has(dependency)) pending.push(dependency);
+        while ((match = pattern.exec(source)) !== null) {
+            const dependency = localDependency(file, match[1]);
+            if (dependency && dependency.startsWith(srcDir + path.sep)) pending.push(dependency);
         }
     }
     return visited;
 }
 
-function walk(directory, output = []) {
-    if (!fs.existsSync(directory)) return output;
-    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-        const target = path.join(directory, entry.name);
-        if (entry.isDirectory()) walk(target, output);
-        else if (entry.isFile()) output.push(target);
-    }
-    return output;
+if (!fs.existsSync(entry)) fail("canonical entry src/server.js is missing.");
+const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+if (pkg.main !== "src/server.js") fail("package.json main must be src/server.js.");
+if (String(pkg.scripts && pkg.scripts.start || "") !== "node src/server.js") fail("start script must use only src/server.js.");
+
+for (const file of fs.readdirSync(srcDir)) {
+    if (/^server-v\d+\.js$/.test(file)) fail("versioned server layer still exists: src/" + file);
+}
+for (const relative of forbiddenFiles) {
+    if (fs.existsSync(path.join(root, relative))) fail("obsolete file still exists: " + relative);
 }
 
-for (const relativePath of forbiddenPaths) {
-    if (fs.existsSync(path.join(root, relativePath))) fail("forbidden obsolete file still exists: " + relativePath);
-}
+const productionFiles = walk(srcDir).filter(file => file.endsWith(".js"));
+const createServerOccurrences = productionFiles.reduce((count, file) => {
+    const matches = fs.readFileSync(file, "utf8").match(/\bhttp\.createServer\s*\(/g);
+    return count + (matches ? matches.length : 0);
+}, 0);
+if (createServerOccurrences !== 1) fail("Central must contain exactly one http.createServer(); found " + createServerOccurrences + ".");
 
-const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
-for (const scriptName of forbiddenPackageScripts) {
-    if (packageJson.scripts && packageJson.scripts[scriptName]) fail("package.json exposes obsolete script: " + scriptName);
-}
-
-const versionedLayers = fs.readdirSync(srcDir)
-    .filter(name => /^server-v\d+\.js$/.test(name))
-    .sort((a, b) => Number(a.match(/\d+/)[0]) - Number(b.match(/\d+/)[0]));
-
-if (versionedLayers.length > VERSIONED_LAYER_BUDGET) {
-    fail("versioned runtime layer count increased to " + versionedLayers.length + "; migration budget is " + VERSIONED_LAYER_BUDGET + ".");
-}
-
-let canonicalEntry;
-if (versionedLayers.length === 0) {
-    canonicalEntry = targetEntry;
-    if (!fs.existsSync(targetEntry)) fail("migration is complete but target runtime src/server.js is missing.");
-    if (packageJson.main !== "src/server.js") fail("package.json main must be src/server.js after flattening.");
-    if (!String(packageJson.scripts && packageJson.scripts.start || "").includes("src/server.js")) fail("start script must use src/server.js after flattening.");
-} else {
-    canonicalEntry = transitionalEntry;
-    if (!fs.existsSync(transitionalEntry)) fail("transitional runtime src/server-v15.js is missing before flattening is complete.");
-    if (packageJson.main !== "src/server-v15.js") fail("package.json main must remain on the current transitional entry until src/server.js is complete.");
-    if (!String(packageJson.scripts && packageJson.scripts.start || "").includes("src/server-v15.js")) fail("start script must remain on the current transitional entry until src/server.js is complete.");
-}
-
-const runtimeGraph = fs.existsSync(canonicalEntry) ? collectRuntimeGraph(canonicalEntry) : new Set();
-for (const fileName of versionedLayers) {
-    const absolute = path.join(srcDir, fileName);
-    if (!runtimeGraph.has(absolute)) fail("unreachable versioned runtime debt must be deleted: src/" + fileName);
-}
-
-for (const fileName of fs.readdirSync(srcDir)) {
-    if (!/^server(?:-.*)?\.js$/.test(fileName)) continue;
-    const absolute = path.join(srcDir, fileName);
-    if (!runtimeGraph.has(absolute) && absolute !== targetEntry) {
-        fail("unreachable alternate server implementation: src/" + fileName);
+for (const file of walk(path.join(srcDir, "modules")).filter(value => value.endsWith(".js"))) {
+    const source = fs.readFileSync(file, "utf8");
+    if (source.includes("require.main === module")) fail(path.relative(root, file) + " is an alternate entrypoint.");
+    if (source.includes('listeners("request")') || /\binner(?:Handler)?\s*\(req,\s*res\)/.test(source)) {
+        fail(path.relative(root, file) + " still uses recursive request-handler chaining.");
     }
 }
 
-const scanRoots = ["src", "auth", "updater", "deploy", "scripts", "test"];
-for (const relativeRoot of scanRoots) {
-    for (const file of walk(path.join(root, relativeRoot))) {
-        if (path.resolve(file) === selfPath) continue;
-        if (!/\.(?:js|json|sh|ya?ml)$/.test(file)) continue;
-        const source = fs.readFileSync(file, "utf8");
-        for (const forbiddenPath of forbiddenPaths) {
-            if (source.includes(forbiddenPath)) fail(path.relative(root, file) + " still references " + forbiddenPath);
+const reachable = graph(entry);
+for (const file of productionFiles) {
+    if (!reachable.has(path.resolve(file))) fail("unreachable production source: " + path.relative(root, file));
+}
+
+for (const file of walk(root)) {
+    const relative = path.relative(root, file);
+    if (relative.startsWith("node_modules" + path.sep) || relative.startsWith(".git" + path.sep)) continue;
+    if (!/\.(?:js|json|sh|ya?ml|md|html)$/.test(file)) continue;
+    const source = fs.readFileSync(file, "utf8");
+    for (const value of forbiddenText) {
+        if (source.includes(value) && relative !== "scripts/validate-runtime-architecture.js") {
+            fail(relative + " references retired contract: " + value);
         }
     }
 }
 
 if (!process.exitCode) {
-    if (versionedLayers.length === 0) {
-        process.stdout.write("Runtime architecture validation passed: one flat canonical server and zero versioned runtime layers.\n");
-    } else {
-        process.stdout.write(
-            "Runtime architecture validation passed with migration debt: " +
-            versionedLayers.length +
-            " versioned server layers remain; target is 0 and the ratchet budget may only decrease.\n"
-        );
-    }
+    process.stdout.write("Runtime architecture validation passed: one server, flat modules, strict forward-only contracts and no unreachable source.\n");
 }

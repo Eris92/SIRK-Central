@@ -113,7 +113,8 @@ function create(options) {
 
     try {
         const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
-        if (parsed && parsed.schema === 1 && parsed.portals && typeof parsed.portals === "object") state = parsed;
+        if (!parsed || parsed.schema !== 1 || !parsed.portals || typeof parsed.portals !== "object") throw new Error("Portal telemetry store has an unsupported schema.");
+        state = parsed;
     } catch (error) {
         if (error.code !== "ENOENT") throw error;
     }

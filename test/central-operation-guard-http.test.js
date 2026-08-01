@@ -6,7 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 const { hashAccessKey, hashSecret } = require("../src/security");
-const { createTicketRuntime } = require("../src/server-v15");
+const { createCentralRuntime } = require("../src/server");
 
 const CSRF = "D".repeat(43);
 
@@ -26,7 +26,7 @@ async function post(origin, token, publicOrigin) {
     return { response, payload: await response.json() };
 }
 
-test("server-v15 blocks anonymous Pending and SecAdmin before updater access", async t => {
+test("Central runtime blocks anonymous Pending and SecAdmin before updater access", async t => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "sirk-operation-guard-http-"));
     t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
     const config = {
@@ -42,9 +42,15 @@ test("server-v15 blocks anonymous Pending and SecAdmin before updater access", a
         sessionIdleMinutes: 30,
         sessionAbsoluteHours: 8,
         trustProxy: false,
-        env: { NODE_ENV: "test", SIRK_UPDATER_ORIGIN: "http://127.0.0.1:1", SIRK_UPDATER_TOKEN: "X".repeat(43) }
+        env: {
+            NODE_ENV: "test",
+            SIRK_RUNTIME_LOCK_DISABLED: "true",
+            SIRK_AUDIT_INTEGRITY_KEY: "K".repeat(48),
+            SIRK_UPDATER_ORIGIN: "http://127.0.0.1:1",
+            SIRK_UPDATER_TOKEN: "X".repeat(43)
+        }
     };
-    const app = createTicketRuntime(config);
+    const app = createCentralRuntime(config);
     await new Promise((resolve, reject) => {
         app.server.once("error", reject);
         app.server.listen(0, "127.0.0.1", resolve);

@@ -7,7 +7,7 @@ Data aktualizacji: 2026-07-31
 ```text
 Repo: Eris92/SIRK-Central
 Branch: main
-Runtime: src/server-v15.js
+Runtime: src/server.js
 Version: 1.0.0-rc.25
 ```
 
@@ -15,7 +15,7 @@ Version: 1.0.0-rc.25
 
 ## Canonical runtime
 
-Jedynym entrypointem jest `src/server-v15.js`.
+Jedynym entrypointem jest `src/server.js`.
 
 Usunięto nieużywany równoległy runtime i jego zależności:
 
@@ -39,9 +39,9 @@ scripts/generate-access-key.js
 package script: start:legacy
 ```
 
-Pliki `src/server-v1.js` do `src/server-v14.js` pozostają, ponieważ są aktywnymi warstwami importowanymi przez `server-v15.js`. Nie są osobnymi wdrażanymi runtime.
+Runtime został spłaszczony do jednego entrypointu i nazwanych modułów domenowych.
 
-`scripts/validate-no-legacy-runtime.js`:
+`scripts/validate-runtime-architecture.js`:
 
 - blokuje powrót usuniętych entrypointów i helperów;
 - sprawdza `package.json`;
@@ -133,7 +133,7 @@ Central -> updater-gateway:8092 -> updater:8090
 Test sprawdza teraz:
 
 - canonical Compose;
-- właściwy `server-v15.js` w obrazie;
+- właściwy `src/server.js` w obrazie;
 - offline reset BreakGlass;
 - transakcyjną rotację Access Key;
 - health check;

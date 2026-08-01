@@ -31,7 +31,8 @@ function create(options) {
 
     try {
         const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
-        if (parsed && parsed.version === 1 && parsed.challenges) state = parsed;
+        if (!parsed || parsed.version !== 1 || !parsed.challenges || typeof parsed.challenges !== "object") throw new Error("WebAuthn challenge store has an unsupported schema.");
+        state = parsed;
     } catch (error) {
         if (error.code !== "ENOENT") throw error;
     }

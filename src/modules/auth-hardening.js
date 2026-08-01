@@ -1,26 +1,19 @@
 "use strict";
 
+const { parseCookies, json, readBody, securityHeaders, csrfAccepted, requestIp } = require("../http/transport");
+const { VERSION } = require("../version");
+
 const crypto = require("node:crypto");
-const http = require("node:http");
-const recoveryCodeStoreFactory = require("./recovery-code-store");
-const challengeStoreFactory = require("./webauthn-challenge-store");
-const loginTransactionStoreFactory = require("./login-transaction-store");
-const { verifySecret, verifyAccessKey } = require("./security");
-const { permissionsFor } = require("./rbac");
-const { loadConfig, createApp } = require("./server-v1");
+const recoveryCodeStoreFactory = require("../recovery-code-store");
+const challengeStoreFactory = require("../webauthn-challenge-store");
+const loginTransactionStoreFactory = require("../login-transaction-store");
+const { verifySecret, verifyAccessKey } = require("../security");
+const { permissionsFor } = require("../rbac");
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 const CSRF_COOKIE = "sirk_central_csrf";
 const CSRF_HEADER = "x-sirk-csrf";
 
-function parseCookies(req) {
-    const result = {};
-    for (const part of String(req.headers.cookie || "").split(";")) {
-        const index = part.indexOf("=");
-        if (index > 0) result[part.slice(0, index).trim()] = part.slice(index + 1).trim();
-    }
-    return result;
-}
 
 function validToken(value) {
     return /^[A-Za-z0-9_-]{32,128}$/.test(String(value || ""));
@@ -34,47 +27,8 @@ function sessionCookie(token, hours) {
     return "sirk_central_session=" + token + "; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=" + (hours * 3600);
 }
 
-function json(res, status, body, extraHeaders = {}) {
-    const data = Buffer.from(JSON.stringify(body));
-    res.writeHead(status, Object.assign({
-        "Content-Type": "application/json; charset=utf-8",
-        "Content-Length": String(data.length),
-        "Cache-Control": "no-store",
-        "X-Content-Type-Options": "nosniff"
-    }, extraHeaders));
-    res.end(data);
-}
 
-function readBody(req, limit = 16384) {
-    return new Promise((resolve, reject) => {
-        const chunks = [];
-        let size = 0;
-        req.on("data", chunk => {
-            size += chunk.length;
-            if (size > limit) {
-                reject(Object.assign(new Error("Request body is too large."), { statusCode: 413 }));
-                req.destroy();
-            } else chunks.push(chunk);
-        });
-        req.on("end", () => {
-            try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}")); }
-            catch (_) { reject(Object.assign(new Error("Invalid JSON body."), { statusCode: 400 })); }
-        });
-        req.on("error", reject);
-    });
-}
 
-function securityHeaders() {
-    return {
-        "X-Content-Type-Options": "nosniff",
-        "X-Frame-Options": "DENY",
-        "Referrer-Policy": "no-referrer",
-        "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=()",
-        "Cross-Origin-Opener-Policy": "same-origin",
-        "Cross-Origin-Resource-Policy": "same-origin",
-        "Strict-Transport-Security": "max-age=31536000; includeSubDomains"
-    };
-}
 
 function csrfBootstrapSource() {
     return `"use strict";\n(function(){\n  function cookie(name){for(const part of document.cookie.split(";")){const p=part.trim();if(p.startsWith(name+"="))return p.slice(name.length+1);}return "";}\n  const original=window.fetch.bind(window);\n  window.fetch=function(input,init){\n    init=Object.assign({},init||{});\n    const method=String(init.method||((input&&input.method)||"GET")).toUpperCase();\n    let same=true;try{const u=new URL(typeof input==="string"?input:input.url,location.href);same=u.origin===location.origin;}catch(_){same=true;}\n    if(same&&!(["GET","HEAD","OPTIONS"].includes(method))){\n      const token=cookie("${CSRF_COOKIE}");\n      const headers=new Headers(init.headers||((input&&input.headers)||undefined));\n      if(token)headers.set("X-SIRK-CSRF",token);\n      init.headers=headers;\n    }\n    init.credentials=init.credentials||"same-origin";\n    return original(input,init);\n  };\n}());\n`;
@@ -108,15 +62,6 @@ function csrfRequired(req, url) {
     return url.pathname !== "/api/login" && url.pathname !== "/api/login/mfa/recovery";
 }
 
-function csrfAccepted(req, config, cookies) {
-    const cookie = String(cookies[CSRF_COOKIE] || "");
-    const supplied = String(req.headers[CSRF_HEADER] || "");
-    if (!validToken(cookie) || supplied !== cookie) return false;
-    const origin = String(req.headers.origin || "");
-    if (origin && origin !== config.publicOrigin) return false;
-    const site = String(req.headers["sec-fetch-site"] || "");
-    return !site || site === "same-origin" || site === "none";
-}
 
 function breakGlassActor(app, req) {
     const token = parseCookies(req).sirk_central_session || "";
@@ -125,13 +70,6 @@ function breakGlassActor(app, req) {
     return actor;
 }
 
-function requestIp(req, config) {
-    if (config.trustProxy) {
-        const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
-        if (forwarded) return forwarded.slice(0, 128);
-    }
-    return String(req.socket.remoteAddress || "unknown").slice(0, 128);
-}
 
 function bearerCredential(req) {
     const match = String(req.headers.authorization || "").match(/^Bearer ([A-Za-z0-9_-]+)$/);
@@ -156,16 +94,13 @@ function issueFullSession(app, config, identity, req) {
     return issued.token;
 }
 
-function createHardenedApp(config) {
-    const app = createApp(config);
-    const innerHandler = app.server.listeners("request")[0];
-    if (typeof innerHandler !== "function") throw new Error("SIRK Central v1 request handler is unavailable.");
+function registerAuthHardening(app, config) {
     const recoveryCodes = recoveryCodeStoreFactory.create({ dataDir: config.dataDir });
     const webauthnChallenges = challengeStoreFactory.create({ dataDir: config.dataDir });
     const loginTransactions = loginTransactionStoreFactory.create({ dataDir: config.dataDir });
     const loginFailures = new Map();
 
-    const server = http.createServer(async (req, res) => {
+    const handler = async (req, res) => {
         try {
             const url = new URL(req.url, "http://central.local");
             const cookies = parseCookies(req);
@@ -189,7 +124,7 @@ function createHardenedApp(config) {
                     loginTransactions: Boolean(loginTransactions.filePath)
                 };
                 const ready = Object.values(checks).every(Boolean);
-                return json(res, ready ? 200 : 503, { ok: ready, version: "1.0.0-rc.4", checks });
+                return json(res, ready ? 200 : 503, { ok: ready, version: VERSION, checks });
             }
 
             if (csrfRequired(req, url) && !csrfAccepted(req, config, cookies)) {
@@ -273,21 +208,15 @@ function createHardenedApp(config) {
                 return json(res, 404, { ok: false, error: "Not found." });
             }
 
-            return innerHandler(req, res);
+            return false;
         } catch (error) {
             if (!res.headersSent) return json(res, error.statusCode || 400, { ok: false, error: error.message || "Request failed." });
             res.destroy(error);
         }
-    });
-
-    server.on("upgrade", (req, socket, head) => app.server.emit("upgrade", req, socket, head));
-    return Object.assign({}, app, { server, recoveryCodes, webauthnChallenges, loginTransactions });
+    };
+    app.router.prepend(handler);
+    Object.assign(app, { recoveryCodes, webauthnChallenges, loginTransactions });
+    return app
 }
 
-if (require.main === module) {
-    const config = loadConfig(process.env);
-    const app = createHardenedApp(config);
-    app.server.listen(config.port, config.bindHost, () => process.stdout.write("SIRK Central v2 listening on " + config.bindHost + ":" + config.port + "\n"));
-}
-
-module.exports = { createHardenedApp, parseCookies, validToken, csrfRequired, csrfAccepted, securityHeaders, breakGlassActor };
+module.exports = { registerAuthHardening, parseCookies, validToken, csrfRequired, csrfAccepted, securityHeaders, breakGlassActor };

@@ -1,54 +1,18 @@
 "use strict";
 
-const http = require("node:http");
-const { createPortalOperationsRuntime } = require("./server-v14");
-const ticketStoreFactory = require("./ticket-projection-store");
-const rateLimiterFactory = require("./request-rate-limiter");
-const ssoCallbackFactory = require("./sso-callback-handler");
-const centralOperationGuard = require("./central-operation-guard");
-const auditIntegrityGuard = require("./audit-integrity-guard");
-const portalUpgradeGuardFactory = require("./portal-upgrade-guard");
-const runtimeLockFactory = require("./runtime-lock");
-const { identityActive } = require("./rbac");
-const { loadConfig } = require("./server-v1");
-const { parseCookies } = require("./server-v8");
+const { json, parseCookies, readBody, csrfAccepted, requestIp } = require("../http/transport");
 
-const VERSION = "1.0.0-rc.25";
+const ticketStoreFactory = require("../ticket-projection-store");
+const rateLimiterFactory = require("../request-rate-limiter");
+const ssoCallbackFactory = require("../sso-callback-handler");
+const centralOperationGuard = require("../central-operation-guard");
+const auditIntegrityGuard = require("../audit-integrity-guard");
+const portalUpgradeGuardFactory = require("../portal-upgrade-guard");
+const runtimeLockFactory = require("../runtime-lock");
+const { identityActive } = require("../rbac");
 
-function json(res, status, body, headers = {}) {
-    const data = Buffer.from(JSON.stringify(body));
-    res.writeHead(status, Object.assign({
-        "Content-Type": "application/json; charset=utf-8",
-        "Content-Length": String(data.length),
-        "Cache-Control": "no-store",
-        "X-Content-Type-Options": "nosniff",
-        "X-Frame-Options": "DENY",
-        "Referrer-Policy": "no-referrer"
-    }, headers));
-    res.end(data);
-}
-function readBody(req, limit = 2 * 1024 * 1024) {
-    return new Promise((resolve, reject) => {
-        const chunks = [];
-        let size = 0;
-        let settled = false;
-        req.on("data", chunk => {
-            if (settled) return;
-            size += chunk.length;
-            if (size > limit) {
-                settled = true;
-                reject(Object.assign(new Error("Request body is too large."), { statusCode: 413 }));
-                req.resume();
-            } else chunks.push(chunk);
-        });
-        req.on("end", () => {
-            if (settled) return;
-            try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}")); }
-            catch (_) { reject(Object.assign(new Error("Invalid JSON body."), { statusCode: 400 })); }
-        });
-        req.on("error", error => { if (!settled) reject(error); });
-    });
-}
+const { VERSION } = require("../version");
+
 function actorFor(app, req) {
     const token = parseCookies(req).sirk_central_session || "";
     return token && app.sessions ? app.sessions.get(token, true) : null;
@@ -74,23 +38,6 @@ function canRead(actor) {
 }
 function canWrite(actor) {
     return Boolean(identityActive(actor) && (actor.builtIn === true || ["Admin", "SupportL2", "EngineerL3"].includes(actor.role)));
-}
-function csrfAccepted(req, config) {
-    const cookies = parseCookies(req);
-    const cookie = String(cookies.sirk_central_csrf || "");
-    const supplied = String(req.headers["x-sirk-csrf"] || "");
-    if (!/^[A-Za-z0-9_-]{32,128}$/.test(cookie) || supplied !== cookie) return false;
-    const origin = String(req.headers.origin || "");
-    if (origin && origin !== config.publicOrigin) return false;
-    const site = String(req.headers["sec-fetch-site"] || "");
-    return !site || site === "same-origin" || site === "none";
-}
-function requestIp(req, config) {
-    if (config.trustProxy) {
-        const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
-        if (forwarded) return forwarded.slice(0, 128);
-    }
-    return String(req.socket && req.socket.remoteAddress || "unknown").slice(0, 128);
 }
 function consumeOrReject(res, limiter, key) {
     const result = limiter.consume(key);
@@ -164,7 +111,7 @@ function eventErrorResult(index, error) {
     };
 }
 
-function createTicketRuntime(config) {
+function registerTickets(app, config) {
     const lockDisabled = String(config.env.SIRK_RUNTIME_LOCK_DISABLED || "").toLowerCase() === "true";
     if (lockDisabled && String(config.env.NODE_ENV || "").toLowerCase() === "production") {
         throw Object.assign(new Error("SIRK_RUNTIME_LOCK_DISABLED is forbidden in production."), { code: "RUNTIME_LOCK_REQUIRED", statusCode: 503 });
@@ -175,17 +122,12 @@ function createTicketRuntime(config) {
         heartbeatMs: Number(config.env.SIRK_RUNTIME_LOCK_HEARTBEAT_MS || 30000)
     });
 
-    let app;
     let ssoCallback;
     let tickets;
     let preAuthLimiter;
     let ingestionLimiter;
     let upgradeGuard;
     try {
-        app = createPortalOperationsRuntime(config);
-        const inner = app.server.listeners("request")[0];
-        if (typeof inner !== "function") throw new Error("SIRK Central v14 request handler is unavailable.");
-        app.innerRequestHandler = inner;
         ssoCallback = ssoCallbackFactory.create({ app, config });
         tickets = ticketStoreFactory.create({
             dataDir: config.dataDir,
@@ -213,8 +155,6 @@ function createTicketRuntime(config) {
         if (runtimeLock) runtimeLock.release();
         throw error;
     }
-    const inner = app.innerRequestHandler;
-    delete app.innerRequestHandler;
 
     function portalRequest(req, res, route) {
         if (!consumeOrReject(res, preAuthLimiter, route + ":ip:" + requestIp(req, config))) return { handled: true, portal: null };
@@ -224,7 +164,7 @@ function createTicketRuntime(config) {
         return { handled: false, portal };
     }
 
-    const server = http.createServer(async (req, res) => {
+    const handler = async (req, res) => {
         try {
             const url = new URL(req.url, "http://central.local");
             const auditDecision = auditIntegrityGuard.evaluate(app, req, url.pathname);
@@ -314,7 +254,7 @@ function createTicketRuntime(config) {
                 return json(res, rejected ? 207 : 202, response);
             }
 
-            if (!url.pathname.startsWith("/api/tickets")) return inner(req, res);
+            if (!url.pathname.startsWith("/api/tickets")) return false;
             const actor = actorFor(app, req);
             if (!actor) return json(res, 401, { ok: false, error: "Authentication required." });
 
@@ -385,26 +325,15 @@ function createTicketRuntime(config) {
             if (!res.headersSent) return json(res, status, { ok: false, code: error.code || (status >= 500 ? "INTERNAL_ERROR" : "REQUEST_REJECTED"), error: message });
             res.destroy(error);
         }
-    });
-    server.requestTimeout = 30000;
-    server.headersTimeout = 15000;
-    server.keepAliveTimeout = 5000;
-    server.on("upgrade", (req, socket, head) => upgradeGuard.handle(req, socket, head, (forwardReq, forwardSocket, forwardHead) => app.server.emit("upgrade", forwardReq, forwardSocket, forwardHead)));
-    server.on("close", () => { if (runtimeLock) runtimeLock.release(); });
-    return Object.assign({}, app, { server, version: VERSION, ticketProjections: tickets, ssoReplay: ssoCallback.replay, runtimeLock, portalUpgradeGuard: upgradeGuard });
-}
-
-if (require.main === module) {
-    const config = loadConfig(process.env);
-    const app = createTicketRuntime(config);
-    const shutdown = signal => {
-        process.stdout.write("SIRK Central received " + signal + "; closing.\n");
-        app.server.close(() => process.exit(0));
-        setTimeout(() => process.exit(1), 15000).unref();
     };
-    process.once("SIGTERM", () => shutdown("SIGTERM"));
-    process.once("SIGINT", () => shutdown("SIGINT"));
-    app.server.listen(config.port, config.bindHost, () => process.stdout.write("SIRK Central v15 listening on " + config.bindHost + ":" + config.port + "\n"));
+    app.server.requestTimeout = 30000;
+    app.server.headersTimeout = 15000;
+    app.server.keepAliveTimeout = 5000;
+    app.wrapUpgrade((req, socket, head, next) => upgradeGuard.handle(req, socket, head, next));
+    app.server.on("close", () => { if (runtimeLock) runtimeLock.release(); });
+    app.router.prepend(handler);
+    Object.assign(app, { version: VERSION, ticketProjections: tickets, ssoReplay: ssoCallback.replay, runtimeLock, portalUpgradeGuard: upgradeGuard });
+    return app
 }
 
-module.exports = { createTicketRuntime, VERSION, canRead, canWrite, portalAllowed, visiblePortalIds, portalAssignment, validateFilter, eventErrorResult };
+module.exports = { registerTickets, VERSION, canRead, canWrite, portalAllowed, visiblePortalIds, portalAssignment, validateFilter, eventErrorResult };

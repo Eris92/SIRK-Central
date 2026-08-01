@@ -7,7 +7,7 @@ const os = require("node:os");
 const path = require("node:path");
 const WebSocket = require("ws");
 const { hashSecret, hashAccessKey } = require("../src/security");
-const { createApp } = require("../src/server");
+const { createCentralRuntime } = require("../src/server");
 
 function request(port, method, route, body, cookie, accessKey) {
     return new Promise((resolve, reject) => {
@@ -50,16 +50,19 @@ test("admin login lists an authenticated outbound Portal and connects to it", as
     const accessKey = "central-test-access-key-0123456789abcdef";
     const config = {
         dataDir: root,
-        publicOrigin: "",
+        publicOrigin: "https://central.example.test",
         adminUsername: "admin",
         adminPasswordHash: hashSecret("central-test-password"),
         accessKeyHash: hashAccessKey(accessKey),
+        sessionIdleMinutes: 30,
+        sessionAbsoluteHours: 8,
+        trustProxy: false,
+        env: { NODE_ENV: "test", SIRK_RUNTIME_LOCK_DISABLED: "true", SIRK_AUDIT_INTEGRITY_KEY: "K".repeat(48) },
         sessionHours: 1
     };
-    const app = createApp(config);
+    const app = createCentralRuntime(config);
     await new Promise((resolve) => app.server.listen(0, "127.0.0.1", resolve));
     const port = app.server.address().port;
-    config.publicOrigin = "http://127.0.0.1:" + port;
     const created = app.store.createPortal({ id: "portal-one", name: "Portal One" });
     let socket;
     try {

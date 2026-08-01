@@ -7,7 +7,8 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 const { hashSecret, hashAccessKey } = require("../src/security");
-const { createFinalApp } = require("../src/server-v5");
+const { createCentralRuntime } = require("../src/server");
+const createFinalApp = config => createCentralRuntime(config, { through: "passkey-management" });
 
 function cookieValue(headers, name) {
     const values = typeof headers.getSetCookie === "function" ? headers.getSetCookie() : [headers.get("set-cookie") || ""];
@@ -52,11 +53,11 @@ test("BreakGlass can register, list and revoke an ES256 passkey", async t => {
         adminUsername: "admin",
         adminPasswordHash: hashSecret(password),
         accessKeyHash: hashAccessKey(accessKey),
-        dataDir,
         sessionIdleMinutes: 30,
         sessionAbsoluteHours: 8,
         trustProxy: false,
-        env: { NODE_ENV: "test" }
+        dataDir,
+        env: { NODE_ENV: "test", SIRK_RUNTIME_LOCK_DISABLED: "true", SIRK_AUDIT_INTEGRITY_KEY: "K".repeat(48) }
     };
 
     const app = createFinalApp(config);
@@ -121,7 +122,6 @@ test("BreakGlass can register, list and revoke an ES256 passkey", async t => {
             displayName: "Test YubiKey",
             credential: {
                 credentialId,
-                rawId: credentialId,
                 clientDataJSON,
                 authenticatorData: registrationAuthenticatorData("central.example.test").toString("base64url"),
                 publicKey,

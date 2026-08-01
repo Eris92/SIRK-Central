@@ -1,24 +1,10 @@
 "use strict";
 
-const http = require("node:http");
-const { createAdminRuntime } = require("./server-v11");
-const { loadConfig } = require("./server-v1");
-const { parseCookies } = require("./server-v8");
+const { json, parseCookies, csrfAccepted } = require("../http/transport");
 
-const VERSION = "1.0.0-rc.16";
 
-function json(res, status, body) {
-    const data = Buffer.from(JSON.stringify(body));
-    res.writeHead(status, {
-        "Content-Type": "application/json; charset=utf-8",
-        "Content-Length": String(data.length),
-        "Cache-Control": "no-store",
-        "X-Content-Type-Options": "nosniff",
-        "X-Frame-Options": "DENY",
-        "Referrer-Policy": "no-referrer"
-    });
-    res.end(data);
-}
+const { VERSION } = require("../version");
+
 function currentToken(req) { return parseCookies(req).sirk_central_session || ""; }
 function sessionActor(app, req) {
     const token = currentToken(req);
@@ -26,16 +12,6 @@ function sessionActor(app, req) {
 }
 function canManage(actor) {
     return Boolean(actor && (actor.builtIn === true || actor.role === "SecAdmin" || actor.role === "Admin"));
-}
-function csrfAccepted(req, config) {
-    const cookies = parseCookies(req);
-    const cookie = String(cookies.sirk_central_csrf || "");
-    const supplied = String(req.headers["x-sirk-csrf"] || "");
-    if (!/^[A-Za-z0-9_-]{32,128}$/.test(cookie) || supplied !== cookie) return false;
-    const origin = String(req.headers.origin || "");
-    if (origin && origin !== config.publicOrigin) return false;
-    const site = String(req.headers["sec-fetch-site"] || "");
-    return !site || site === "same-origin" || site === "none";
 }
 function audit(app, action, actor, req, details, result = "success") {
     if (!app.auditStore || typeof app.auditStore.append !== "function") return;
@@ -72,12 +48,9 @@ function publicSession(record, currentId) {
     };
 }
 
-function createSecurityRuntime(config) {
-    const app = createAdminRuntime(config);
-    const inner = app.server.listeners("request")[0];
-    if (typeof inner !== "function") throw new Error("SIRK Central v11 request handler is unavailable.");
+function registerSecurityApi(app, config) {
 
-    const server = http.createServer(async (req, res) => {
+    const handler = async (req, res) => {
         try {
             const url = new URL(req.url, "http://central.local");
             const actor = sessionActor(app, req);
@@ -106,20 +79,15 @@ function createSecurityRuntime(config) {
                 audit(app, "session.others_revoked", actor, req, { count });
                 return json(res, 200, { ok: true, revokedCount: count });
             }
-            return inner(req, res);
+            return false;
         } catch (error) {
             if (!res.headersSent) return json(res, error.statusCode || 400, { ok: false, code: error.code || "REQUEST_REJECTED", error: error.message || "Request failed." });
             res.destroy(error);
         }
-    });
-    server.on("upgrade", (req, socket, head) => app.server.emit("upgrade", req, socket, head));
-    return Object.assign({}, app, { server, version: VERSION });
+    };
+    app.router.prepend(handler);
+    Object.assign(app, { version: VERSION });
+    return app
 }
 
-if (require.main === module) {
-    const config = loadConfig(process.env);
-    const app = createSecurityRuntime(config);
-    app.server.listen(config.port, config.bindHost, () => process.stdout.write("SIRK Central v12 listening on " + config.bindHost + ":" + config.port + "\n"));
-}
-
-module.exports = { createSecurityRuntime, VERSION };
+module.exports = { registerSecurityApi, VERSION };

@@ -6,7 +6,6 @@ INSTALL_DIR="${SIRK_INSTALL_DIR:-/opt/sirk-central}"
 REPO_URL="${SIRK_REPO_URL:-https://github.com/Eris92/SIRK-Central.git}"
 REPO_REF="${SIRK_REPO_REF:-feat/central-production-hardening}"
 BASE_COMPOSE_FILE="docker-compose.yml"
-RUNTIME_COMPOSE_FILE="docker-compose.portal-runtime.yml"
 PRESERVE_ENV=1
 PURGE_DATA=0
 RUN_SMOKE=1
@@ -69,7 +68,6 @@ if [[ -d "$INSTALL_DIR" ]]; then
 
   if [[ -f "$INSTALL_DIR/$BASE_COMPOSE_FILE" ]]; then
     OLD_COMPOSE=(docker compose -f "$INSTALL_DIR/$BASE_COMPOSE_FILE")
-    [[ -f "$INSTALL_DIR/$RUNTIME_COMPOSE_FILE" ]] && OLD_COMPOSE+=(-f "$INSTALL_DIR/$RUNTIME_COMPOSE_FILE")
     OLD_COMPOSE+=(--profile auth --profile maintenance)
     if [[ "$PURGE_DATA" == "1" ]]; then
       printf '\nWARNING: this permanently removes SIRK Central data and Caddy state.\n'
@@ -91,8 +89,8 @@ log "Cloning $REPO_URL ref $REPO_REF"
 install -d -m 0755 "$(dirname "$INSTALL_DIR")"
 git clone --branch "$REPO_REF" --single-branch "$REPO_URL" "$INSTALL_DIR"
 cd "$INSTALL_DIR"
-[[ -f "$BASE_COMPOSE_FILE" && -f "$RUNTIME_COMPOSE_FILE" ]] || die "canonical Compose files are missing"
-[[ -f Dockerfile.portal-runtime && -f updater/Dockerfile.gateway ]] || die "canonical Dockerfiles are missing"
+[[ -f "$BASE_COMPOSE_FILE" ]] || die "canonical Compose files are missing"
+[[ -f Dockerfile && -f updater/Dockerfile.gateway ]] || die "canonical Dockerfiles are missing"
 if [[ -f compose.yaml ]]; then mv compose.yaml compose.yaml.disabled; fi
 
 if [[ "$PRESERVE_ENV" == "1" && -f "$WORK_DIR/.env" ]]; then
@@ -125,8 +123,8 @@ else
   chmod 0600 .env
 fi
 
-COMPOSE=(docker compose -f "$BASE_COMPOSE_FILE" -f "$RUNTIME_COMPOSE_FILE" --profile auth)
-MAINTENANCE_COMPOSE=(docker compose -f "$BASE_COMPOSE_FILE" -f "$RUNTIME_COMPOSE_FILE" --profile auth --profile maintenance)
+COMPOSE=(docker compose -f "$BASE_COMPOSE_FILE" --profile auth)
+MAINTENANCE_COMPOSE=(docker compose -f "$BASE_COMPOSE_FILE" --profile auth --profile maintenance)
 SERVICES=(central auth updater-gateway backup-manager caddy)
 
 log "Validating canonical Compose configuration"
@@ -157,8 +155,7 @@ done
 
 if [[ "$RUN_SMOKE" == "1" ]]; then
   SIRK_COMPOSE_FILE="$BASE_COMPOSE_FILE" \
-  SIRK_RUNTIME_COMPOSE_FILE="$RUNTIME_COMPOSE_FILE" \
-  SIRK_SMOKE_RESTART=1 \
+    SIRK_SMOKE_RESTART=1 \
   bash deploy/smoke-test.sh
 fi
 
@@ -166,6 +163,6 @@ log "Clean reinstall completed"
 printf 'Checkout: %s\n' "$(git rev-parse HEAD)"
 printf 'Ref:      %s\n' "$REPO_REF"
 printf 'Path:     %s\n' "$INSTALL_DIR"
-printf 'Compose:  %s + %s\n' "$BASE_COMPOSE_FILE" "$RUNTIME_COMPOSE_FILE"
+printf 'Compose:  %s\n' "$BASE_COMPOSE_FILE"
 printf 'Worker:   stopped (gateway active)\n'
 printf 'Data:     %s\n' "$([[ "$PURGE_DATA" == "1" ]] && echo 'purged' || echo 'preserved in Docker volumes')"

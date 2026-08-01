@@ -4,7 +4,7 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.portal-runtime.yml)
+COMPOSE_FILES=(-f docker-compose.yml)
 BASE_PROFILE_ARGS=(--profile auth)
 MAINTENANCE_PROFILE_ARGS=(--profile auth --profile maintenance)
 BASE_SERVICES=(central auth updater-gateway backup-manager caddy)
@@ -99,21 +99,19 @@ const fs = require('node:fs');
 const pkg = require('./package.json');
 const lock = require('./package-lock.json');
 if (pkg.version !== lock.version || pkg.version !== lock.packages[''].version) throw new Error('Package versions differ.');
-if (pkg.main !== 'src/server-v15.js' || !String(pkg.scripts.start).includes('server-v15.js')) throw new Error('Canonical runtime is not v15.');
-for (const dockerfileName of ['Dockerfile', 'Dockerfile.portal-runtime']) {
-  if (!fs.readFileSync(dockerfileName, 'utf8').includes('CMD ["node", "src/server-v15.js"]')) throw new Error(dockerfileName + ' is not v15.');
-}
+if (pkg.main !== 'src/server.js' || pkg.scripts.start !== 'node src/server.js') throw new Error('Canonical runtime entry is invalid.');
+if (!fs.readFileSync('Dockerfile', 'utf8').includes('CMD ["node", "src/server.js"]')) throw new Error('Dockerfile runtime is invalid.');
 for (const required of [
-  'src/server-v15.js','src/runtime-lock.js','src/ticket-projection-store-v2.js','src/portal-command-store-v2.js',
-  'src/sso-callback-handler.js','src/central-operation-guard.js','auth/hardened-server.js',
+  'src/server.js','src/runtime-lock.js','src/ticket-projection-store.js','src/portal-command-store.js',
+  'src/sso-callback-handler.js','src/central-operation-guard.js','auth/server.js',
   'updater/gateway-server.js','updater/server.js','updater/management-server.js','updater/backup-archive.js','updater/restore-transaction.js',
   'test/runtime-lock.test.js','test/portal-command-cancellation.test.js','test/ticket-event-http-semantics.test.js',
   'test/protocol-concurrency.test.js','test/updater-gateway.test.js','test/e2e/ui-buttons.spec.js',
   'deploy/maintenance-up.sh','deploy/maintenance-down.sh','scripts/sync-main.sh'
 ]) if (!fs.existsSync(required)) throw new Error('Missing ' + required);
-const runtime = fs.readFileSync('src/server-v15.js', 'utf8');
+const runtime = fs.readFileSync('src/modules/tickets.js', 'utf8');
 for (const expected of ['runtimeLockFactory.acquire','eventErrorResult','SIRK_RUNTIME_LOCK_DISABLED']) if (!runtime.includes(expected)) throw new Error('Runtime contract missing: ' + expected);
-const commands = fs.readFileSync('src/portal-command-store-v2.js', 'utf8');
+const commands = fs.readFileSync('src/portal-command-store.js', 'utf8');
 for (const expected of ['cancel_requested','control = "cancel"','COMMAND_CANCEL_NOT_REQUESTED']) if (!commands.includes(expected)) throw new Error('Cancellation contract missing: ' + expected);
 const gateway = fs.readFileSync('updater/gateway-server.js', 'utf8');
 for (const expected of ['UPDATER_MAINTENANCE_REQUIRED','pathAllowed','workerOrigin']) if (!gateway.includes(expected)) throw new Error('Gateway contract missing: ' + expected);

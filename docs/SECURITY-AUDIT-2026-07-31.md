@@ -3,7 +3,7 @@
 Data: 2026-07-31  
 Branch: `feat/central-production-hardening`  
 PR: #45 (draft)  
-Runtime: `src/server-v15.js`  
+Runtime: `src/server.js`  
 Version: `1.0.0-rc.24`
 
 ## Decyzja

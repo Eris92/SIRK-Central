@@ -36,7 +36,7 @@ Walidator sprawdza:
 - brak starego `start:legacy`;
 - brak duplikatu persistent session map;
 - brak starych helperów sekretów;
-- osiągalność `server-v1.js` do `server-v14.js` z `server-v15.js`;
+- płaski graf zależności od `src/server.js` i dokładnie jeden serwer HTTP;
 - brak dodatkowego nieosiągalnego pliku `server*.js`.
 
 ## 4. Security regression suite
@@ -109,7 +109,7 @@ Po zamknięciu:
 ```bash
 docker compose \
   -f docker-compose.yml \
-  -f docker-compose.portal-runtime.yml \
+  -f docker-compose.yml \
   --profile auth \
   --profile maintenance \
   ps -q updater
