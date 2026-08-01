@@ -12,6 +12,7 @@ Version: 1.0.0-rc.26
 Legacy refactor PR: #46 — merged
 Legacy integration commit: 69d17b1719faa723619df2ac8d7a74959f754bab
 VPS acceptance commit: 8d35cab995734606b0fe8811735022ffd90c20eb
+Backup age support commit: 9fb30b0ede42c4e5bf714820254a588dbffa2d3c
 ```
 
 `main` jest jedyną kanoniczną linią kodu i wdrożeń. Historyczna gałąź `refactor/remove-legacy-runtime` nie jest źródłem wdrożenia. Repozytorium SIRK Portal nie zostało zmodyfikowane.
@@ -183,28 +184,47 @@ Potwierdzono:
 
 ## Backup
 
-Wykonano i zweryfikowano checksumami safety backupy przed migracją i podczas diagnostyki. Finalny szyfrowany backup produkcyjny pozostaje otwarty, ponieważ `.env` nie ma jeszcze `SIRK_BACKUP_AGE_RECIPIENT`.
+Kanoniczny `deploy/backup.sh`:
 
-Przy `NODE_ENV=production` kanoniczny `deploy/backup.sh` wymaga szyfrowania `age`, chyba że operator jawnie ustawi wyjątek. Finalnego backupu nie należy już wykonywać z `SIRK_BACKUP_REQUIRE_ENCRYPTION=false`.
+- wymaga szyfrowania `age` przy `NODE_ENV=production`;
+- odczytuje publiczny `SIRK_BACKUP_AGE_RECIPIENT` z procesu lub bezpiecznie z `.env`;
+- nie wykonuje `.env` jako kodu shell;
+- tworzy checksumę SHA-256;
+- usuwa plaintext archive po poprawnym szyfrowaniu.
+
+Parser `scripts/read-env-value.py` odrzuca duplikaty, niedomknięte cytowania, control characters oraz nadmiernie długie wartości. Targeted suite dla backupu i parsera przeszła `9/9`, a `npm audit` wykazał 0 podatności.
+
+Finalny szyfrowany backup produkcyjny został wykonany i zweryfikowany 2026-08-01:
+
+```text
+Backup: /var/backups/sirk-central/sirk-central-20260801T114404Z.tar.gz.age
+SHA-256: OK
+Decrypt with matching age identity: OK
+Archive validation: OK
+Temporary plaintext verification archive: removed
+Original unencrypted .tar.gz: absent
+```
+
+Prywatna tożsamość `age` nadal znajduje się tymczasowo na VPS w `/root/sirk-central-backup-key/sirk-central-backup.agekey`. Nie wolno jej usuwać, dopóki operator nie potwierdzi bezpiecznej kopii offline. Po potwierdzeniu kopii należy usunąć prywatną tożsamość z VPS; w `.env` pozostaje wyłącznie publiczny recipient.
 
 ## Aktualny etap
 
-Refaktor, usunięcie legacy oraz podstawowy VPS acceptance są zakończone. Następne kroki:
+Refaktor, usunięcie legacy, podstawowy VPS acceptance i finalny szyfrowany backup produkcyjny są zakończone. Następne kroki:
 
-1. wygenerować i bezpiecznie zdeponować prywatną tożsamość `age`;
-2. dodać tylko publicznego recipienta do `.env` i wykonać szyfrowany backup;
-3. wykonać destructive restore z safety backupem i forced rollback;
-4. wykonać update/rollback failure drill i potwierdzić usunięcie workera;
-5. uruchomić Portal simulator z prawdziwym tokenem;
-6. przetestować realny YubiKey w Edge i Chrome;
-7. przejść pełny workflow Entra;
-8. wykonać PL/EN i responsive visual review.
+1. zdeponować prywatną tożsamość `age` w bezpiecznej kopii offline i usunąć ją z VPS;
+2. wykonać destructive restore z safety backupem i forced rollback;
+3. wykonać update/rollback failure drill i potwierdzić usunięcie workera;
+4. uruchomić Portal simulator z prawdziwym tokenem;
+5. przetestować realny YubiKey w Edge i Chrome;
+6. przejść pełny workflow Entra;
+7. wykonać PL/EN i responsive visual review.
 
 ## Residual risks
 
 - file-backed stores są single-writer, nie active-active HA;
 - worker maintenance pozostaje root-equivalent podczas jawnie otwartego okna;
-- finalny zaszyfrowany offline backup i restore drill nie są jeszcze ukończone;
+- prywatny klucz `age` pozostaje na VPS do czasu potwierdzenia kopii offline;
+- destructive restore i update/rollback failure drills nie są jeszcze ukończone;
 - realne Entra, YubiKey i Portal simulator wymagają testów środowiskowych;
 - konektory Jira/ServiceDesk/GLPI należą do repo SIRK Portal;
-- wydanie `1.0.0` pozostaje zablokowane do zakończenia backup/restore, rollback drills oraz pozostałych testów manualnych.
+- wydanie `1.0.0` pozostaje zablokowane do zakończenia restore/rollback drills oraz pozostałych testów manualnych.
