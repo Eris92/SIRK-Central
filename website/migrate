@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 077
+
+URL="https://raw.githubusercontent.com/Eris92/SIRK-Central/main/deploy/appliance-migrate.sh"
+TEMPORARY="$(mktemp /tmp/sirk-central-migrate.XXXXXX)"
+cleanup() { rm -f -- "$TEMPORARY"; }
+trap cleanup EXIT
+
+curl --fail --silent --show-error --location \
+    --proto '=https' --tlsv1.2 \
+    --output "$TEMPORARY" \
+    "$URL"
+
+chmod 0700 "$TEMPORARY"
+exec bash "$TEMPORARY"
