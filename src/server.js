@@ -1,6 +1,7 @@
 "use strict";
 
 const { loadConfig, createApplication } = require("./application");
+const { attachRuntimeLifecycle } = require("./runtime-lifecycle");
 const { registerAuthHardening } = require("./modules/auth-hardening");
 const { registerBreakGlassUi } = require("./modules/break-glass-ui");
 const { registerWorkspaceAuthorization } = require("./modules/workspace-authorization");
@@ -45,7 +46,7 @@ function createCentralRuntime(config, options = {}) {
     }
     if (through && !modules.some(([id]) => id === through)) throw new Error("Unknown runtime module: " + through);
     app.version = VERSION;
-    return app;
+    return attachRuntimeLifecycle(app);
 }
 
 if (require.main === module) {
@@ -53,7 +54,7 @@ if (require.main === module) {
     const app = createCentralRuntime(config);
     const shutdown = signal => {
         process.stdout.write("SIRK Central received " + signal + "; closing.\n");
-        app.server.close(() => process.exit(0));
+        app.close().then(() => process.exit(0), () => process.exit(1));
         setTimeout(() => process.exit(1), 15000).unref();
     };
     process.once("SIGTERM", () => shutdown("SIGTERM"));
