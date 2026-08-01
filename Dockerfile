@@ -1,5 +1,7 @@
 FROM node:22.18.0-alpine3.22
 
+RUN apk add --no-cache age
+
 WORKDIR /app
 
 COPY package.json package-lock.json ./
