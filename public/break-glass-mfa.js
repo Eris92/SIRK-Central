@@ -23,6 +23,7 @@
             revoked: "Recovery codes zostały unieważnione.",
             generated: "Nowe recovery codes zostały wygenerowane.",
             noPasskey: "YubiKey/WebAuthn nie jest jeszcze aktywny.",
+            activePasskeys: "Aktywne klucze YubiKey/WebAuthn: {count}.",
             requestError: "Nie udało się wykonać operacji MFA."
         },
         en: {
@@ -43,9 +44,12 @@
             revoked: "Recovery codes have been revoked.",
             generated: "New recovery codes have been generated.",
             noPasskey: "YubiKey/WebAuthn is not active yet.",
+            activePasskeys: "Active YubiKey/WebAuthn credentials: {count}.",
             requestError: "The MFA operation failed."
         }
     };
+
+    let activePasskeyCount = 0;
 
     function lang() {
         return document.documentElement.lang === "en" ? "en" : "pl";
@@ -103,6 +107,12 @@
     const hide = article.querySelector("[data-mfa-hide]");
     const message = article.querySelector("[data-mfa-message]");
 
+    function renderPasskeyStatus() {
+        passkey.textContent = activePasskeyCount > 0
+            ? text("activePasskeys").replace("{count}", String(activePasskeyCount))
+            : text("noPasskey");
+    }
+
     function applyLabels() {
         title.textContent = text("title");
         rotate.textContent = text("generate");
@@ -110,7 +120,7 @@
         once.textContent = text("shownOnce");
         savedLabel.textContent = text("saved");
         hide.textContent = text("hide");
-        passkey.textContent = text("noPasskey");
+        renderPasskeyStatus();
     }
 
     function fact(label, value) {
@@ -134,14 +144,22 @@
         status.textContent = text("loading");
         message.textContent = "";
         try {
-            const result = await request("/api/break-glass/mfa/status");
+            const [result, passkeyResult] = await Promise.all([
+                request("/api/break-glass/mfa/status"),
+                request("/api/break-glass/passkeys")
+            ]);
             const recovery = result.recoveryCodes || {};
+            activePasskeyCount = Array.isArray(passkeyResult.passkeys)
+                ? passkeyResult.passkeys.filter(item => item.status === "active").length
+                : 0;
             status.textContent = recovery.configured ? text("configured") : text("missing");
+            status.className = "muted";
             facts.replaceChildren(
                 fact(text("remaining"), String(recovery.remaining || 0)),
                 fact(text("rotated"), recovery.rotatedAtUtc ? new Date(recovery.rotatedAtUtc).toLocaleString(lang()) : "—"),
                 fact(text("blocked"), recovery.blockedUntilUtc ? new Date(recovery.blockedUntilUtc).toLocaleString(lang()) : "—")
             );
+            renderPasskeyStatus();
             revoke.disabled = !recovery.configured;
         } catch (error) {
             status.textContent = error.message;
