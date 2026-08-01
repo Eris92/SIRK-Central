@@ -30,12 +30,10 @@ Jedynym entrypointem jest `src/server.js`. Runtime ma:
 Usunięto:
 
 ```text
-server-v1.js ... server-v15.js
-src/entry.js
-src/preload-api.js
-src/preload-hardening.js
-src/server-hardened.js
-src/server-production.js
+wszystkie historyczne wersjonowane warstwy serwera
+alternatywny entrypoint
+preloady modyfikujące runtime
+równoległe serwery hardened/production
 store'y i API *-v2
 alternatywne Dockerfile/Compose
 start:legacy
