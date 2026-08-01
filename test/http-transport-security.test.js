@@ -27,7 +27,7 @@ test("CSRF validation requires matching cookie and header for browser session mu
 
 test("anonymous, login and machine protocol requests preserve their own authentication semantics", () => {
     const anonymous = request("POST");
-    assert.equal(csrfRequired(anonymous, new URL("https://local/api/approvals/submit")), false);
+    assert.equal(csrfRequired(anonymous, new URL("https://local/api/approval-center")), false);
     assert.equal(csrfRequired(request("POST"), new URL("https://local/api/login")), false);
     assert.equal(csrfRequired(request("POST"), new URL("https://local/api/login/mfa/recovery")), true);
     assert.equal(csrfRequired(request("POST"), new URL("https://local/api/portal/v1/heartbeat")), false);
