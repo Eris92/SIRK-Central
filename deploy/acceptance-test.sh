@@ -168,13 +168,14 @@ gateway_id="$(container_id updater-gateway)"
 backup_manager_id="$(container_id backup-manager)"
 caddy_id="$(container_id caddy)"
 
-log "Readiness and runtime storage lease"
+log "Readiness runtime storage lease and edge configuration"
 ready="$(docker exec "$central_id" node -e "fetch('http://127.0.0.1:8080/readyz').then(async r=>{console.log(await r.text());if(!r.ok)process.exit(1)}).catch(e=>{console.error(e);process.exit(1)})")"
 node -e 'const body=JSON.parse(process.argv[1]);if(!body.ok)process.exit(1);for(const [key,value] of Object.entries(body.checks||{}))if(!value)throw new Error("Failed readiness check: "+key);' "$ready"
 docker exec "$auth_id" node -e "fetch('http://127.0.0.1:8081/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
 docker exec "$gateway_id" node -e "fetch('http://127.0.0.1:8092/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
 docker exec "$backup_manager_id" node -e "fetch('http://127.0.0.1:8091/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
 docker exec "$caddy_id" caddy validate --config /etc/caddy/Caddyfile >/dev/null
+docker exec "$caddy_id" caddy reload --config /etc/caddy/Caddyfile >/dev/null
 docker exec "$central_id" node -e "const fs=require('node:fs');const v=JSON.parse(fs.readFileSync('/var/lib/sirk-central/.sirk-central-runtime.lock/owner.json','utf8'));if(!v.instanceId||!v.heartbeatAtUtc)process.exit(1)"
 
 log "Gateway reports closed maintenance window without HTTP 500"
