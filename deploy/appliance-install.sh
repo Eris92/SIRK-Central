@@ -69,7 +69,11 @@ if [[ -e "$INSTALL_DIR" ]]; then
   [[ "$FORCE" == "1" ]] || die "$INSTALL_DIR already exists; use SIRK_FORCE=1 only for an intentional clean reinstall"
   archive="${INSTALL_DIR}.backup-$(date -u +%Y%m%dT%H%M%SZ)"
   log "Archiving existing installation to $archive"
-  (cd "$INSTALL_DIR" && docker compose --profile auth --profile maintenance down --remove-orphans) || true
+  if [[ -f "$INSTALL_DIR/docker-compose.appliance.yml" ]]; then
+    (cd "$INSTALL_DIR" && docker compose -f docker-compose.yml -f docker-compose.appliance.yml --profile auth down --remove-orphans) || true
+  else
+    (cd "$INSTALL_DIR" && docker compose --profile auth --profile maintenance down --remove-orphans) || true
+  fi
   mv "$INSTALL_DIR" "$archive"
 fi
 
@@ -77,6 +81,10 @@ log "Downloading SIRK Central"
 install -d -m 0755 "$(dirname "$INSTALL_DIR")"
 git clone --branch "$REPO_REF" --single-branch "$REPO_URL" "$INSTALL_DIR"
 cd "$INSTALL_DIR"
+
+[[ -f docker-compose.yml ]]
+[[ -f docker-compose.appliance.yml ]]
+[[ -f deploy/appliance-web-update.sh ]]
 
 PASSWORD_FILE="$(mktemp /root/.sirk-password.XXXXXX)"
 RESULT_FILE="$(mktemp /root/.sirk-result.XXXXXX)"
@@ -111,9 +119,18 @@ ufw allow 80/tcp comment 'SIRK HTTP' >/dev/null
 ufw allow 443/tcp comment 'SIRK HTTPS' >/dev/null
 ufw status | grep -q '^Status: active' || ufw --force enable >/dev/null
 
+COMPOSE=(docker compose -f docker-compose.yml -f docker-compose.appliance.yml --profile auth)
+SERVICES=(central auth updater updater-gateway backup-manager caddy)
+
+log "Validating appliance configuration"
+"${COMPOSE[@]}" config >/dev/null
+mapfile -t active_services < <("${COMPOSE[@]}" config --services)
+for service in "${SERVICES[@]}"; do
+  printf '%s\n' "${active_services[@]}" | grep -qx "$service" || die "missing appliance service: $service"
+done
+
 log "Starting appliance"
-docker compose --profile auth config >/dev/null
-docker compose --profile auth up -d --build --remove-orphans central auth updater-gateway backup-manager caddy
+"${COMPOSE[@]}" up -d --build --remove-orphans "${SERVICES[@]}"
 
 log "Waiting for readiness"
 ready=0
@@ -125,12 +142,19 @@ for _ in $(seq 1 90); do
   sleep 2
 done
 if [[ "$ready" != "1" ]]; then
-  docker compose --profile auth ps >&2 || true
-  docker compose --profile auth logs --tail=200 central auth updater-gateway backup-manager caddy >&2 || true
+  "${COMPOSE[@]}" ps >&2 || true
+  "${COMPOSE[@]}" logs --tail=200 "${SERVICES[@]}" >&2 || true
   die "SIRK Central did not become ready"
 fi
 
-log "Running first encrypted-capable safety backup"
+for service in central auth updater updater-gateway backup-manager; do
+  container_id="$("${COMPOSE[@]}" ps -q "$service")"
+  [[ -n "$container_id" ]] || die "$service container is missing"
+  state="$(docker inspect "$container_id" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}')"
+  [[ "$state" == "healthy" || "$state" == "running" ]] || die "$service is not healthy: $state"
+done
+
+log "Running first safety backup"
 SIRK_BACKUP_REQUIRE_ENCRYPTION=false bash deploy/backup.sh >/dev/null
 
 ACCESS_URL="$(node -e 'const fs=require("node:fs");const p=process.argv[1];const v=JSON.parse(fs.readFileSync(p,"utf8"));if(!v.accessUrl)process.exit(1);process.stdout.write(v.accessUrl)' "$RESULT_FILE")"
@@ -140,4 +164,5 @@ printf '\n============================================================\n'
 printf 'SIRK Central installation completed.\n\n'
 printf 'Open this one-time Break-Glass Access URL:\n\n%s\n' "$ACCESS_URL"
 printf '============================================================\n'
-printf 'All further administration is performed from the web UI.\n'
+printf 'Updates, backups, restore and administration are available in the web UI.\n'
+printf 'SSH is reserved for infrastructure emergency access.\n'
