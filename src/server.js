@@ -5,6 +5,7 @@ const { attachRuntimeLifecycle } = require("./runtime-lifecycle");
 const { registerAuthHardening } = require("./modules/auth-hardening");
 const { registerBreakGlassUi } = require("./modules/break-glass-ui");
 const { registerBackupAgeKeyManagement } = require("./modules/backup-age-key-management");
+const { registerApplianceManagement } = require("./modules/appliance-management");
 const { registerWorkspaceAuthorization } = require("./modules/workspace-authorization");
 const { registerWebAuthnAuthentication } = require("./modules/webauthn-authentication");
 const { registerPasskeyManagement } = require("./modules/passkey-management");
@@ -28,6 +29,7 @@ function createCentralRuntime(config) {
         registerAuthHardening,
         registerBreakGlassUi,
         registerBackupAgeKeyManagement,
+        registerApplianceManagement,
         registerWorkspaceAuthorization,
         registerWebAuthnAuthentication,
         registerPasskeyManagement,
