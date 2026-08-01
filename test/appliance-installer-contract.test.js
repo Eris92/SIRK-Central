@@ -31,8 +31,8 @@ test("configuration accepts a protected password file and writes a one-time resu
     assert.match(configure, /SIRK_AUDIT_INTEGRITY_KEY/);
 });
 
-test("public install endpoint downloads the canonical installer over strict HTTPS", () => {
-    assert.match(bootstrap, /raw\.githubusercontent\.com\/Eris92\/SIRK-Central\/main\/deploy\/appliance-install\.sh/);
+test("public install endpoint downloads the universal dispatcher over strict HTTPS", () => {
+    assert.match(bootstrap, /raw\.githubusercontent\.com\/Eris92\/SIRK-Central\/main\/deploy\/appliance-bootstrap\.sh/);
     assert.match(bootstrap, /--proto '=https'/);
     assert.match(bootstrap, /--tlsv1\.2/);
     assert.match(bootstrap, /exec bash/);
