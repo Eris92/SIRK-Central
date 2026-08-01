@@ -51,11 +51,13 @@ function decorateResponse(res, token) {
     };
 }
 
-function csrfRequired(req, url) {
+function csrfRequired(req, url, cookies = parseCookies(req)) {
     if (SAFE_METHODS.has(req.method)) return false;
     if (!url.pathname.startsWith("/api/")) return false;
     if (url.pathname.startsWith("/api/portal/v1/")) return false;
-    return url.pathname !== "/api/login";
+    if (url.pathname === "/api/login") return false;
+    if (url.pathname === "/api/login/mfa/recovery") return true;
+    return Boolean(cookies.sirk_central_session);
 }
 
 function breakGlassActor(app, req) {
@@ -107,7 +109,7 @@ function registerAuthHardening(app, config) {
                 return json(res, ready ? 200 : 503, { ok: ready, version: VERSION, checks });
             }
 
-            if (csrfRequired(req, url) && !csrfAccepted(req, config, cookies)) {
+            if (csrfRequired(req, url, cookies) && !csrfAccepted(req, config, cookies)) {
                 return json(res, 403, { ok: false, error: "CSRF validation failed." });
             }
 
