@@ -25,12 +25,13 @@ test("web backup creates age ciphertext and always removes plaintext", () => {
     assert.match(worker, /atomicJson\(allocated\.target \+ "\.json"/);
 });
 
-test("backup status marks ciphertext as encrypted and non-restorable until identity upload", () => {
+test("backup status marks ciphertext for identity-gated restore", () => {
     assert.match(worker, /encrypted: true/);
     assert.match(worker, /encryption: "age"/);
     assert.match(worker, /restorable: false/);
     assert.match(ui, /\.tar\.gz\.age/);
-    assert.match(ui, /restore\.disabled = true/);
+    assert.match(ui, /restoreAllowed/);
+    assert.match(ui, /\.agekey/);
     assert.match(assets, /encrypted-backup-ui\.js/);
 });
 
