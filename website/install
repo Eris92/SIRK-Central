@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-SOURCE="${SIRK_INSTALL_SOURCE:-https://raw.githubusercontent.com/Eris92/SIRK-Central/main/deploy/appliance-install.sh}"
-TMP="$(mktemp /tmp/sirk-central-install.XXXXXX)"
+SOURCE="${SIRK_INSTALL_SOURCE:-https://raw.githubusercontent.com/Eris92/SIRK-Central/main/deploy/appliance-bootstrap.sh}"
+TMP="$(mktemp /tmp/sirk-central-bootstrap.XXXXXX)"
 cleanup() { rm -f -- "$TMP"; }
 trap cleanup EXIT
 
