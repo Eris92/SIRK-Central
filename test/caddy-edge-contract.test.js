@@ -9,7 +9,7 @@ function source(path) {
 }
 
 test("Caddy hides the internal SSO logout route from the public Central origin", () => {
-    const caddy = source("deploy/Caddyfile");
+    const caddy = source("deploy/caddy/Caddyfile");
     const matcher = caddy.indexOf("@internalSsoLogout path /auth/sso/frontchannel-logout");
     const response = caddy.indexOf("respond @internalSsoLogout 404");
     const proxy = caddy.indexOf("reverse_proxy central:8080", matcher);
@@ -18,6 +18,12 @@ test("Caddy hides the internal SSO logout route from the public Central origin",
     assert.notEqual(response, -1);
     assert.notEqual(proxy, -1);
     assert.ok(matcher < response && response < proxy, "The internal route must be rejected before reverse_proxy.");
+});
+
+test("Compose mounts a dedicated Caddy directory to survive Git file replacement", () => {
+    const compose = source("docker-compose.yml");
+    assert.match(compose, /\.\/deploy\/caddy:\/etc\/caddy:ro/);
+    assert.doesNotMatch(compose, /\.\/deploy\/Caddyfile:\/etc\/caddy\/Caddyfile:ro/);
 });
 
 test("VPS acceptance validates and reloads the mounted Caddy configuration", () => {
