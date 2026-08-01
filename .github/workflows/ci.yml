@@ -103,6 +103,7 @@ jobs:
       - name: Create deterministic CI environment
         run: |
           cat > .env <<'EOF'
+          COMPOSE_PROJECT_NAME=sirk-central
           NODE_ENV=production
           SIRK_ADMIN_PASSWORD_HASH='scrypt$16384$8$1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
           SIRK_ACCESS_KEY_HASH='sha256$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
@@ -157,14 +158,13 @@ jobs:
 
       - name: Inspect image runtimes
         run: |
-          set -euo pipefail
-          compose=(docker compose -f docker-compose.yml --profile auth --profile maintenance)
-          central_image="$(${compose[@]} images -q central)"
-          auth_image="$(${compose[@]} images -q auth)"
-          gateway_image="$(${compose[@]} images -q updater-gateway)"
-          updater_image="$(${compose[@]} images -q updater)"
-          manager_image="$(${compose[@]} images -q backup-manager)"
-          for image in "$central_image" "$auth_image" "$gateway_image" "$updater_image" "$manager_image"; do test -n "$image"; done
+          set -euxo pipefail
+          central_image=sirk-central-central
+          auth_image=sirk-central-auth
+          gateway_image=sirk-central-updater-gateway
+          updater_image=sirk-central-updater
+          manager_image=sirk-central-backup-manager
+          for image in "$central_image" "$auth_image" "$gateway_image" "$updater_image" "$manager_image"; do docker image inspect "$image" >/dev/null; done
           test "$(docker image inspect "$central_image" --format '{{.Config.User}}')" = node
           test "$(docker image inspect "$auth_image" --format '{{.Config.User}}')" = node
           test "$(docker image inspect "$gateway_image" --format '{{.Config.User}}')" = node
