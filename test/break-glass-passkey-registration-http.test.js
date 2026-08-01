@@ -183,6 +183,17 @@ test("BreakGlass can register, list and revoke an ES256 passkey", async t => {
     assert.equal(listed.payload.passkeys[0].credentialId, credentialId);
     assert.equal(Object.prototype.hasOwnProperty.call(listed.payload.passkeys[0], "publicKey"), false);
 
+    const blocked = await request(origin, "/api/break-glass/passkeys/" + credentialId, {
+        method: "DELETE",
+        headers,
+        body: {}
+    });
+    assert.equal(blocked.response.status, 409);
+    assert.equal(blocked.payload.code, "MFA_CONTINUITY_REQUIRED");
+
+    const actor = app.sessions.get(session, true);
+    app.recoveryCodes.generate(actor, 5);
+
     const revoked = await request(origin, "/api/break-glass/passkeys/" + credentialId, {
         method: "DELETE",
         headers,
