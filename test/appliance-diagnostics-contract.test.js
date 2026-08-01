@@ -19,7 +19,7 @@ test("appliance diagnostics are readable only by approved roles", () => {
     assert.equal(allowed(actor("SecAdmin")), true);
     assert.equal(allowed(actor("Auditor")), true);
     assert.equal(allowed(actor("BreakGlass", { builtIn: true, source: "local" })), true);
-    assert.equal(allowed(actor("Operator")), false);
+    assert.equal(allowed(actor("OperatorL1")), false);
     assert.equal(allowed(actor("Admin", { status: "pending" })), false);
 });
 
