@@ -8,7 +8,6 @@ const test = require("node:test");
 const { generateKeyPairSync } = require("node:crypto");
 const { hashSecret, hashAccessKey } = require("../src/security");
 const { createCentralRuntime } = require("../src/server");
-const createContinuityApp = config => createCentralRuntime(config, { through: "continuity" });
 
 async function request(origin, route, options = {}) {
     const response = await fetch(origin + route, {
@@ -43,12 +42,12 @@ test("HTTP API never removes the final BreakGlass MFA recovery method", async t 
         env: { NODE_ENV: "test", SIRK_RUNTIME_LOCK_DISABLED: "true", SIRK_AUDIT_INTEGRITY_KEY: "K".repeat(48) }
     };
 
-    const app = createContinuityApp(config);
+    const app = createCentralRuntime(config);
     await new Promise((resolve, reject) => {
         app.server.once("error", reject);
         app.server.listen(0, "127.0.0.1", resolve);
     });
-    t.after(() => new Promise(resolve => app.server.close(resolve)));
+    t.after(() => app.close());
     const origin = "http://127.0.0.1:" + app.server.address().port;
     const userAgent = "sirk-continuity-test";
 
