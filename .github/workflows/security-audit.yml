@@ -89,26 +89,23 @@ jobs:
           const pkg = require('./package.json');
           const lock = require('./package-lock.json');
           if (pkg.version !== lock.version || pkg.version !== lock.packages[''].version) throw new Error('Package versions differ.');
-          if (pkg.main !== 'src/server-v15.js') throw new Error('Transitional runtime entry changed before flattening completed.');
+          if (pkg.main !== 'src/server.js' || pkg.scripts.start !== 'node src/server.js') throw new Error('Canonical runtime entry is invalid.');
 
           for (const file of [
-            'src/server-v15.js','src/runtime-lock.js','src/portal-command-store-v2.js',
-            'src/ticket-projection-store-v2.js','src/sso-callback-handler.js','src/central-operation-guard.js',
-            'auth/hardened-server.js','updater/Dockerfile.gateway','updater/gateway-server.js','updater/server.js',
+            'src/server.js','src/application.js','src/version.js','src/http/router.js','src/http/transport.js','src/modules/tickets.js','src/runtime-lock.js','src/portal-command-store.js',
+            'src/ticket-projection-store.js','src/sso-callback-handler.js','src/central-operation-guard.js',
+            'auth/server.js','updater/Dockerfile.gateway','updater/gateway-server.js','updater/server.js',
             'updater/backup-archive.js','updater/restore-transaction.js',
             'deploy/backup.sh','deploy/restore.sh','deploy/web-update.sh',
             'deploy/maintenance-up.sh','deploy/maintenance-down.sh','scripts/sync-main.sh',
             'scripts/validate-runtime-architecture.js','docs/RUNTIME-FLATTENING.md'
           ]) if (!fs.existsSync(file)) throw new Error('Missing security file: ' + file);
 
-          const runtime = fs.readFileSync('src/server-v15.js', 'utf8');
+          const runtime = fs.readFileSync('src/modules/tickets.js', 'utf8');
           for (const expected of ['runtimeLockFactory.acquire','SIRK_RUNTIME_LOCK_DISABLED','eventErrorResult']) {
             if (!runtime.includes(expected)) throw new Error('Runtime hardening missing: ' + expected);
           }
-          const architecture = fs.readFileSync('scripts/validate-runtime-architecture.js', 'utf8');
-          for (const expected of ['VERSIONED_LAYER_BUDGET','targetEntry','zero versioned runtime layers']) {
-            if (!architecture.includes(expected)) throw new Error('Runtime flattening ratchet missing: ' + expected);
-          }
+          require('node:child_process').execFileSync(process.execPath, ['scripts/validate-runtime-architecture.js'], { stdio: 'inherit' });
           const gatewayDockerfile = fs.readFileSync('updater/Dockerfile.gateway', 'utf8');
           if (!gatewayDockerfile.includes('USER node') || /docker-cli|\bgit\b|\btar\b/.test(gatewayDockerfile)) throw new Error('Gateway image is not minimal/non-root.');
           const gateway = fs.readFileSync('updater/gateway-server.js', 'utf8');
