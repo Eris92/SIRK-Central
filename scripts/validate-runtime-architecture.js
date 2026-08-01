@@ -81,6 +81,15 @@ const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"))
 if (pkg.main !== "src/server.js") fail("package.json main must be src/server.js.");
 if (String(pkg.scripts && pkg.scripts.start || "") !== "node src/server.js") fail("start script must use only src/server.js.");
 
+const serverSource = fs.readFileSync(entry, "utf8");
+if (/\boptions\.through\b|\bthrough\s*=/.test(serverSource)) {
+    fail("src/server.js must always construct the complete runtime; staged module construction is forbidden.");
+}
+for (const file of walk(path.join(root, "test")).filter(value => value.endsWith(".js"))) {
+    const source = fs.readFileSync(file, "utf8");
+    if (/\bthrough\s*:/.test(source)) fail(path.relative(root, file) + " uses a staged runtime instead of the canonical runtime.");
+}
+
 for (const file of fs.readdirSync(srcDir)) {
     if (/^server-v\d+\.js$/.test(file)) fail("versioned server layer still exists: src/" + file);
 }
