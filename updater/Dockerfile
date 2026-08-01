@@ -4,6 +4,7 @@ RUN apk add --no-cache age bash git docker-cli docker-cli-compose curl python3 t
 WORKDIR /opt/sirk-central
 COPY updater/server.js /app/server.js
 COPY updater/appliance-server.js /app/appliance-server.js
+COPY updater/appliance-download-server.js /app/appliance-download-server.js
 COPY updater/management-server.js /app/management-server.js
 COPY updater/backup-archive.js /app/backup-archive.js
 COPY updater/restore-transaction.js /app/restore-transaction.js
