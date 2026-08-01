@@ -3,7 +3,7 @@
 const crypto = require("node:crypto");
 const http = require("node:http");
 
-const STATIC_PATHS = new Set(["/status", "/run", "/backup/status", "/backup/run", "/backup/restore"]);
+const STATIC_PATHS = new Set(["/status", "/run", "/backup/status", "/backup/run", "/backup/restore", "/appliance/status"]);
 
 function safeEqual(left, right) {
     const a = Buffer.from(String(left || ""));
@@ -79,7 +79,7 @@ function maintenanceRequired(res) {
     return sendJson(res, 409, {
         ok: false,
         code: "UPDATER_MAINTENANCE_REQUIRED",
-        error: "Updater maintenance window is closed."
+        error: "Updater appliance worker is unavailable."
     });
 }
 
@@ -100,7 +100,7 @@ function createGateway(options = {}) {
         try {
             const url = new URL(req.url, "http://updater-gateway.local");
             if (req.method === "GET" && url.pathname === "/healthz") {
-                return sendJson(res, 200, { ok: true, service: "updater-gateway", worker: "maintenance-controlled" });
+                return sendJson(res, 200, { ok: true, service: "updater-gateway", worker: "appliance-internal" });
             }
             if (!authorized(req, token)) return sendJson(res, 404, { ok: false, error: "Not found." });
             if (!["GET", "POST", "DELETE"].includes(req.method) || !pathAllowed(url.pathname)) {
