@@ -23,7 +23,6 @@ const { VERSION } = require("./version");
 function createCentralRuntime(config, options = {}) {
     const app = createApplication(config);
     const modules = [
-        ["auth-hardening", registerAuthHardening],
         ["break-glass-ui", registerBreakGlassUi],
         ["workspace-authorization", registerWorkspaceAuthorization],
         ["webauthn-authentication", registerWebAuthnAuthentication],
@@ -37,7 +36,8 @@ function createCentralRuntime(config, options = {}) {
         ["security-api", registerSecurityApi],
         ["approvals", registerApprovals],
         ["portal-commands", registerPortalCommands],
-        ["tickets", registerTickets]
+        ["tickets", registerTickets],
+        ["auth-hardening", registerAuthHardening]
     ];
     const through = String(options.through || "");
     for (const [id, register] of modules) {
