@@ -15,25 +15,34 @@ const files = fs.readdirSync(testDir)
 if (!files.length) throw new Error("No Node test files were found.");
 
 for (const file of files) {
-    process.stdout.write("\n=== " + file + " ===\n");
     const result = spawnSync(process.execPath, ["--test", file], {
         cwd: root,
         env: process.env,
-        stdio: "inherit",
-        timeout: timeoutMs
+        encoding: "utf8",
+        timeout: timeoutMs,
+        maxBuffer: 16 * 1024 * 1024
     });
+
     if (result.error) {
+        process.stderr.write("\nFAIL " + file + "\n");
         if (result.error.code === "ETIMEDOUT") {
             process.stderr.write(file + " exceeded " + timeoutMs + " ms.\n");
         } else {
             process.stderr.write(file + " failed to start: " + result.error.message + "\n");
         }
+        if (result.stdout) process.stderr.write(result.stdout);
+        if (result.stderr) process.stderr.write(result.stderr);
         process.exit(1);
     }
+
     if (result.status !== 0) {
-        process.stderr.write(file + " failed with exit code " + String(result.status) + ".\n");
+        process.stderr.write("\nFAIL " + file + " (exit " + String(result.status) + ")\n");
+        if (result.stdout) process.stderr.write(result.stdout);
+        if (result.stderr) process.stderr.write(result.stderr);
         process.exit(result.status || 1);
     }
+
+    process.stdout.write("PASS " + file + "\n");
 }
 
-process.stdout.write("\nAll " + files.length + " Node test files passed.\n");
+process.stdout.write("All " + files.length + " Node test files passed.\n");
