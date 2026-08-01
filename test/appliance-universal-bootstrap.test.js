@@ -28,9 +28,17 @@ test("universal bootstrap is idempotent when current", () => {
     assert.match(bootstrap, /git ls-remote --exit-code/);
 });
 
-test("bootstrap validates repository identity and downloads only over HTTPS", () => {
+test("bootstrap validates identity and permits only HTTPS sources", () => {
     assert.match(bootstrap, /unexpected Git origin/);
+    assert.match(bootstrap, /SIRK_REPO_URL must use HTTPS/);
+    assert.match(bootstrap, /SIRK_RAW_BASE must use HTTPS/);
     assert.match(bootstrap, /--proto '=https' --tlsv1\.2/);
     assert.match(publicInstall, /deploy\/appliance-bootstrap\.sh/);
     assert.match(publicInstall, /--proto '=https' --tlsv1\.2/);
+});
+
+test("downloaded child scripts are removed after success or failure", () => {
+    assert.match(bootstrap, /bash "\$temporary" \|\| status=\$\?/);
+    assert.match(bootstrap, /rm -f -- "\$temporary"/);
+    assert.match(bootstrap, /return "\$status"/);
 });
