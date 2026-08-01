@@ -1,9 +1,15 @@
 "use strict";
 
 function create(fallback) {
+    const middleware = [];
     const handlers = [];
     if (typeof fallback === "function") handlers.push(fallback);
 
+    function before(handler) {
+        if (typeof handler !== "function") throw new TypeError("HTTP middleware must be a function.");
+        middleware.push(handler);
+        return handler;
+    }
     function prepend(handler) {
         if (typeof handler !== "function") throw new TypeError("HTTP handler must be a function.");
         handlers.unshift(handler);
@@ -15,6 +21,10 @@ function create(fallback) {
         return handler;
     }
     async function dispatch(req, res) {
+        for (const handler of middleware) {
+            const handled = await handler(req, res);
+            if (handled === true || res.writableEnded || res.destroyed) return;
+        }
         for (const handler of handlers) {
             const handled = await handler(req, res);
             if (handled === true || res.writableEnded || res.destroyed) return;
@@ -30,7 +40,7 @@ function create(fallback) {
             res.end(data);
         }
     }
-    return { prepend, append, dispatch, handlers };
+    return { before, prepend, append, dispatch, middleware, handlers };
 }
 
 module.exports = { create };
