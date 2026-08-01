@@ -7,13 +7,23 @@ Data aktualizacji: 2026-08-01
 ```text
 Repo: Eris92/SIRK-Central
 Canonical branch: main
-Working branch: refactor/remove-legacy-runtime
-Draft PR: #46
 Runtime: src/server.js
 Version: 1.0.0-rc.26
+Legacy refactor PR: #46 — merged
+Integration commit: 69d17b1719faa723619df2ac8d7a74959f754bab
 ```
 
-PR #46 pozostaje niescalony. Repozytorium SIRK Portal nie zostało zmodyfikowane.
+PR #46 został scalony do `main` 2026-08-01. `main` jest jedyną kanoniczną linią kodu i wdrożeń. Historyczna gałąź `refactor/remove-legacy-runtime` nie jest już źródłem wdrożenia. Repozytorium SIRK Portal nie zostało zmodyfikowane.
+
+Automatyczne bramki dla finalnego HEAD PR `a9c6cc2bb72a4ee2b0e5d0902e3bc0d61d5d1867` przed merge:
+
+```text
+CI: success
+SIRK Central Security Audit: success
+SIRK Central UI E2E: success
+```
+
+Merge nie zastępuje walidacji na nieprodukcyjnym VPS.
 
 ## Płaski runtime
 
@@ -70,7 +80,7 @@ Granice:
 - emergency policy lock;
 - limit body 8 MiB;
 - brak przekazywania cookie sesji Central;
-- bezpieczne przepisywanie Location, Set-Cookie Path i ścieżek w treści;
+- bezpieczne przepisywanie `Location`, `Set-Cookie Path` i ścieżek w treści;
 - kontrolowane mapowanie timeout/offline/broker errors.
 
 ## Storage i concurrency
@@ -151,9 +161,11 @@ Security Audit sprawdza:
 - CodeQL;
 - izolację backup managera i maintenance worker boundary.
 
-Dokument nie zastępuje wyniku workflow dla konkretnego HEAD — przed merge należy sprawdzić aktualne CI, Security Audit i UI E2E.
+## Aktualny etap
 
-## Walidacja środowiskowa do wykonania
+Refaktor i usunięcie legacy są zakończone oraz scalone. Kolejny etap to wyłącznie walidacja aktualnego `main` i poprawki wynikające z rzeczywistych testów środowiskowych.
+
+Walidacja lokalna na VPS:
 
 ```bash
 cd /opt/sirk-central
@@ -183,4 +195,4 @@ Następnie na nieprodukcyjnym VPS:
 - worker maintenance pozostaje root-equivalent podczas jawnie otwartego okna;
 - realne Entra, YubiKey, TLS i rollback wymagają testów środowiskowych;
 - konektory Jira/ServiceDesk/GLPI należą do repo SIRK Portal;
-- PR #46 nie powinien być scalany bez zielonych workflow dla finalnego HEAD.
+- wydanie `1.0.0` pozostaje zablokowane do zakończenia acceptance oraz failure drills na VPS.
