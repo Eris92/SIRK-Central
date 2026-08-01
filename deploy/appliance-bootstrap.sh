@@ -13,16 +13,25 @@ die() { printf '[SIRK] ERROR: %s\n' "$*" >&2; exit 1; }
 
 [[ "$(id -u)" -eq 0 ]] || die "run through sudo or as root"
 command -v curl >/dev/null 2>&1 || die "curl is required"
+[[ "$REPO_URL" == https://* ]] || die "SIRK_REPO_URL must use HTTPS"
+[[ "$RAW_BASE" == https://* ]] || die "SIRK_RAW_BASE must use HTTPS"
+[[ "$REPO_REF" =~ ^[A-Za-z0-9._/-]{1,128}$ ]] || die "SIRK_REPO_REF is invalid"
+[[ "$REPO_REF" != *..* ]] || die "SIRK_REPO_REF is invalid"
 
 fetch_and_exec() {
     local script_name="$1"
     local source="${RAW_BASE}/${script_name}"
-    local temporary
+    local temporary status=0
+    [[ "$script_name" =~ ^[a-z0-9-]+\.sh$ ]] || die "bootstrap child script name is invalid"
     temporary="$(mktemp /tmp/sirk-central-bootstrap.XXXXXX)"
-    curl -fsSL --proto '=https' --tlsv1.2 "$source" -o "$temporary"
+    if ! curl -fsSL --proto '=https' --tlsv1.2 "$source" -o "$temporary"; then
+        rm -f -- "$temporary"
+        die "unable to download ${script_name}"
+    fi
     chmod 0700 "$temporary"
-    bash "$temporary"
+    bash "$temporary" || status=$?
     rm -f -- "$temporary"
+    return "$status"
 }
 
 if [[ ! -e "$INSTALL_DIR" ]]; then
