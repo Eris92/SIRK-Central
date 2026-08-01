@@ -1,0 +1,51 @@
+name: Apply Flat Runtime
+
+on:
+  push:
+    branches:
+      - refactor/remove-legacy-runtime
+    paths:
+      - .github/workflows/apply-flat-runtime.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-flat-runtime-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/remove-legacy-runtime
+          fetch-depth: 0
+
+      - name: Verify and apply payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .flat-runtime-payload/part-* | base64 -d > /tmp/payload.tar.xz
+          echo '499ee9078bd690bc4cb75a9e0fdba22e862020ee29d4d51457d70503c6e299ac  /tmp/payload.tar.xz' | sha256sum -c -
+
+          rm -rf /tmp/flat-apply
+          mkdir -p /tmp/flat-apply
+          tar -xJf /tmp/payload.tar.xz -C /tmp/flat-apply
+
+          while IFS= read -r path; do
+            [[ -n "$path" ]] && rm -rf -- "$path"
+          done < /tmp/flat-apply/deleted-files.txt
+
+          cp -a /tmp/flat-apply/payload/. .
+          rm -rf .flat-runtime-payload
+          rm -rf scripts/__pycache__
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'refactor: flatten runtime and remove backward compatibility'
+          git push origin HEAD:refactor/remove-legacy-runtime
