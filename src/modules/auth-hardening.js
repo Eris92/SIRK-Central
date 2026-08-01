@@ -7,6 +7,7 @@ const crypto = require("node:crypto");
 const recoveryCodeStoreFactory = require("../recovery-code-store");
 const challengeStoreFactory = require("../webauthn-challenge-store");
 const loginTransactionStoreFactory = require("../login-transaction-store");
+const continuityPolicy = require("../mfa-continuity-policy");
 const { permissionsFor } = require("../rbac");
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
@@ -151,6 +152,7 @@ function registerAuthHardening(app, config) {
                     return json(res, 200, { ok: true, codes, shownOnce: true, revokedSessions });
                 }
                 if (req.method === "DELETE" && url.pathname === "/api/break-glass/mfa/recovery-codes") {
+                    continuityPolicy.assertCanRevokeRecoveryCodes(app.passkeys, recoveryCodes, actor);
                     const removed = recoveryCodes.revoke(actor);
                     app.securityCenter.audit("breakglass.recovery_codes.revoked", actor, { removed });
                     return json(res, 200, { ok: true, removed });
@@ -160,7 +162,8 @@ function registerAuthHardening(app, config) {
 
             return false;
         } catch (error) {
-            if (!res.headersSent) return json(res, error.statusCode || 400, { ok: false, error: error.message || "Request failed." });
+            const status = Number.isInteger(error.statusCode) ? error.statusCode : 400;
+            if (!res.headersSent) return json(res, status, { ok: false, code: error.code || "REQUEST_REJECTED", error: error.message || "Request failed." });
             res.destroy(error);
         }
     };
