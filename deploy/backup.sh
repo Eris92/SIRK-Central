@@ -27,7 +27,23 @@ command -v sha256sum >/dev/null 2>&1 || { echo "sha256sum is required." >&2; exi
 [[ "${RETENTION_DAYS}" =~ ^[0-9]+$ ]] || { echo "SIRK_BACKUP_RETENTION_DAYS must be an integer." >&2; exit 1; }
 [[ "${REQUIRE_ENCRYPTION}" =~ ^(auto|true|false)$ ]] || { echo "SIRK_BACKUP_REQUIRE_ENCRYPTION must be auto, true or false." >&2; exit 1; }
 
+cd "${INSTALL_DIR}"
+
+read_persisted_age_recipient() {
+  local central_id value
+  central_id="$("${COMPOSE[@]}" ps -q central 2>/dev/null || true)"
+  [[ -n "${central_id}" ]] || return 0
+  if ! value="$(docker exec "${central_id}" node /app/scripts/read-backup-age-recipient.js /var/lib/sirk-central)"; then
+    echo "Unable to read the persisted Break-Glass age recipient." >&2
+    return 1
+  fi
+  printf '%s' "${value}"
+}
+
 AGE_RECIPIENT="${SIRK_BACKUP_AGE_RECIPIENT:-}"
+if [[ -z "${AGE_RECIPIENT}" ]]; then
+  AGE_RECIPIENT="$(read_persisted_age_recipient)"
+fi
 if [[ -z "${AGE_RECIPIENT}" ]]; then
   AGE_RECIPIENT="$(python3 "${INSTALL_DIR}/scripts/read-env-value.py" "${INSTALL_DIR}/.env" SIRK_BACKUP_AGE_RECIPIENT)"
 fi
@@ -40,14 +56,13 @@ if [[ "${REQUIRE_ENCRYPTION}" == "auto" ]]; then
   fi
 fi
 if [[ "${REQUIRE_ENCRYPTION}" == "true" && -z "${AGE_RECIPIENT}" ]]; then
-  echo "Encrypted offline backup is required. Set SIRK_BACKUP_AGE_RECIPIENT in the process environment or production .env. Use SIRK_BACKUP_REQUIRE_ENCRYPTION=false only for an explicitly accepted non-production exception." >&2
+  echo "Encrypted offline backup is required. Generate an age identity in the Break-Glass UI, set SIRK_BACKUP_AGE_RECIPIENT in the process environment, or configure it in production .env. Use SIRK_BACKUP_REQUIRE_ENCRYPTION=false only for an explicitly accepted non-production exception." >&2
   exit 1
 fi
 
 mkdir -p "${TARGET}" "${BACKUP_ROOT}"
 chmod 0700 "${BACKUP_ROOT}" "${TARGET}"
 
-cd "${INSTALL_DIR}"
 cp --preserve=mode,timestamps .env "${TARGET}/.env"
 git rev-parse HEAD > "${TARGET}/commit.txt"
 git status --porcelain=v1 > "${TARGET}/git-status.txt"
