@@ -177,7 +177,7 @@ services:
       SIRK_BUSINESS_DOMAIN: ${SIRK_BUSINESS_DOMAIN:-sir-k.pl}
       SIRK_ACME_EMAIL: ${SIRK_ACME_EMAIL}
     volumes:
-      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./deploy/caddy:/etc/caddy:ro
       - ./website:/srv/website:ro
       - ${SIRK_BUSINESS_SITE_PATH:-/opt/sir-k.pl}:/srv/sir-k:ro
       - caddy-data:/data
