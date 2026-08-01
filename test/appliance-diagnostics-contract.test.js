@@ -7,6 +7,7 @@ const { allowed, updaterOrigin } = require("../src/modules/appliance-management"
 const { pathAllowed } = require("../updater/gateway-server");
 
 const worker = fs.readFileSync("updater/appliance-server.js", "utf8");
+const downloadWorker = fs.readFileSync("updater/appliance-download-server.js", "utf8");
 const ui = fs.readFileSync("public/appliance-system-ui.js", "utf8");
 const overlay = fs.readFileSync("docker-compose.appliance.yml", "utf8");
 
@@ -52,5 +53,6 @@ test("System tab renders containers storage and operation state", () => {
     assert.match(ui, /result\.storage/);
     assert.match(ui, /result\.update/);
     assert.match(ui, /result\.restore/);
-    assert.match(overlay, /command: \["node", "\/app\/appliance-server\.js"\]/);
+    assert.match(downloadWorker, /require\("\.\/appliance-server"\)/);
+    assert.match(overlay, /command: \["node", "\/app\/appliance-download-server\.js"\]/);
 });
