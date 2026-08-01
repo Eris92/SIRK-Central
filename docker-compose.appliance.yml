@@ -1,0 +1,13 @@
+services:
+  updater:
+    profiles: !reset []
+    restart: unless-stopped
+    environment:
+      SIRK_UPDATER_SCRIPT: /opt/sirk-central/deploy/appliance-web-update.sh
+      SIRK_COMPOSE_FILE: /opt/sirk-central/docker-compose.yml
+      SIRK_COMPOSE_PROFILES: auth,maintenance
+
+  updater-gateway:
+    depends_on:
+      updater:
+        condition: service_healthy
