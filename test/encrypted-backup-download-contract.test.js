@@ -35,10 +35,12 @@ test("Central streams download only for authenticated approved roles", () => {
     assert.match(central, /\/api\\\/settings\\\/backup\\\/download/);
 });
 
-test("UI exposes download without enabling encrypted restore", () => {
+test("UI exposes download and keeps restore identity-gated", () => {
     assert.match(ui, /\/api\/settings\/backup\/download\//);
     assert.match(ui, /download\.download = fileName/);
-    assert.match(ui, /restore\.disabled = true/);
-    assert.match(compose, /appliance-download-server\.js/);
+    assert.match(ui, /restoreAllowed/);
+    assert.match(ui, /\.agekey/);
+    assert.match(compose, /appliance-restore-server\.js/);
     assert.match(dockerfile, /COPY updater\/appliance-download-server\.js/);
+    assert.match(dockerfile, /COPY updater\/appliance-restore-server\.js/);
 });

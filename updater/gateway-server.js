@@ -3,7 +3,7 @@
 const crypto = require("node:crypto");
 const http = require("node:http");
 
-const STATIC_PATHS = new Set(["/status", "/run", "/backup/status", "/backup/run", "/backup/restore", "/appliance/status"]);
+const STATIC_PATHS = new Set(["/status", "/run", "/backup/status", "/backup/run", "/backup/restore", "/backup/encrypted/restore", "/appliance/status"]);
 
 function safeEqual(left, right) {
     const a = Buffer.from(String(left || ""));
