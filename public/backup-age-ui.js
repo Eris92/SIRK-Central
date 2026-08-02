@@ -3,61 +3,61 @@
 (function () {
   const COPY = {
     pl: {
-      title: "Szyfrowanie backupu age",
-      help: "Wygeneruj parę kluczy dla zaszyfrowanych backupów. Central zapisze wyłącznie publiczny recipient.",
-      warning: "Prywatny klucz zostanie pobrany tylko raz. Zachowaj go poza serwerem. Rotacja nie odszyfruje starych backupów bez poprzedniego klucza.",
+      title: "Klucz szyfrowania backupów",
+      help: "Prywatny klucz age pozostaje w Central zaszyfrowany hasłem Break-Glass. Restore wymaga tylko znajomości tego hasła.",
+      warning: "Eksport zawiera wyłącznie zaszyfrowany klucz. Przechowuj go poza serwerem jako kopię awaryjną.",
       currentPassword: "Aktualne hasło Break-Glass",
-      confirm: "Rozumiem, że bez prywatnego klucza backupów nie będzie można odzyskać.",
-      generate: "Wygeneruj i pobierz klucz",
-      rotate: "Wygeneruj i pobierz nowy klucz",
-      notConfigured: "Recipient age nie jest skonfigurowany.",
-      configured: "Skonfigurowany recipient",
+      confirm: "Rozumiem, że rotacja utworzy nowy klucz dla kolejnych backupów.",
+      generate: "Wygeneruj klucz",
+      rotate: "Rotuj klucz",
+      export: "Eksportuj zaszyfrowany klucz",
+      notConfigured: "Klucz age nie jest skonfigurowany.",
+      configured: "Klucz zapisany lokalnie i zaszyfrowany",
+      migration: "Wymagana rotacja: zapisany jest tylko publiczny recipient starego mechanizmu.",
       source: "Źródło",
-      generating: "Generowanie i przygotowanie pobrania...",
-      downloaded: "Klucz prywatny został pobrany. Central zachował tylko publiczny recipient.",
+      rotation: "Rotacja",
+      processing: "Przetwarzanie klucza...",
+      downloaded: "Zaszyfrowany eksport klucza został pobrany. Klucz pozostaje bezpiecznie zapisany w Central.",
       passwordInvalid: "Aktualne hasło Break-Glass jest nieprawidłowe.",
-      rotateConfirm: "Zostanie utworzony nowy recipient. Zachowaj dotychczasowy klucz do odszyfrowania starszych backupów. Kontynuować?",
-      requestFailed: "Nie udało się wygenerować klucza age."
+      rotateConfirm: "Nowe backupy będą szyfrowane nowym kluczem. Starsze backupy wymagają eksportu poprzedniego klucza. Kontynuować?",
+      requestFailed: "Operacja klucza age nie powiodła się."
     },
     en: {
-      title: "age backup encryption",
-      help: "Generate a key pair for encrypted backups. Central stores only the public recipient.",
-      warning: "The private identity is downloaded once. Store it off-server. Rotation does not make old backups decryptable without the previous key.",
+      title: "Backup encryption key",
+      help: "The private age identity remains in Central encrypted with the Break-Glass password. Restore requires only that password.",
+      warning: "The export contains only the encrypted key. Store it off-server as a recovery copy.",
       currentPassword: "Current Break-Glass password",
-      confirm: "I understand backups cannot be recovered without the private identity.",
-      generate: "Generate and download key",
-      rotate: "Generate and download new key",
-      notConfigured: "The age recipient is not configured.",
-      configured: "Configured recipient",
+      confirm: "I understand rotation creates a new key for subsequent backups.",
+      generate: "Generate key",
+      rotate: "Rotate key",
+      export: "Export encrypted key",
+      notConfigured: "The age key is not configured.",
+      configured: "Key persisted locally and encrypted",
+      migration: "Rotation required: only a public recipient from the old mechanism is stored.",
       source: "Source",
-      generating: "Generating and preparing download...",
-      downloaded: "The private identity was downloaded. Central retained only the public recipient.",
+      rotation: "Rotation",
+      processing: "Processing key...",
+      downloaded: "The encrypted key export was downloaded. The key remains securely stored in Central.",
       passwordInvalid: "The current Break-Glass password is invalid.",
-      rotateConfirm: "A new recipient will be created. Keep the current key to decrypt older backups. Continue?",
-      requestFailed: "Unable to generate the age key."
+      rotateConfirm: "New backups will use a new key. Older backups require the previous key export. Continue?",
+      requestFailed: "The age key operation failed."
     }
   };
 
   let currentStatus = null;
   let elements = null;
 
-  function lang() {
-    return document.documentElement.lang === "en" ? "en" : "pl";
-  }
-
-  function text(key) {
-    return COPY[lang()][key];
-  }
-
+  function lang() { return document.documentElement.lang === "en" ? "en" : "pl"; }
+  function text(key) { return COPY[lang()][key]; }
   function setMessage(value, className) {
     elements.message.textContent = value;
     elements.message.className = className || "muted";
   }
-
   function updateButtonState() {
-    elements.button.disabled = !elements.password.value || !elements.confirm.checked;
+    const passwordPresent = Boolean(elements.password.value);
+    elements.button.disabled = !passwordPresent || !elements.confirm.checked;
+    elements.exportButton.disabled = !passwordPresent || !currentStatus || !currentStatus.keyPersisted;
   }
-
   function renderCopy() {
     if (!elements) return;
     elements.title.textContent = text("title");
@@ -65,99 +65,108 @@
     elements.warning.textContent = text("warning");
     elements.passwordLabel.textContent = text("currentPassword");
     elements.confirmText.textContent = text("confirm");
+    elements.exportButton.textContent = text("export");
     renderStatus();
   }
-
   function renderStatus() {
     if (!elements) return;
     if (!currentStatus || !currentStatus.configured) {
       elements.status.textContent = text("notConfigured");
       elements.recipient.hidden = true;
       elements.button.textContent = text("generate");
+      updateButtonState();
       return;
     }
-    elements.status.textContent = text("configured") + " · " + text("source") + ": " + currentStatus.source;
+    const suffix = currentStatus.rotation ? " · " + text("rotation") + ": " + currentStatus.rotation : "";
+    elements.status.textContent = (currentStatus.migrationRequired ? text("migration") : text("configured")) +
+      " · " + text("source") + ": " + currentStatus.source + suffix;
     elements.recipient.textContent = currentStatus.recipient;
     elements.recipient.hidden = false;
     elements.button.textContent = text("rotate");
+    updateButtonState();
   }
-
   async function loadStatus() {
     try {
-      const response = await fetch("/api/break-glass/backup-age/status", { credentials: "same-origin" });
+      const response = await fetch("/api/break-glass/backup-age/status", { credentials: "same-origin", cache: "no-store" });
       if (!response.ok) return;
       currentStatus = await response.json();
       renderStatus();
-    } catch (_) {
-      /* The Break-Glass panel remains usable even if status refresh fails. */
-    }
+    } catch (_) { /* keep panel usable */ }
   }
-
   async function parseError(response) {
     try {
       const body = await response.json();
       return body.error || text("requestFailed");
-    } catch (_) {
-      return text("requestFailed");
-    }
+    } catch (_) { return text("requestFailed"); }
   }
-
+  async function downloadResponse(response) {
+    const blob = await response.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = objectUrl;
+    link.download = "sirk-central-backup-key.sirkkey";
+    link.hidden = true;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+  }
+  async function requestKey(route, body) {
+    const response = await fetch(route, {
+      method: "POST",
+      credentials: "same-origin",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    if (!response.ok) throw Object.assign(new Error(await parseError(response)), { status: response.status });
+    await downloadResponse(response);
+    return response;
+  }
   async function generate(event) {
     event.preventDefault();
     if (currentStatus && currentStatus.configured && !window.confirm(text("rotateConfirm"))) return;
-
     elements.button.disabled = true;
-    setMessage(text("generating"), "muted");
+    elements.exportButton.disabled = true;
+    setMessage(text("processing"), "muted");
     try {
-      const response = await fetch("/api/break-glass/backup-age/identity", {
-        method: "POST",
-        credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          currentPassword: elements.password.value,
-          confirm: "GENERATE AGE BACKUP KEY"
-        })
+      const response = await requestKey("/api/break-glass/backup-age/identity", {
+        currentPassword: elements.password.value,
+        confirm: "GENERATE AGE BACKUP KEY"
       });
-      if (!response.ok) {
-        const message = await parseError(response);
-        throw Object.assign(new Error(message), { status: response.status });
-      }
-
-      const recipient = response.headers.get("x-sirk-age-recipient") || "";
-      let identityBlob = await response.blob();
-      const objectUrl = URL.createObjectURL(identityBlob);
-      const link = document.createElement("a");
-      link.href = objectUrl;
-      link.download = "sirk-central-backup.agekey";
-      link.hidden = true;
-      document.body.append(link);
-      link.click();
-      link.remove();
-      setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
-      identityBlob = null;
-
-      elements.password.value = "";
-      elements.confirm.checked = false;
       currentStatus = {
         ok: true,
         configured: true,
         source: "break-glass-ui",
-        recipient
+        recipient: response.headers.get("x-sirk-age-recipient") || "",
+        keyPersisted: true,
+        migrationRequired: false,
+        rotation: Number(response.headers.get("x-sirk-age-key-rotation") || 1)
       };
+      elements.password.value = "";
+      elements.confirm.checked = false;
       renderStatus();
       setMessage(text("downloaded"), "success");
     } catch (error) {
       setMessage(error.status === 401 ? text("passwordInvalid") : error.message || text("requestFailed"), "error");
-    } finally {
-      updateButtonState();
-    }
+    } finally { updateButtonState(); }
   }
-
+  async function exportKey() {
+    elements.button.disabled = true;
+    elements.exportButton.disabled = true;
+    setMessage(text("processing"), "muted");
+    try {
+      await requestKey("/api/break-glass/backup-age/export", { currentPassword: elements.password.value });
+      elements.password.value = "";
+      setMessage(text("downloaded"), "success");
+    } catch (error) {
+      setMessage(error.status === 401 ? text("passwordInvalid") : error.message || text("requestFailed"), "error");
+    } finally { updateButtonState(); }
+  }
   function install() {
     const view = document.getElementById("breakGlassView");
     const grid = view && view.querySelector(".settings-grid");
     if (!grid || document.getElementById("backupAgeKeyCard")) return;
-
     const card = document.createElement("article");
     card.id = "backupAgeKeyCard";
     card.className = "settings-card danger-card";
@@ -170,34 +179,28 @@
       '<form id="backupAgeKeyForm" class="stack-form">',
       '  <label><span id="backupAgePasswordLabel"></span><input id="backupAgePassword" type="password" autocomplete="current-password" required></label>',
       '  <label class="checkbox-row"><input id="backupAgeConfirm" type="checkbox"><span id="backupAgeConfirmText"></span></label>',
-      '  <button id="backupAgeGenerateButton" type="submit" disabled></button>',
+      '  <div class="button-row"><button id="backupAgeGenerateButton" type="submit" disabled></button><button id="backupAgeExportButton" type="button" class="secondary" disabled></button></div>',
       '  <p id="backupAgeMessage" class="muted" role="status"></p>',
       '</form>'
     ].join("");
     grid.append(card);
-
     elements = {
-      title: document.getElementById("backupAgeKeyTitle"),
-      help: document.getElementById("backupAgeKeyHelp"),
-      warning: document.getElementById("backupAgeKeyWarning"),
-      status: document.getElementById("backupAgeKeyStatus"),
-      recipient: document.getElementById("backupAgeRecipient"),
-      form: document.getElementById("backupAgeKeyForm"),
-      passwordLabel: document.getElementById("backupAgePasswordLabel"),
-      password: document.getElementById("backupAgePassword"),
-      confirm: document.getElementById("backupAgeConfirm"),
-      confirmText: document.getElementById("backupAgeConfirmText"),
-      button: document.getElementById("backupAgeGenerateButton"),
+      title: document.getElementById("backupAgeKeyTitle"), help: document.getElementById("backupAgeKeyHelp"),
+      warning: document.getElementById("backupAgeKeyWarning"), status: document.getElementById("backupAgeKeyStatus"),
+      recipient: document.getElementById("backupAgeRecipient"), form: document.getElementById("backupAgeKeyForm"),
+      passwordLabel: document.getElementById("backupAgePasswordLabel"), password: document.getElementById("backupAgePassword"),
+      confirm: document.getElementById("backupAgeConfirm"), confirmText: document.getElementById("backupAgeConfirmText"),
+      button: document.getElementById("backupAgeGenerateButton"), exportButton: document.getElementById("backupAgeExportButton"),
       message: document.getElementById("backupAgeMessage")
     };
-
     elements.password.addEventListener("input", updateButtonState);
     elements.confirm.addEventListener("change", updateButtonState);
     elements.form.addEventListener("submit", generate);
+    elements.exportButton.addEventListener("click", exportKey);
     document.getElementById("breakGlassButton")?.addEventListener("click", loadStatus);
     new MutationObserver(renderCopy).observe(document.documentElement, { attributes: true, attributeFilter: ["lang"] });
     renderCopy();
+    loadStatus();
   }
-
   install();
 }());
