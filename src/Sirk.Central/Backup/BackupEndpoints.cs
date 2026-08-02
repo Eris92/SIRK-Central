@@ -1,5 +1,7 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Antiforgery;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.Extensions.Options;
 using Sirk.Central.Security;
 
 namespace Sirk.Central.Backup;
@@ -10,12 +12,21 @@ internal static class BackupEndpoints
 {
     public static IEndpointRouteBuilder MapSirkBackup(this IEndpointRouteBuilder endpoints)
     {
-        var group = endpoints.MapGroup("/api/v1/backups")
-            .RequireAuthorization(SirkPolicies.BackupAdministration);
+        var services = endpoints.ServiceProvider;
+        var service = new BackupArchiveService(
+            services.GetRequiredService<IOptions<SecurityOptions>>(),
+            services.GetRequiredService<BackupKeyStore>(),
+            services.GetRequiredService<ILogger<BackupArchiveService>>());
 
-        group.MapGet("/", (BackupArchiveService service) => Results.Ok(service.List()));
-        group.MapPost("/", CreateAsync);
-        group.MapPost("/restore", RestoreAsync);
+        var group = endpoints.MapGroup("/api/v1/backups")
+            .RequireAuthorization(SirkPolicies.SecurityAdministration);
+
+        group.MapGet("/", () => Results.Ok(service.List()));
+        group.MapPost("/", (HttpContext context, IAntiforgery antiforgery, SecurityAuditLog auditLog) =>
+            CreateAsync(context, antiforgery, service, auditLog));
+        group.MapPost("/restore", (RestoreBackupRequest request, HttpContext context,
+                IAntiforgery antiforgery, SecurityAuditLog auditLog) =>
+            RestoreAsync(request, context, antiforgery, service, auditLog));
         return endpoints;
     }
 
@@ -141,7 +152,9 @@ internal static class BackupEndpoints
         (context.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? "unknown",
          context.User.Identity?.Name ?? "unknown");
 
-    private static string RemoteAddress(HttpContext context) =>
-        (context.Connection.RemoteIpAddress?.ToString() ?? "unknown")[..
-            Math.Min((context.Connection.RemoteIpAddress?.ToString() ?? "unknown").Length, 128)];
+    private static string RemoteAddress(HttpContext context)
+    {
+        var address = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        return address[..Math.Min(address.Length, 128)];
+    }
 }
