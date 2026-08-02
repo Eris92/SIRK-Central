@@ -35,6 +35,7 @@ builder.Services.AddSingleton<BackupArchiveService>();
 builder.Services.AddSingleton<EntraSettingsStore>();
 builder.Services.AddSingleton<ApprovalStore>();
 builder.Services.AddSingleton<TicketStore>();
+builder.Services.AddSingleton<TicketCommandStore>();
 builder.Services.AddSirkWebAuthn(builder.Configuration);
 builder.Services.AddTransient<IStartupFilter, WebAuthnUiStartupFilter>();
 
@@ -135,6 +136,7 @@ if (securityOptions.Enabled)
     _ = app.Services.GetRequiredService<EntraSettingsStore>();
     _ = app.Services.GetRequiredService<ApprovalStore>();
     _ = app.Services.GetRequiredService<TicketStore>();
+    _ = app.Services.GetRequiredService<TicketCommandStore>();
     _ = app.Services.GetRequiredService<WebAuthnCredentialStore>();
     _ = app.Services.GetRequiredService<WebAuthnCeremonyStore>();
     _ = app.Services.GetRequiredService<SecurityAuditLog>().VerifyIntegrity();
@@ -185,6 +187,7 @@ if (securityOptions.Enabled)
     app.MapEntraSettings();
     app.MapApprovals();
     app.MapTickets();
+    app.MapTicketCommands();
 }
 app.MapFallback(() => Results.Problem(statusCode: 404, title: "Resource not found"));
 app.Lifetime.ApplicationStarted.Register(runtimeState.MarkReady);
