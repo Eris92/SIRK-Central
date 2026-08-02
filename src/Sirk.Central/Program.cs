@@ -7,6 +7,7 @@ using Sirk.Central;
 using Sirk.Central.Access;
 using Sirk.Central.Approvals;
 using Sirk.Central.Backup;
+using Sirk.Central.Operations;
 using Sirk.Central.Organizations;
 using Sirk.Central.Portals;
 using Sirk.Central.Security;
@@ -41,6 +42,8 @@ builder.Services.AddSingleton<TicketStore>();
 builder.Services.AddSingleton<TicketCommandStore>();
 builder.Services.AddSingleton<OrganizationStore>();
 builder.Services.AddSingleton<PortalAssignmentStore>();
+builder.Services.AddSingleton<OperationsMiddleware>();
+builder.Services.AddSingleton<PortalTunnelMiddleware>();
 builder.Services.AddSirkWebAuthn(builder.Configuration);
 builder.Services.AddTransient<IStartupFilter, WebAuthnUiStartupFilter>();
 
@@ -174,6 +177,8 @@ app.Use(async (context, next) =>
         context.Response.Headers.TryAdd("X-Frame-Options", "DENY");
         context.Response.Headers.TryAdd("Referrer-Policy", "no-referrer");
         context.Response.Headers.TryAdd("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()");
+        context.Response.Headers.TryAdd("Cross-Origin-Opener-Policy", "same-origin");
+        context.Response.Headers.TryAdd("Cross-Origin-Resource-Policy", "same-origin");
         return Task.CompletedTask;
     });
     await next();
@@ -181,6 +186,16 @@ app.Use(async (context, next) =>
 app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
+if (securityOptions.Enabled)
+{
+    var operations = app.Services.GetRequiredService<OperationsMiddleware>();
+    var tunnel = app.Services.GetRequiredService<PortalTunnelMiddleware>();
+    app.Use(async (context, next) =>
+    {
+        if (await operations.TryHandleAsync(context) || await tunnel.TryHandleAsync(context)) return;
+        await next();
+    });
+}
 app.UseDefaultFiles();
 app.UseStaticFiles();
 
