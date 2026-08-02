@@ -1,0 +1,22 @@
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+WORKDIR /src
+
+COPY global.json Directory.Build.props ./
+COPY src/Sirk.Central/Sirk.Central.csproj src/Sirk.Central/
+RUN dotnet restore src/Sirk.Central/Sirk.Central.csproj
+
+COPY public public
+COPY src/Sirk.Central src/Sirk.Central
+RUN dotnet publish src/Sirk.Central/Sirk.Central.csproj \
+    --configuration Release \
+    --no-restore \
+    --output /app/publish
+
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
+WORKDIR /app
+ENV ASPNETCORE_URLS=http://+:8080 \
+    DOTNET_EnableDiagnostics=0
+EXPOSE 8080
+COPY --from=build /app/publish ./
+USER $APP_UID
+ENTRYPOINT ["dotnet", "Sirk.Central.dll"]
