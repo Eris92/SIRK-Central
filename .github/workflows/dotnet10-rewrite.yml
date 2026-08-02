@@ -86,3 +86,34 @@ jobs:
 
       - name: Container build
         run: docker build --file Dockerfile.dotnet10 --tag sirk-central:dotnet10 .
+
+      - name: Container runtime health smoke
+        run: |
+          docker run --detach \
+            --name sirk-central-dotnet10-smoke \
+            --health-interval 1s \
+            --health-timeout 5s \
+            --health-start-period 1s \
+            --health-retries 20 \
+            sirk-central:dotnet10
+          cleanup() {
+            docker logs sirk-central-dotnet10-smoke || true
+            docker rm --force --volumes sirk-central-dotnet10-smoke >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          for attempt in $(seq 1 45); do
+            status=$(docker inspect --format '{{.State.Health.Status}}' sirk-central-dotnet10-smoke)
+            if [ "$status" = healthy ]; then
+              echo 'SIRK Central container runtime health: OK'
+              cleanup
+              trap - EXIT
+              exit 0
+            fi
+            if [ "$status" = unhealthy ]; then
+              echo 'SIRK Central container became unhealthy.' >&2
+              exit 1
+            fi
+            sleep 1
+          done
+          echo 'SIRK Central container did not become healthy.' >&2
+          exit 1
