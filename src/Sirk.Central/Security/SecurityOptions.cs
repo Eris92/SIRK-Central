@@ -9,10 +9,17 @@ internal sealed class SecurityOptions
     public string AuditFileName { get; set; } = "security-audit.net10.jsonl";
     public string AuditKeyFileName { get; set; } = "security-audit.net10.key";
     public string DataProtectionDirectoryName { get; set; } = "data-protection";
+    public string DataProtectionCertificatePath { get; set; } = string.Empty;
+    public string DataProtectionCertificatePasswordFile { get; set; } = string.Empty;
+    public bool RequireProtectedDataProtectionKeys { get; set; } = true;
     public string BootstrapSecretFile { get; set; } = string.Empty;
     public int PasswordHashIterations { get; set; } = 600_000;
     public int SessionMinutes { get; set; } = 30;
     public int LoginAttemptsPerFiveMinutes { get; set; } = 5;
+    public bool RequireSingleWriterLease { get; set; } = true;
+    public string WriterLeaseFileName { get; set; } = ".sirk-central-writer.lock";
+    public string ReleaseSigningPublicKeyFile { get; set; } = string.Empty;
+    public bool RequireSignedReleases { get; set; } = true;
 }
 
 internal static class SirkRoles
