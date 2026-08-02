@@ -1,5 +1,5 @@
+using System.Security.Cryptography;
 using Microsoft.AspNetCore.DataProtection;
-using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Sirk.Central.Security;
 
@@ -17,7 +17,7 @@ try
     var handle = RandomNumberGenerator.GetBytes(32);
     var publicKey = RandomNumberGenerator.GetBytes(64);
     var encodedId = WebAuthnCredentialStore.Base64Url(id);
-    var credential = store.Add(new WebAuthnCredential(
+    store.Add(new WebAuthnCredential(
         encodedId,
         "user-1",
         "breakglass",
@@ -48,8 +48,7 @@ try
         (UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.OtherRead | UnixFileMode.OtherWrite)) == 0,
         "Credential store permissions are too broad.");
 
-    var protectionRoot = Path.Combine(root, "dp");
-    var provider = DataProtectionProvider.Create(new DirectoryInfo(protectionRoot));
+    var provider = DataProtectionProvider.Create(new DirectoryInfo(Path.Combine(root, "dp")));
     var ceremonies = new WebAuthnCeremonyStore(provider);
     var ceremony = ceremonies.Create("assertion", "user-1", "{\"challenge\":\"abc\"}");
     var restored = ceremonies.Consume(ceremony.Id, "assertion", "user-1");
