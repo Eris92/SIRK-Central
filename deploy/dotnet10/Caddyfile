@@ -70,10 +70,13 @@ www.{$SIRK_BUSINESS_DOMAIN} {
     }
     rewrite @spaRoutes /index.html
 
+    # Docker already verifies /readyz. Do not use an active Caddy health check
+    # here: its synthetic Host header is central:8080 and ASP.NET AllowedHosts
+    # correctly rejects it, which would disable the only available upstream.
     reverse_proxy central:8080 {
-        health_uri /healthz
-        health_interval 30s
-        health_timeout 5s
+        fail_duration 10s
+        max_fails 3
+        unhealthy_status 500 502 503 504
 
         transport http {
             dial_timeout 5s
