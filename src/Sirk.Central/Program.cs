@@ -12,7 +12,6 @@ using Sirk.Central.Organizations;
 using Sirk.Central.Portals;
 using Sirk.Central.Security;
 using Sirk.Central.Tickets;
-using Sirk.Central.Ui;
 
 if (RuntimeHealthProbe.IsRequested(args))
 {
@@ -104,7 +103,6 @@ builder.Services.AddAuthentication(options =>
             var source = context.Principal?.FindFirst("sirk:identity_source")?.Value;
             var currentId = context.Principal?
                 .FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
-
             if (source == "local-break-glass")
             {
                 var current = context.HttpContext.RequestServices
@@ -115,7 +113,6 @@ builder.Services.AddAuthentication(options =>
                     context.RejectPrincipal();
                 return Task.CompletedTask;
             }
-
             if (source is "local-managed" or "entra")
             {
                 var current = currentId is null
@@ -130,7 +127,6 @@ builder.Services.AddAuthentication(options =>
                     !string.Equals(current.Role, role, StringComparison.Ordinal))
                     context.RejectPrincipal();
             }
-
             return Task.CompletedTask;
         }
     };
@@ -262,9 +258,9 @@ if (securityOptions.Enabled)
         await next();
     });
 }
-app.UseDefaultFiles();
 app.UseStaticFiles();
 
+app.MapGet("/", () => Results.Redirect("/workspace.html", permanent: false));
 app.MapGet("/healthz", () => Results.Ok(new
 {
     status = "healthy",
@@ -306,7 +302,6 @@ if (securityOptions.Enabled)
     app.MapSirkBackup();
     app.MapEntraSettings();
     app.MapPortalManagement();
-    app.MapCurrentUiApi();
     app.MapApprovals();
     app.MapTickets();
     app.MapTicketCommands();
