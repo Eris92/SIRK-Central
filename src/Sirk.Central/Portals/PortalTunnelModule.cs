@@ -1,7 +1,6 @@
 using System.Collections.Concurrent;
 using System.Security.Claims;
-using System.Text;
-using System.Text.Json;
+using Microsoft.AspNetCore.Authentication;
 using Sirk.Central.Access;
 using Sirk.Central.Security;
 
@@ -29,6 +28,7 @@ internal sealed class PortalTunnelRelay
     private const int MaximumBodyBytes = 8 * 1024 * 1024;
     private readonly ConcurrentDictionary<string, ConcurrentQueue<TunnelRequest>> _queues = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, TaskCompletionSource<TunnelResponse>> _pending = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, string> _owners = new(StringComparer.Ordinal);
 
     public async Task<TunnelResponse> RequestAsync(string portalId, string method, string path, Dictionary<string, string> headers, byte[] body, CancellationToken cancellationToken)
     {
@@ -37,14 +37,19 @@ internal sealed class PortalTunnelRelay
             "tun-" + Guid.NewGuid().ToString("N"), portalId, method, NormalizePath(path), SanitizeRequestHeaders(headers),
             Convert.ToBase64String(body), DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddSeconds(30));
         var completion = new TaskCompletionSource<TunnelResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
-        if (!_pending.TryAdd(request.Id, completion)) throw new InvalidOperationException("Tunnel request collision.");
+        if (!_pending.TryAdd(request.Id, completion) || !_owners.TryAdd(request.Id, portalId))
+            throw new InvalidOperationException("Tunnel request collision.");
         _queues.GetOrAdd(portalId, _ => new ConcurrentQueue<TunnelRequest>()).Enqueue(request);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(30));
         using var registration = timeout.Token.Register(() => completion.TrySetCanceled(timeout.Token));
         try { return await completion.Task; }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { throw new TimeoutException("Portal request timed out."); }
-        finally { _pending.TryRemove(request.Id, out _); }
+        finally
+        {
+            _pending.TryRemove(request.Id, out _);
+            _owners.TryRemove(request.Id, out _);
+        }
     }
 
     public IReadOnlyList<TunnelRequest> Poll(string portalId, int limit = 16)
@@ -54,13 +59,18 @@ internal sealed class PortalTunnelRelay
         while (result.Count < Math.Clamp(limit, 1, 64) && queue.TryDequeue(out var request))
         {
             if (request.ExpiresAtUtc > DateTimeOffset.UtcNow) result.Add(request);
-            else if (_pending.TryRemove(request.Id, out var pending)) pending.TrySetException(new TimeoutException("Portal request expired."));
+            else
+            {
+                _owners.TryRemove(request.Id, out _);
+                if (_pending.TryRemove(request.Id, out var pending)) pending.TrySetException(new TimeoutException("Portal request expired."));
+            }
         }
         return result;
     }
 
     public bool Complete(string portalId, string requestId, TunnelResponseInput input)
     {
+        if (!_owners.TryGetValue(requestId, out var owner) || !string.Equals(owner, portalId, StringComparison.Ordinal)) return false;
         if (!_pending.TryGetValue(requestId, out var completion)) return false;
         var status = input.StatusCode is >= 100 and <= 599 ? input.StatusCode : 502;
         var contentType = NormalizeContentType(input.ContentType);
@@ -71,7 +81,7 @@ internal sealed class PortalTunnelRelay
 
     private static string NormalizePath(string value)
     {
-        if (string.IsNullOrWhiteSpace(value) || !value.StartsWith('/', StringComparison.Ordinal) || value.StartsWith("//", StringComparison.Ordinal) || value.Contains('\\'))
+        if (string.IsNullOrWhiteSpace(value) || !value.StartsWith("/", StringComparison.Ordinal) || value.StartsWith("//", StringComparison.Ordinal) || value.Contains('\\'))
             throw new InvalidDataException("Portal path is invalid.");
         if (value.Length > 8192 || value.Any(char.IsControl)) throw new InvalidDataException("Portal path is invalid.");
         return value;
@@ -130,11 +140,14 @@ internal sealed class PortalTunnelMiddleware
     {
         if (context.Request.Path.StartsWithSegments("/api/v1/portal-tunnel", out var portalRemainder))
             return await HandlePortalAsync(context, portalRemainder);
-        if (context.Request.Path.StartsWithSegments("/api/v1/portals", out var apiRemainder))
-            return await HandleConnectAsync(context, apiRemainder);
-        if (context.Request.Path.StartsWithSegments("/connect", out var proxyRemainder))
-            return await HandleProxyAsync(context, proxyRemainder);
-        return false;
+
+        if (!context.Request.Path.StartsWithSegments("/api/v1/portals", out var apiRemainder) &&
+            !context.Request.Path.StartsWithSegments("/connect", out var proxyRemainder)) return false;
+
+        var authentication = await context.AuthenticateAsync(SirkAuthenticationSchemes.Session);
+        if (authentication.Principal is not null) context.User = authentication.Principal;
+        if (apiRemainder.HasValue) return await HandleConnectAsync(context, apiRemainder);
+        return await HandleProxyAsync(context, proxyRemainder);
     }
 
     private async Task<bool> HandlePortalAsync(HttpContext context, PathString remainder)
