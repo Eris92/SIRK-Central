@@ -1,6 +1,13 @@
 using System.Reflection;
 using Microsoft.AspNetCore.HttpOverrides;
+using Sirk.Central;
 using Sirk.Central.Portals;
+
+if (RuntimeHealthProbe.IsRequested(args))
+{
+    Environment.ExitCode = await RuntimeHealthProbe.RunAsync(args);
+    return;
+}
 
 var builder = WebApplication.CreateBuilder(new WebApplicationOptions
 {
