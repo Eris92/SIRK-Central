@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
 using Sirk.Central;
+using Sirk.Central.Access;
 using Sirk.Central.Approvals;
 using Sirk.Central.Backup;
 using Sirk.Central.Organizations;
@@ -30,6 +31,7 @@ builder.Services.AddSingleton<PortalRequestAuthenticator>();
 builder.Services.AddSingleton<PortalTelemetryStore>();
 builder.Services.Configure<SecurityOptions>(builder.Configuration.GetSection(SecurityOptions.SectionName));
 builder.Services.AddSingleton<LocalIdentityStore>();
+builder.Services.AddSingleton<IdentityAccessStore>();
 builder.Services.AddSingleton<SecurityAuditLog>();
 builder.Services.AddSingleton<BackupKeyStore>();
 builder.Services.AddSingleton<BackupArchiveService>();
@@ -134,6 +136,7 @@ _ = app.Services.GetRequiredService<FilePortalRegistry>();
 if (securityOptions.Enabled)
 {
     _ = app.Services.GetRequiredService<LocalIdentityStore>();
+    _ = app.Services.GetRequiredService<IdentityAccessStore>();
     _ = app.Services.GetRequiredService<BackupKeyStore>();
     _ = app.Services.GetRequiredService<BackupArchiveService>();
     _ = app.Services.GetRequiredService<EntraSettingsStore>();
@@ -194,6 +197,7 @@ if (securityOptions.Enabled)
     app.MapTickets();
     app.MapTicketCommands();
     app.MapOrganizations();
+    app.MapIdentityAccess();
 }
 app.MapFallback(() => Results.Problem(statusCode: 404, title: "Resource not found"));
 app.Lifetime.ApplicationStarted.Register(runtimeState.MarkReady);
