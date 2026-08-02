@@ -33,7 +33,6 @@ COPY --from=build /app/publish ./
 RUN chown -R "$APP_UID:$APP_UID" /app \
     && find /app -type d -exec chmod 0755 {} + \
     && find /app -type f -exec chmod 0644 {} + \
-    && chmod 0755 /app/Sirk.Central \
     && mkdir -p /var/lib/sirk-central/security \
     && chown -R "$APP_UID:$APP_UID" /var/lib/sirk-central
 VOLUME ["/var/lib/sirk-central"]
