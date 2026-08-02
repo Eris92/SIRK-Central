@@ -72,14 +72,28 @@ internal static class RuntimeHealthProbe
             return false;
         }
 
-        if (arguments.Length == 2 &&
-            (!Uri.TryCreate(arguments[1], UriKind.Absolute, out uri) || uri is null))
+        if (arguments.Length == 2)
         {
-            error = "Health-check URL is invalid.";
-            return false;
+            if (!Uri.TryCreate(arguments[1], UriKind.Absolute, out var parsedUri) ||
+                parsedUri is null)
+            {
+                error = "Health-check URL is invalid.";
+                return false;
+            }
+
+            uri = parsedUri;
         }
 
-        if (uri.Scheme is not (Uri.UriSchemeHttp or Uri.UriSchemeHttps) ||
+        var isHttp = string.Equals(
+            uri.Scheme,
+            Uri.UriSchemeHttp,
+            StringComparison.OrdinalIgnoreCase);
+        var isHttps = string.Equals(
+            uri.Scheme,
+            Uri.UriSchemeHttps,
+            StringComparison.OrdinalIgnoreCase);
+
+        if ((!isHttp && !isHttps) ||
             !uri.IsLoopback ||
             !string.IsNullOrEmpty(uri.UserInfo) ||
             !string.IsNullOrEmpty(uri.Query) ||
