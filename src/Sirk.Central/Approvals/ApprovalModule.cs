@@ -16,8 +16,15 @@ internal sealed record ApprovalSubmitRequest(
     Dictionary<string, JsonElement>? Payload);
 
 internal sealed record ApprovalDecisionRequest(string Decision, string? Comment);
+internal sealed record ApprovalExecutionRequest(string IdempotencyKey, string State, Dictionary<string, JsonElement>? Metadata);
 internal sealed record ApprovalDecision(string Reviewer, string Decision, string Comment, DateTimeOffset DecidedAtUtc);
-internal sealed record ApprovalExecution(bool Executed, string State, DateTimeOffset ExecutedAtUtc, Dictionary<string, JsonElement>? Metadata);
+internal sealed record ApprovalExecution(
+    bool Executed,
+    string State,
+    string ExecutedBy,
+    string IdempotencyKey,
+    DateTimeOffset ExecutedAtUtc,
+    Dictionary<string, JsonElement> Metadata);
 internal sealed record ApprovalRequest(
     string Id,
     string Type,
@@ -47,6 +54,12 @@ internal sealed class ApprovalStore
         "credential.use"
     };
 
+    private static readonly HashSet<string> ExecutionStates = new(StringComparer.Ordinal)
+    {
+        "completed",
+        "failed"
+    };
+
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         WriteIndented = true
@@ -69,8 +82,7 @@ internal sealed class ApprovalStore
         {
             ExpireInternal();
             var type = input.Type ?? string.Empty;
-            if (!Types.Contains(type))
-                throw new InvalidDataException("Unsupported approval type.");
+            if (!Types.Contains(type)) throw new InvalidDataException("Unsupported approval type.");
             var now = DateTimeOffset.UtcNow;
             var ttl = Math.Clamp(input.TtlMinutes == 0 ? 60 : input.TtlMinutes, 5, 1440);
             var request = new ApprovalRequest(
@@ -111,11 +123,7 @@ internal sealed class ApprovalStore
             var comment = (input.Comment ?? string.Empty).Trim();
             if (comment.Length > 1000) comment = comment[..1000];
             var decisions = request.Decisions.ToList();
-            decisions.Add(new ApprovalDecision(
-                reviewer,
-                input.Decision,
-                comment,
-                DateTimeOffset.UtcNow));
+            decisions.Add(new ApprovalDecision(reviewer, input.Decision, comment, DateTimeOffset.UtcNow));
             var state = input.Decision == "reject"
                 ? "rejected"
                 : decisions.Count(value => value.Decision == "approve") >= request.RequiredApprovals
@@ -143,6 +151,37 @@ internal sealed class ApprovalStore
             if (request.RequestedBy != NormalizeActor(actor))
                 throw new InvalidOperationException("Only the requester may cancel this request.");
             request = request with { State = "cancelled", FinishedAtUtc = DateTimeOffset.UtcNow };
+            _state.Requests[id] = request;
+            Persist();
+            return request;
+        }
+    }
+
+    public ApprovalRequest MarkExecution(string id, ApprovalExecutionRequest input, string actor)
+    {
+        lock (_sync)
+        {
+            var request = GetRequired(id);
+            if (request.State != "approved")
+                throw new InvalidOperationException("Only an approved request may be executed.");
+            var key = NormalizeIdempotencyKey(input.IdempotencyKey);
+            if (request.Execution is not null)
+            {
+                if (string.Equals(request.Execution.IdempotencyKey, key, StringComparison.Ordinal)) return request;
+                throw new InvalidOperationException("Approval request has already been executed with another idempotency key.");
+            }
+            var state = (input.State ?? string.Empty).Trim().ToLowerInvariant();
+            if (!ExecutionStates.Contains(state)) throw new InvalidDataException("Unsupported execution state.");
+            request = request with
+            {
+                Execution = new ApprovalExecution(
+                    true,
+                    state,
+                    NormalizeActor(actor),
+                    key,
+                    DateTimeOffset.UtcNow,
+                    input.Metadata ?? [])
+            };
             _state.Requests[id] = request;
             Persist();
             return request;
@@ -226,6 +265,14 @@ internal sealed class ApprovalStore
         return actor;
     }
 
+    private static string NormalizeIdempotencyKey(string? value)
+    {
+        var key = (value ?? string.Empty).Trim();
+        if (key.Length is < 16 or > 180 || key.Any(character => char.IsControl(character) || char.IsWhiteSpace(character)))
+            throw new InvalidDataException("Execution idempotency key is invalid.");
+        return key;
+    }
+
     private static string Base64Url(byte[] value) =>
         Convert.ToBase64String(value).TrimEnd('=').Replace('+', '-').Replace('/', '_');
 
@@ -246,6 +293,7 @@ internal static class ApprovalEndpoints
         group.MapPost("/", SubmitAsync);
         group.MapPost("/{id}/decision", DecideAsync);
         group.MapPost("/{id}/cancel", CancelAsync);
+        group.MapPost("/{id}/execution", ExecuteAsync);
         return endpoints;
     }
 
@@ -295,6 +343,23 @@ internal static class ApprovalEndpoints
         {
             var value = store.Cancel(id, Actor(context));
             Audit(audit, context, "approval.cancel", id, true);
+            return Results.Ok(value);
+        });
+    }
+
+    private static async Task<IResult> ExecuteAsync(
+        string id,
+        ApprovalExecutionRequest request,
+        HttpContext context,
+        IAntiforgery antiforgery,
+        ApprovalStore store,
+        SecurityAuditLog audit)
+    {
+        if (!await Csrf(context, antiforgery)) return Failure("CSRF_VALIDATION_FAILED", 400);
+        return Execute(() =>
+        {
+            var value = store.MarkExecution(id, request, Actor(context));
+            Audit(audit, context, "approval.execute", id, value.Execution?.State == "completed");
             return Results.Ok(value);
         });
     }
