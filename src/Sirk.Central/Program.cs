@@ -41,6 +41,7 @@ builder.Services.AddSingleton<LocalIdentityStore>();
 builder.Services.AddSingleton<SecurityAuditLog>();
 builder.Services.AddSingleton<BackupKeyStore>();
 builder.Services.AddSingleton<BackupArchiveService>();
+builder.Services.AddSingleton<EntraSettingsStore>();
 
 var dataProtection = builder.Services
     .AddDataProtection()
@@ -193,6 +194,7 @@ if (securityOptions.Enabled)
     _ = app.Services.GetRequiredService<LocalIdentityStore>();
     _ = app.Services.GetRequiredService<BackupKeyStore>();
     _ = app.Services.GetRequiredService<BackupArchiveService>();
+    _ = app.Services.GetRequiredService<EntraSettingsStore>();
     var auditLog = app.Services.GetRequiredService<SecurityAuditLog>();
     _ = auditLog.VerifyIntegrity();
 }
@@ -265,11 +267,12 @@ if (securityOptions.Enabled)
     app.MapSirkAuthentication();
     app.MapBackupKeyLifecycle();
     app.MapSirkBackup();
+    app.MapEntraSettings();
 }
 
 app.MapFallback(() => Results.Problem(
     statusCode: StatusCodes.Status404NotFound,
-    title: "Resource not found"));
+    title = "Resource not found"));
 
 app.Lifetime.ApplicationStarted.Register(runtimeState.MarkReady);
 app.Lifetime.ApplicationStopping.Register(runtimeState.MarkStopping);
