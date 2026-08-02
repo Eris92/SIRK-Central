@@ -6,9 +6,13 @@ on:
   pull_request:
     paths:
       - 'src/Sirk.Central/Security/WebAuthn*.cs'
+      - 'src/Sirk.Central/Security/BreakGlassAuthenticationState.cs'
+      - 'src/Sirk.Central/Security/BreakGlassMfaEndpoints.cs'
+      - 'src/Sirk.Central/Security/AuthenticationEndpoints.cs'
       - 'src/Sirk.Central/Security/Fido2Compatibility.cs'
       - 'tests/Sirk.Central.WebAuthnTests/**'
-      - 'public/webauthn.js'
+      - 'public/passkey-ui.js'
+      - 'public/break-glass-mfa.js'
       - 'src/Sirk.Central/Program.cs'
       - 'src/Sirk.Central/Sirk.Central.csproj'
       - '.github/workflows/dotnet10-webauthn.yml'
@@ -30,11 +34,20 @@ jobs:
         run: dotnet build tests/Sirk.Central.WebAuthnTests/Sirk.Central.WebAuthnTests.csproj --configuration Release --no-restore
       - name: WebAuthn credential and ceremony lifecycle
         run: dotnet run --project tests/Sirk.Central.WebAuthnTests/Sirk.Central.WebAuthnTests.csproj --configuration Release --no-build
-      - name: Validate browser module syntax
-        run: node --check public/webauthn.js
+      - name: Validate browser modules
+        run: |
+          node --check public/passkey-ui.js
+          node --check public/break-glass-mfa.js
+          grep --fixed-strings '"/api/login/mfa/passkey/begin"' public/passkey-ui.js
+          grep --fixed-strings '"/api/login/mfa/passkey/finish"' public/passkey-ui.js
+          grep --fixed-strings 'response.status === 202 && result.mfaRequired' public/passkey-ui.js
+          if grep --fixed-strings 'Zaloguj kluczem YubiKey / Passkey' public/passkey-ui.js; then
+            echo 'Passwordless Break-Glass UI is forbidden.' >&2
+            exit 1
+          fi
       - name: Publish runtime
         run: dotnet publish src/Sirk.Central/Sirk.Central.csproj --configuration Release --no-build --output artifacts/central
-      - name: Live WebAuthn UI injection smoke
+      - name: Live password-first WebAuthn UI smoke
         env:
           ASPNETCORE_ENVIRONMENT: Development
           ASPNETCORE_URLS: http://127.0.0.1:18084
@@ -49,7 +62,11 @@ jobs:
             curl --fail --silent http://127.0.0.1:18084/readyz >/dev/null && break
             sleep 0.25
           done
-          curl --fail --silent http://127.0.0.1:18084/app.js | grep --fixed-strings "void import('/webauthn.js');"
-          curl --fail --silent http://127.0.0.1:18084/webauthn.js | grep --fixed-strings "navigator.credentials.get"
+          curl --fail --silent http://127.0.0.1:18084/passkey-ui.js | grep --fixed-strings '/api/login/mfa/passkey/begin'
+          curl --fail --silent http://127.0.0.1:18084/passkey-ui.js | grep --fixed-strings 'response.status === 202 && result.mfaRequired'
+          if curl --fail --silent http://127.0.0.1:18084/passkey-ui.js | grep --fixed-strings 'Zaloguj kluczem YubiKey / Passkey'; then
+            echo 'Passwordless Break-Glass UI is exposed.' >&2
+            exit 1
+          fi
           cleanup
           trap - EXIT
