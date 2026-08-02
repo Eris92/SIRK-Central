@@ -1,3 +1,3 @@
 "use strict";
 
-module.exports = Object.freeze({ VERSION: "1.0.0-rc.26" });
+module.exports = Object.freeze({ VERSION: "1.0.0-rc.27" });
