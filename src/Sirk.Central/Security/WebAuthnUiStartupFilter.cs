@@ -1,20 +1,26 @@
 using System.Text;
+using Microsoft.Extensions.Options;
+using Sirk.Central.Operations;
 
 namespace Sirk.Central.Security;
 
 internal sealed class WebAuthnUiStartupFilter : IStartupFilter
 {
     private readonly IWebHostEnvironment _environment;
+    private readonly OperationsMiddleware _operations;
 
-    public WebAuthnUiStartupFilter(IWebHostEnvironment environment)
+    public WebAuthnUiStartupFilter(IWebHostEnvironment environment, IOptions<SecurityOptions> options)
     {
         _environment = environment;
+        _operations = new OperationsMiddleware(options);
     }
 
     public Action<IApplicationBuilder> Configure(Action<IApplicationBuilder> next) => app =>
     {
         app.Use(async (context, continuation) =>
         {
+            if (await _operations.TryHandleAsync(context)) return;
+
             if (!HttpMethods.IsGet(context.Request.Method) ||
                 !context.Request.Path.Equals("/app.js", StringComparison.Ordinal))
             {
