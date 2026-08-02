@@ -15,6 +15,7 @@ const { registerUiAssets } = require("./modules/ui-assets");
 const { registerContinuity } = require("./modules/continuity");
 const { registerMaintenance } = require("./modules/maintenance");
 const { registerPortalTelemetry } = require("./modules/portal-telemetry");
+const { registerPortalBootstrap } = require("./modules/portal-bootstrap");
 const { registerAdministration } = require("./modules/administration");
 const { registerSecurityApi } = require("./modules/security-api");
 const { registerApprovals } = require("./modules/approvals");
@@ -40,6 +41,7 @@ function createCentralRuntime(config) {
         registerContinuity,
         registerMaintenance,
         registerPortalTelemetry,
+        registerPortalBootstrap,
         registerAdministration,
         registerSecurityApi,
         registerApprovals,
