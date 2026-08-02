@@ -62,8 +62,13 @@ www.{$SIRK_BUSINESS_DOMAIN} {
 {$SIRK_CENTRAL_DOMAIN} {
     encode zstd gzip
 
-    @root path /
-    rewrite @root /index.html
+    # Only browser UI routes fall back to index.html. API, authentication,
+    # health endpoints and static assets always keep their original paths.
+    @spaRoutes {
+        not path /api/* /auth/* /healthz /readyz
+        not path_regexp staticAsset \.[A-Za-z0-9]{1,10}$
+    }
+    rewrite @spaRoutes /index.html
 
     reverse_proxy central:8080 {
         health_uri /healthz
@@ -98,4 +103,14 @@ www.{$SIRK_BUSINESS_DOMAIN} {
     @login path / /login
     redir @login https://{$SIRK_CENTRAL_DOMAIN}/api/v1/auth/entra/login 302
     respond 404
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "no-referrer"
+        Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+        X-Robots-Tag "noindex, nofollow"
+        -Server
+    }
 }
