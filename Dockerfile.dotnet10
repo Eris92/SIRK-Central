@@ -22,5 +22,7 @@ COPY --from=build /app/publish ./
 RUN mkdir -p /var/lib/sirk-central \
     && chown -R "$APP_UID:$APP_UID" /var/lib/sirk-central
 VOLUME ["/var/lib/sirk-central"]
+HEALTHCHECK --interval=20s --timeout=7s --start-period=10s --retries=3 \
+    CMD ["dotnet", "Sirk.Central.dll", "--health-check", "http://127.0.0.1:8080/readyz"]
 USER $APP_UID
 ENTRYPOINT ["dotnet", "Sirk.Central.dll"]
