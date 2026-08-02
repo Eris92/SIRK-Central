@@ -1,0 +1,4 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><AssemblyName>Sirk.Central.OrganizationTests</AssemblyName></PropertyGroup>
+  <ItemGroup><ProjectReference Include="../../src/Sirk.Central/Sirk.Central.csproj" /></ItemGroup>
+</Project>
