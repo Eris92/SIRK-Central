@@ -7,11 +7,7 @@ Directory.CreateDirectory(root);
 
 try
 {
-    var options = new SecurityOptions
-    {
-        Enabled = true,
-        DataRoot = root
-    };
+    var options = new SecurityOptions { Enabled = true, DataRoot = root };
     var store = new ApprovalStore(Options.Create(options));
     var request = store.Submit(new ApprovalSubmitRequest(
         "operation.high-risk",
@@ -25,6 +21,9 @@ try
     Assert(request.State == "pending", "New request must be pending.");
     Assert(request.RequiredApprovals == 2, "Required approval quorum was not preserved.");
     AssertThrows<InvalidOperationException>(
+        () => store.MarkExecution(request.Id, new ApprovalExecutionRequest("execution-key-0001", "completed", null), "executor"),
+        "Pending request must not be executable.");
+    AssertThrows<InvalidOperationException>(
         () => store.Decide(request.Id, new ApprovalDecisionRequest("approve", null), "requester"),
         "Requester must not approve their own request.");
 
@@ -37,6 +36,21 @@ try
     var approved = store.Decide(request.Id, new ApprovalDecisionRequest("approve", "approved"), "reviewer-2");
     Assert(approved.State == "approved", "Second independent approval must satisfy quorum.");
     Assert(approved.FinishedAtUtc is not null, "Approved request must have completion timestamp.");
+
+    var executed = store.MarkExecution(
+        request.Id,
+        new ApprovalExecutionRequest("execution-key-0001", "completed", null),
+        "executor");
+    Assert(executed.Execution is { State: "completed", ExecutedBy: "executor" },
+        "Approved request execution was not recorded.");
+    var replayed = store.MarkExecution(
+        request.Id,
+        new ApprovalExecutionRequest("execution-key-0001", "completed", null),
+        "executor");
+    Assert(replayed.Execution?.IdempotencyKey == "execution-key-0001", "Idempotent execution replay failed.");
+    AssertThrows<InvalidOperationException>(
+        () => store.MarkExecution(request.Id, new ApprovalExecutionRequest("execution-key-0002", "completed", null), "executor"),
+        "Execution with another idempotency key must be rejected.");
 
     var rejectedRequest = store.Submit(new ApprovalSubmitRequest(
         "role.assignment", "Assign SecAdmin", "Privileged role assignment.", 60, 2, null, null), "requester");
@@ -55,8 +69,9 @@ try
     Assert(File.Exists(statePath), "Approval state was not persisted.");
     AssertProtectedFile(statePath);
     var reloaded = new ApprovalStore(Options.Create(options));
-    Assert(reloaded.List("approved", null).Any(value => value.Id == request.Id),
-        "Approved request did not survive restart.");
+    var persisted = reloaded.List("approved", null).Single(value => value.Id == request.Id);
+    Assert(persisted.Execution?.IdempotencyKey == "execution-key-0001",
+        "Approval execution did not survive restart.");
     Assert(reloaded.List(null, "role.assignment").Any(value => value.Id == rejectedRequest.Id),
         "Type filtering or persistence failed.");
 
@@ -65,7 +80,7 @@ try
             "unsupported", "Invalid", "Invalid type.", 60, 1, null, null), "requester"),
         "Unsupported approval type must be rejected.");
 
-    Console.WriteLine("SIRK Central approval quorum and separation-of-duties contracts: OK");
+    Console.WriteLine("SIRK Central approval quorum, execution and separation-of-duties contracts: OK");
 }
 finally
 {
@@ -84,14 +99,8 @@ static void AssertProtectedFile(string path)
 static void AssertThrows<TException>(Action action, string message)
     where TException : Exception
 {
-    try
-    {
-        action();
-    }
-    catch (TException)
-    {
-        return;
-    }
+    try { action(); }
+    catch (TException) { return; }
     throw new InvalidOperationException(message);
 }
 
