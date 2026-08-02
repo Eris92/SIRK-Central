@@ -31,6 +31,7 @@ builder.Services.AddSingleton<PortalNonceReplayGuard>();
 builder.Services.AddSingleton<PortalRequestAuthenticator>();
 builder.Services.AddSingleton<PortalTelemetryStore>();
 builder.Services.Configure<SecurityOptions>(builder.Configuration.GetSection(SecurityOptions.SectionName));
+builder.Services.AddSingleton<SingleWriterLease>();
 builder.Services.AddSingleton<LocalIdentityStore>();
 builder.Services.AddSingleton<IdentityAccessStore>();
 builder.Services.AddSingleton<SecurityAuditLog>();
@@ -47,14 +48,7 @@ builder.Services.AddSingleton<PortalTunnelMiddleware>();
 builder.Services.AddSirkWebAuthn(builder.Configuration);
 builder.Services.AddTransient<IStartupFilter, WebAuthnUiStartupFilter>();
 
-var dataProtection = builder.Services.AddDataProtection().SetApplicationName("SIRK Central .NET 10");
-if (securityOptions.Enabled)
-{
-    var keyDirectory = Path.Combine(securityOptions.DataRoot, securityOptions.DataProtectionDirectoryName);
-    Directory.CreateDirectory(keyDirectory);
-    SecureDirectory(keyDirectory);
-    dataProtection.PersistKeysToFileSystem(new DirectoryInfo(keyDirectory));
-}
+ProductionSecurityGuards.ConfigureDataProtection(builder.Services, securityOptions, builder.Environment);
 
 var secureCookies = !builder.Environment.IsDevelopment();
 builder.Services.AddAuthentication(options =>
@@ -152,6 +146,7 @@ var runtimeState = app.Services.GetRequiredService<RuntimeState>();
 _ = app.Services.GetRequiredService<FilePortalRegistry>();
 if (securityOptions.Enabled)
 {
+    _ = app.Services.GetRequiredService<SingleWriterLease>();
     _ = app.Services.GetRequiredService<LocalIdentityStore>();
     _ = app.Services.GetRequiredService<IdentityAccessStore>();
     _ = app.Services.GetRequiredService<BackupKeyStore>();
@@ -233,11 +228,6 @@ app.MapFallback(() => Results.Problem(statusCode: 404, title: "Resource not foun
 app.Lifetime.ApplicationStarted.Register(runtimeState.MarkReady);
 app.Lifetime.ApplicationStopping.Register(runtimeState.MarkStopping);
 app.Run();
-
-static void SecureDirectory(string path)
-{
-    if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-}
 
 internal sealed class RuntimeState
 {
