@@ -16,6 +16,7 @@ BASE_URL = "http://127.0.0.1:18082"
 USER_NAME = "breakglass"
 PASSWORD = "Correct-Horse-Battery-Staple-2026"
 ACCESS_CODE = "0123456789abcdef0123456789ABCDEF"
+AUTHORIZATION = {"Authorization": f"Bearer {ACCESS_CODE}"}
 
 
 def request_json(opener, method: str, path: str, body=None, headers=None):
@@ -62,6 +63,19 @@ def assert_mode_600(path: Path) -> None:
     mode = path.stat().st_mode & 0o777
     if mode & 0o077:
         raise RuntimeError(f"Protected file has weak mode {oct(mode)}: {path}")
+
+
+def csrf(opener):
+    status, result = request_json(opener, "GET", "/api/v1/auth/csrf")
+    if status != 200 or not result.get("requestToken"):
+        raise RuntimeError("CSRF token endpoint failed.")
+    return {result.get("headerName", "X-SIRK-CSRF"): result["requestToken"]}
+
+
+def require_logged_out(opener, message: str):
+    status, _ = request_json(opener, "GET", "/api/session")
+    if status != 401:
+        raise RuntimeError(f"{message}: session returned HTTP {status}, expected 401.")
 
 
 def main() -> int:
@@ -122,12 +136,16 @@ def main() -> int:
         if bootstrap_path.exists():
             raise RuntimeError("One-time Break-Glass bootstrap file was not deleted.")
 
-        login_path = f"/api/v1/break-glass/{ACCESS_CODE}/login"
+        access_status, access = request_json(opener, "GET", "/api/access", headers=AUTHORIZATION)
+        if access_status != 200 or not access.get("localLoginEnabled"):
+            raise RuntimeError("A valid Access URL did not enable the local login form.")
+
         bad_status, _ = request_json(
             opener,
             "POST",
-            login_path,
+            "/api/login",
             {"userName": USER_NAME, "password": PASSWORD + "x"},
+            AUTHORIZATION,
         )
         if bad_status != 401:
             raise RuntimeError(f"Invalid Break-Glass login returned HTTP {bad_status}, expected 401.")
@@ -135,67 +153,128 @@ def main() -> int:
         login_status, login = request_json(
             opener,
             "POST",
-            login_path,
+            "/api/login",
             {"userName": USER_NAME, "password": PASSWORD},
+            AUTHORIZATION,
         )
-        if login_status != 200 or SIRK_ROLE(login) != "BreakGlass":
-            raise RuntimeError("Valid Break-Glass login failed or returned an invalid role.")
+        if login_status != 200 or login.get("role") != "BreakGlass":
+            raise RuntimeError("First Break-Glass login without configured MFA failed.")
+        if login.get("mfaRequired") is not False or not login.get("mfaEnrollmentRecommended"):
+            raise RuntimeError("First Break-Glass login returned an invalid MFA state.")
+
+        session_status, session = request_json(opener, "GET", "/api/session")
+        if session_status != 200 or session.get("role") != "BreakGlass":
+            raise RuntimeError("Compatibility session endpoint failed after first login.")
+
+        rotate_status, rotated = request_json(
+            opener,
+            "POST",
+            "/api/v1/break-glass/mfa/recovery-codes/rotate",
+            {"count": 10},
+            csrf(opener),
+        )
+        recovery_codes = rotated.get("codes", [])
+        if rotate_status != 200 or len(recovery_codes) != 10:
+            raise RuntimeError("Recovery-code rotation failed.")
+
+        logout_status, _ = request_json(
+            opener,
+            "POST",
+            "/api/logout",
+            {},
+            csrf(opener),
+        )
+        if logout_status != 200:
+            raise RuntimeError(f"Break-Glass logout returned HTTP {logout_status}, expected 200.")
+        require_logged_out(opener, "After first logout")
+
+        mfa_login_status, mfa_login = request_json(
+            opener,
+            "POST",
+            "/api/login",
+            {"userName": USER_NAME, "password": PASSWORD},
+            AUTHORIZATION,
+        )
+        if mfa_login_status != 202 or not mfa_login.get("mfaRequired"):
+            raise RuntimeError("Configured MFA was not required after password verification.")
+        if "recovery-code" not in mfa_login.get("methods", []):
+            raise RuntimeError("Recovery-code MFA method was not advertised.")
+        transaction = mfa_login.get("transactionToken")
+        if not transaction:
+            raise RuntimeError("Password verification did not issue an MFA transaction.")
+        require_logged_out(opener, "Before second factor")
+
+        recovery_status, recovery = request_json(
+            opener,
+            "POST",
+            "/api/login/mfa/recovery",
+            {
+                "transactionToken": transaction,
+                "recoveryCode": recovery_codes[0],
+            },
+            AUTHORIZATION,
+        )
+        if recovery_status != 200 or not recovery.get("authenticated"):
+            raise RuntimeError("Recovery-code second factor failed.")
+        if recovery.get("recoveryCodesRemaining") != 9:
+            raise RuntimeError("Recovery code was not consumed exactly once.")
 
         session_status, session = request_json(opener, "GET", "/api/v1/auth/session")
         if session_status != 200 or not session.get("authenticated"):
-            raise RuntimeError("Authenticated session endpoint failed.")
-        if "BreakGlass" not in session.get("roles", []):
-            raise RuntimeError("Authenticated session does not contain the BreakGlass role.")
-
-        csrf_status, csrf = request_json(opener, "GET", "/api/v1/auth/csrf")
-        if csrf_status != 200 or not csrf.get("requestToken"):
-            raise RuntimeError("CSRF token endpoint failed.")
+            raise RuntimeError("Authenticated session endpoint failed after MFA.")
+        if session.get("authenticationMethod") != "local-break-glass":
+            raise RuntimeError("Authenticated session source is invalid.")
 
         logout_status, _ = request_json(
             opener,
             "POST",
             "/api/v1/auth/logout",
             {},
-            {csrf.get("headerName", "X-SIRK-CSRF"): csrf["requestToken"]},
+            csrf(opener),
         )
         if logout_status != 200:
-            raise RuntimeError(f"Break-Glass logout returned HTTP {logout_status}, expected 200.")
+            raise RuntimeError("Logout after MFA failed.")
+        require_logged_out(opener, "After MFA logout")
 
-        logged_out_status, _ = request_json(opener, "GET", "/api/v1/auth/session")
-        if logged_out_status != 401:
+        limited_status, _ = request_json(
+            opener,
+            "POST",
+            "/api/login",
+            {"userName": USER_NAME, "password": "invalid-password-value"},
+            AUTHORIZATION,
+        )
+        if limited_status != 429:
             raise RuntimeError(
-                f"Logged-out session endpoint returned HTTP {logged_out_status}, expected 401."
+                f"Break-Glass rate limiter returned HTTP {limited_status}, expected 429."
             )
-
-        rate_limited = False
-        for _ in range(6):
-            status, _ = request_json(
-                opener,
-                "POST",
-                login_path,
-                {"userName": USER_NAME, "password": "invalid-password-value"},
-            )
-            if status == 429:
-                rate_limited = True
-                break
-        if not rate_limited:
-            raise RuntimeError("Break-Glass login rate limiter did not return HTTP 429.")
 
         identity_path = security_root / "identity.net10.json"
         audit_path = security_root / "security-audit.net10.jsonl"
         audit_key_path = security_root / "security-audit.net10.key"
-        for protected_path in (identity_path, audit_path, audit_key_path):
+        recovery_path = security_root / "break-glass-recovery-codes.net10.json"
+        for protected_path in (identity_path, audit_path, audit_key_path, recovery_path):
             if not protected_path.is_file():
                 raise RuntimeError(f"Protected security file is missing: {protected_path}")
             assert_mode_600(protected_path)
 
-        combined = identity_path.read_text(encoding="utf-8") + audit_path.read_text(encoding="utf-8")
+        combined = "".join(
+            path.read_text(encoding="utf-8")
+            for path in (identity_path, audit_path, recovery_path)
+        )
         if PASSWORD in combined or ACCESS_CODE in combined:
             raise RuntimeError("Security state exposes a plaintext Break-Glass secret.")
-        if "authentication.break-glass" not in combined or "authentication.logout" not in combined:
-            raise RuntimeError("Security audit log does not contain expected authentication events.")
+        if any(code in combined for code in recovery_codes):
+            raise RuntimeError("Security state exposes a plaintext recovery code.")
+        expected_events = (
+            "authentication.break-glass",
+            "authentication.break-glass.password-verified",
+            "authentication.break-glass.mfa-success",
+            "authentication.logout",
+        )
+        if any(event not in combined for event in expected_events):
+            raise RuntimeError("Security audit log does not contain expected MFA events.")
 
-        print("SIRK Central live Break-Glass auth, CSRF, rate-limit and audit smoke: OK")
+        print("SIRK Central password-first Break-Glass MFA live flow: OK")
         return 0
     finally:
         if process.poll() is None:
@@ -207,11 +286,6 @@ def main() -> int:
                 process.wait(timeout=5)
         if process.returncode not in (0, -signal.SIGTERM):
             print(log_path.read_text(encoding="utf-8"), file=sys.stderr)
-
-
-def SIRK_ROLE(login: dict) -> str:
-    roles = login.get("user", {}).get("roles", [])
-    return roles[0] if roles else ""
 
 
 if __name__ == "__main__":
