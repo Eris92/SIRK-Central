@@ -2,9 +2,9 @@
   <PropertyGroup>
     <AssemblyName>Sirk.Central</AssemblyName>
     <RootNamespace>Sirk.Central</RootNamespace>
-    <Version>2.0.0-test.3</Version>
-    <FileVersion>2.0.0.3</FileVersion>
-    <InformationalVersion>2.0.0-test.3</InformationalVersion>
+    <Version>2.0.0-test.4</Version>
+    <FileVersion>2.0.0.4</FileVersion>
+    <InformationalVersion>2.0.0-test.4</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <InvariantGlobalization>false</InvariantGlobalization>
     <NoWarn>$(NoWarn);ASP0017</NoWarn>
