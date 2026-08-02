@@ -1,7 +1,7 @@
 using System.Security.Claims;
+using System.Security.Cryptography;
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Authentication;
-using Microsoft.AspNetCore.Authorization;
 using Microsoft.Extensions.Options;
 
 namespace Sirk.Central.Security;
@@ -124,16 +124,17 @@ internal static class AuthenticationEndpoints
                 statusCode: StatusCodes.Status401Unauthorized);
         }
 
+        var expiresAt = DateTimeOffset.UtcNow.AddMinutes(options.Value.SessionMinutes);
         var claims = new List<Claim>
         {
             new(ClaimTypes.NameIdentifier, identity.Id),
             new(ClaimTypes.Name, identity.UserName),
             new("amr", "pwd"),
-            new("sirk:identity_source", "local-break-glass")
+            new("sirk:identity_source", "local-break-glass"),
+            new("sirk:expires_at_utc", expiresAt.ToString("O"))
         };
         claims.AddRange(identity.Roles.Select(role => new Claim(ClaimTypes.Role, role)));
 
-        var expiresAt = DateTimeOffset.UtcNow.AddMinutes(options.Value.SessionMinutes);
         var principal = new ClaimsPrincipal(
             new ClaimsIdentity(
                 claims,
@@ -188,9 +189,11 @@ internal static class AuthenticationEndpoints
             .Distinct(StringComparer.Ordinal)
             .OrderBy(value => value, StringComparer.Ordinal)
             .ToArray();
-        var expiresAt = context.Features
-            .Get<Microsoft.AspNetCore.Authentication.Cookies.ICookieAuthenticationFeature>()
-            ?.Properties?.ExpiresUtc;
+        DateTimeOffset? expiresAt = DateTimeOffset.TryParse(
+            user.FindFirstValue("sirk:expires_at_utc"),
+            out var parsedExpiry)
+            ? parsedExpiry
+            : null;
 
         return Results.Ok(new AuthenticatedSessionResponse(
             user.Identity?.IsAuthenticated == true,
@@ -259,10 +262,11 @@ internal static class AuthenticationEndpoints
         return Results.Ok(new { ok = true });
     }
 
-    private static string RemoteAddress(HttpContext context) =>
-        (context.Connection.RemoteIpAddress?.ToString() ?? "unknown")[..Math.Min(
-            context.Connection.RemoteIpAddress?.ToString().Length ?? 7,
-            128)];
+    private static string RemoteAddress(HttpContext context)
+    {
+        var address = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        return address[..Math.Min(address.Length, 128)];
+    }
 
     private static string NormalizeAuditUserName(string? value)
     {
