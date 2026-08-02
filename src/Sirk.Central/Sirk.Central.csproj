@@ -9,6 +9,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="Sirk.Central.ProtocolTests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Content Include="../../public/**"
              Link="public/%(RecursiveDir)%(Filename)%(Extension)"
              CopyToOutputDirectory="PreserveNewest"
