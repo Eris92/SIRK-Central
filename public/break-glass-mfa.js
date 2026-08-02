@@ -16,14 +16,14 @@
             generate: "Wygeneruj nowe recovery codes",
             revoke: "Unieważnij recovery codes",
             confirmRotate: "Dotychczasowe recovery codes przestaną działać. Kontynuować?",
-            confirmRevoke: "Po unieważnieniu logowanie Break-Glass nie będzie wymagało recovery code do czasu ponownej konfiguracji. Kontynuować?",
+            confirmRevoke: "Recovery codes można usunąć tylko wtedy, gdy aktywna jest co najmniej jedna metoda Windows Hello, YubiKey lub passkey. Kontynuować?",
             shownOnce: "Kody są pokazane tylko raz. Zapisz je w bezpiecznym, niezależnym miejscu.",
             saved: "Zapisałem kody w bezpiecznym miejscu",
             hide: "Ukryj zapisane kody",
             revoked: "Recovery codes zostały unieważnione.",
             generated: "Nowe recovery codes zostały wygenerowane.",
-            noPasskey: "YubiKey/WebAuthn nie jest jeszcze aktywny.",
-            activePasskeys: "Aktywne klucze YubiKey/WebAuthn: {count}.",
+            noPasskey: "Windows Hello / YubiKey / WebAuthn nie jest jeszcze aktywny.",
+            activePasskeys: "Aktywne metody Windows Hello / YubiKey / WebAuthn: {count}.",
             requestError: "Nie udało się wykonać operacji MFA."
         },
         en: {
@@ -37,14 +37,14 @@
             generate: "Generate new recovery codes",
             revoke: "Revoke recovery codes",
             confirmRotate: "Existing recovery codes will stop working. Continue?",
-            confirmRevoke: "After revocation, Break-Glass sign-in will not require a recovery code until MFA is configured again. Continue?",
+            confirmRevoke: "Recovery codes can only be removed while at least one Windows Hello, YubiKey, or passkey method remains active. Continue?",
             shownOnce: "These codes are shown once. Store them in a secure, independent location.",
             saved: "I stored the codes securely",
             hide: "Hide stored codes",
             revoked: "Recovery codes have been revoked.",
             generated: "New recovery codes have been generated.",
-            noPasskey: "YubiKey/WebAuthn is not active yet.",
-            activePasskeys: "Active YubiKey/WebAuthn credentials: {count}.",
+            noPasskey: "Windows Hello / YubiKey / WebAuthn is not active yet.",
+            activePasskeys: "Active Windows Hello / YubiKey / WebAuthn methods: {count}.",
             requestError: "The MFA operation failed."
         }
     };
@@ -60,14 +60,23 @@
     }
 
     async function request(path, options) {
-        const response = await fetch(path, Object.assign({
+        const supplied = options || {};
+        const headers = new Headers(supplied.headers || {});
+        if (!headers.has("Content-Type") && supplied.body !== undefined)
+            headers.set("Content-Type", "application/json");
+        const response = await fetch(path, Object.assign({}, supplied, {
             credentials: "same-origin",
             cache: "no-store",
-            headers: { "Content-Type": "application/json" }
-        }, options || {}));
-        const result = await response.json();
+            headers
+        }));
+        const result = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(result.error || text("requestError"));
         return result;
+    }
+
+    async function csrfHeaders() {
+        const token = await request("/api/v1/auth/csrf");
+        return { [token.headerName || "X-SIRK-CSRF"]: token.requestToken };
     }
 
     const article = document.createElement("article");
@@ -105,7 +114,7 @@
     const saved = article.querySelector("[data-mfa-saved]");
     const savedLabel = article.querySelector("[data-mfa-saved-label]");
     const hide = article.querySelector("[data-mfa-hide]");
-    const message = article.querySelector("[data-mfa-message]");
+    const output = article.querySelector("[data-mfa-message]");
 
     function renderPasskeyStatus() {
         passkey.textContent = activePasskeyCount > 0
@@ -142,22 +151,24 @@
 
     async function loadStatus() {
         status.textContent = text("loading");
-        message.textContent = "";
+        output.textContent = "";
         try {
-            const [result, passkeyResult] = await Promise.all([
-                request("/api/break-glass/mfa/status"),
-                request("/api/break-glass/passkeys")
+            const [result, credentials] = await Promise.all([
+                request("/api/v1/break-glass/mfa/status"),
+                request("/api/v1/webauthn/credentials")
             ]);
             const recovery = result.recoveryCodes || {};
-            activePasskeyCount = Array.isArray(passkeyResult.passkeys)
-                ? passkeyResult.passkeys.filter(item => item.status === "active").length
-                : 0;
+            activePasskeyCount = Array.isArray(credentials) ? credentials.length : 0;
             status.textContent = recovery.configured ? text("configured") : text("missing");
             status.className = "muted";
             facts.replaceChildren(
                 fact(text("remaining"), String(recovery.remaining || 0)),
-                fact(text("rotated"), recovery.rotatedAtUtc ? new Date(recovery.rotatedAtUtc).toLocaleString(lang()) : "—"),
-                fact(text("blocked"), recovery.blockedUntilUtc ? new Date(recovery.blockedUntilUtc).toLocaleString(lang()) : "—")
+                fact(text("rotated"), recovery.rotatedAtUtc
+                    ? new Date(recovery.rotatedAtUtc).toLocaleString(lang())
+                    : "—"),
+                fact(text("blocked"), recovery.blockedUntilUtc
+                    ? new Date(recovery.blockedUntilUtc).toLocaleString(lang())
+                    : "—")
             );
             renderPasskeyStatus();
             revoke.disabled = !recovery.configured;
@@ -171,20 +182,24 @@
         if (!window.confirm(text("confirmRotate"))) return;
         rotate.disabled = true;
         revoke.disabled = true;
-        message.textContent = "";
+        output.textContent = "";
         clearSecrets();
         try {
-            const result = await request("/api/break-glass/mfa/recovery-codes/rotate", {
-                method: "POST",
-                body: JSON.stringify({ count: 10 })
-            });
+            const result = await request(
+                "/api/v1/break-glass/mfa/recovery-codes/rotate",
+                {
+                    method: "POST",
+                    headers: await csrfHeaders(),
+                    body: JSON.stringify({ count: 10 })
+                });
             codes.textContent = (result.codes || []).join("\n");
             secret.hidden = false;
-            message.textContent = text("generated");
+            output.textContent = text("generated");
+            output.className = "muted";
             await loadStatus();
         } catch (error) {
-            message.textContent = error.message;
-            message.className = "error";
+            output.textContent = error.message;
+            output.className = "error";
         } finally {
             rotate.disabled = false;
         }
@@ -194,15 +209,19 @@
         if (!window.confirm(text("confirmRevoke"))) return;
         rotate.disabled = true;
         revoke.disabled = true;
-        message.textContent = "";
+        output.textContent = "";
         clearSecrets();
         try {
-            await request("/api/break-glass/mfa/recovery-codes", { method: "DELETE" });
-            message.textContent = text("revoked");
+            await request("/api/v1/break-glass/mfa/recovery-codes", {
+                method: "DELETE",
+                headers: await csrfHeaders()
+            });
+            output.textContent = text("revoked");
+            output.className = "muted";
             await loadStatus();
         } catch (error) {
-            message.textContent = error.message;
-            message.className = "error";
+            output.textContent = error.message;
+            output.className = "error";
         } finally {
             rotate.disabled = false;
         }
@@ -213,17 +232,16 @@
     });
 
     hide.addEventListener("click", function () {
-        if (!saved.checked) return;
-        clearSecrets();
+        if (saved.checked) clearSecrets();
     });
 
     window.addEventListener("pagehide", clearSecrets);
     document.addEventListener("visibilitychange", function () {
         if (document.visibilityState === "hidden" && saved.checked) clearSecrets();
     });
-    new MutationObserver(function () {
-        applyLabels();
-    }).observe(document.documentElement, { attributes: true, attributeFilter: ["lang"] });
+    new MutationObserver(applyLabels).observe(
+        document.documentElement,
+        { attributes: true, attributeFilter: ["lang"] });
 
     applyLabels();
     loadStatus();
