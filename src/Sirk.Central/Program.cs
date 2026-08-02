@@ -77,11 +77,25 @@ builder.Services.AddAuthentication(options =>
         OnRedirectToAccessDenied = context => { context.Response.StatusCode = 403; return Task.CompletedTask; },
         OnValidatePrincipal = context =>
         {
-            if (context.Principal?.FindFirst("sirk:identity_source")?.Value != "local-break-glass")
-                return Task.CompletedTask;
-            var current = context.HttpContext.RequestServices.GetRequiredService<LocalIdentityStore>().GetBreakGlassIdentity();
+            var source = context.Principal?.FindFirst("sirk:identity_source")?.Value;
             var currentId = context.Principal?.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
-            if (current is null || !string.Equals(current.Id, currentId, StringComparison.Ordinal)) context.RejectPrincipal();
+            if (source == "local-break-glass")
+            {
+                var current = context.HttpContext.RequestServices.GetRequiredService<LocalIdentityStore>().GetBreakGlassIdentity();
+                if (current is null || !string.Equals(current.Id, currentId, StringComparison.Ordinal)) context.RejectPrincipal();
+                return Task.CompletedTask;
+            }
+            if (source is "local-managed" or "entra")
+            {
+                var current = currentId is null
+                    ? null
+                    : context.HttpContext.RequestServices.GetRequiredService<IdentityAccessStore>().Get(currentId);
+                var role = context.Principal?.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value;
+                if (current is not { Enabled: true, Status: "active" } ||
+                    string.IsNullOrWhiteSpace(current.Role) ||
+                    !string.Equals(current.Role, role, StringComparison.Ordinal))
+                    context.RejectPrincipal();
+            }
             return Task.CompletedTask;
         }
     };
@@ -188,6 +202,7 @@ app.MapPortalProtocol();
 if (securityOptions.Enabled)
 {
     app.MapSirkAuthentication();
+    app.MapManagedIdentityAuthentication();
     app.MapSirkEntraAuthentication();
     app.MapSirkWebAuthn();
     app.MapBackupKeyLifecycle();
