@@ -15,7 +15,8 @@ try
     var identityFile = Path.Combine(root, "age-identity.txt");
     await RunAsync("age-keygen", ["-o", identityFile]);
     var recipient = (await RunAsync("age-keygen", ["-y", identityFile])).Trim();
-    var identity = await File.ReadAllTextAsync(identityFile);
+    var identity = (await File.ReadAllLinesAsync(identityFile))
+        .Single(line => line.StartsWith("AGE-SECRET-KEY-1", StringComparison.Ordinal));
     File.Delete(identityFile);
 
     var options = new SecurityOptions
@@ -62,8 +63,8 @@ try
         "Restore did not recover the archived payload.");
     Assert(!File.Exists(Path.Combine(root, "unexpected.txt")),
         "Restore did not remove data created after the backup.");
-    Assert(Directory.EnumerateDirectories(Path.GetTempPath(), "sirk-central-restore-*", SearchOption.TopDirectoryOnly)
-        .All(path => !Directory.Exists(path)), "Restore transaction directory was not cleaned up.");
+    Assert(!Directory.EnumerateDirectories(Path.GetTempPath(), "sirk-central-restore-*", SearchOption.TopDirectoryOnly).Any(),
+        "Restore transaction directory was not cleaned up.");
 
     Console.WriteLine("SIRK Central encrypted archive create/restore contracts: OK");
 }
