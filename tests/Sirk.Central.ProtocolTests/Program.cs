@@ -37,13 +37,69 @@ try
         Options.Create(protocolOptions),
         nonceGuard);
 
-    var registryText = File.ReadAllText(Path.Combine(dataRoot, protocolOptions.RegistryFileName));
+    var registryPath = Path.Combine(dataRoot, protocolOptions.RegistryFileName);
+    var registryText = File.ReadAllText(registryPath);
     Assert(
         !registryText.Contains(portalToken, StringComparison.Ordinal),
         "Portal registry must never contain the plaintext token.");
     Assert(
         registryText.Contains("PBKDF2-SHA256", StringComparison.Ordinal),
         "Portal registry must identify the PBKDF2-SHA256 token hash.");
+    Assert(
+        registryText.Contains("\"schemaVersion\": 2", StringComparison.Ordinal),
+        "Portal registry must use the .NET 10-only schema version 2.");
+
+    var summaries = registry.List();
+    Assert(summaries.Count == 1, "Bootstrap Portal must be present in the registry.");
+    Assert(summaries[0].Id == portalId, "Bootstrap Portal ID is invalid.");
+
+    var issued = registry.Create("portal-managed", "Portal Managed");
+    Assert(issued.Portal.Id == "portal-managed", "Created Portal ID is invalid.");
+    Assert(issued.Token.Length >= 32, "Created Portal token is too short.");
+    Assert(
+        registry.Authenticate(issued.Portal.Id, issued.Token)?.Name == "Portal Managed",
+        "Created Portal credential must authenticate.");
+    Assert(
+        !File.ReadAllText(registryPath).Contains(issued.Token, StringComparison.Ordinal),
+        "Created Portal token must never be persisted in plaintext.");
+    AssertThrows<PortalRegistryConflictException>(
+        () => registry.Create("portal-managed", "Duplicate Portal"),
+        "Duplicate Portal ID must be rejected.");
+
+    var renamed = registry.Rename("portal-managed", "Portal Renamed");
+    Assert(renamed.Name == "Portal Renamed", "Portal rename did not persist.");
+    Assert(
+        registry.Authenticate("portal-managed", issued.Token)?.Name == "Portal Renamed",
+        "Portal rename must preserve the current credential.");
+
+    var rotated = registry.RotateToken("portal-managed");
+    Assert(rotated.Token != issued.Token, "Portal token rotation must issue a new token.");
+    Assert(
+        registry.Authenticate("portal-managed", issued.Token) is null,
+        "Portal token rotation must immediately reject the previous token.");
+    Assert(
+        registry.Authenticate("portal-managed", rotated.Token)?.Name == "Portal Renamed",
+        "Rotated Portal token must authenticate.");
+    Assert(
+        !File.ReadAllText(registryPath).Contains(rotated.Token, StringComparison.Ordinal),
+        "Rotated Portal token must never be persisted in plaintext.");
+
+    var reloadedRegistry = new FilePortalRegistry(
+        Options.Create(protocolOptions),
+        NullLogger<FilePortalRegistry>.Instance);
+    Assert(
+        reloadedRegistry.Authenticate("portal-managed", rotated.Token)?.Name == "Portal Renamed",
+        "Portal registry must preserve rotated credentials across restart.");
+
+    var removed = registry.Remove("portal-managed");
+    Assert(removed?.Id == "portal-managed", "Portal removal returned an invalid summary.");
+    Assert(
+        registry.Authenticate("portal-managed", rotated.Token) is null,
+        "Removed Portal credential must be rejected.");
+    Assert(registry.Remove("portal-managed") is null, "Removing a missing Portal must be idempotent.");
+    AssertThrows<PortalRegistryNotFoundException>(
+        () => registry.RotateToken("portal-managed"),
+        "Rotating a missing Portal must fail.");
 
     var body = Encoding.UTF8.GetBytes(
         """
@@ -104,7 +160,7 @@ try
         !wrongTokenResult.Succeeded && wrongTokenResult.ErrorCode == "PORTAL_AUTH_INVALID",
         "Heartbeat with an unknown Portal token must be rejected.");
 
-    Console.WriteLine("SIRK Central Portal protocol contracts: OK");
+    Console.WriteLine("SIRK Central Portal protocol and credential lifecycle contracts: OK");
 }
 finally
 {
@@ -145,6 +201,21 @@ static string Base64Url(byte[] value) =>
         .TrimEnd('=')
         .Replace('+', '-')
         .Replace('/', '_');
+
+static void AssertThrows<TException>(Action action, string message)
+    where TException : Exception
+{
+    try
+    {
+        action();
+    }
+    catch (TException)
+    {
+        return;
+    }
+
+    throw new InvalidOperationException(message);
+}
 
 static void Assert(bool condition, string message)
 {
