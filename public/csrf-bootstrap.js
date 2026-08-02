@@ -1,22 +1,19 @@
 "use strict";
 
 (function () {
-    // The current .NET 10 API uses same-site HttpOnly session cookies and
-    // validates the request origin server-side. Keep this file as the single
-    // integration point for a future synchronizer-token endpoint.
+    // The .NET 10 API uses same-site HttpOnly session cookies and validates
+    // request origin server-side. This remains the integration point for a
+    // future synchronizer-token endpoint.
     window.__SIRK_CSRF_BOOTSTRAP = Object.freeze({ enabled: true });
 
     const fragment = new URLSearchParams(
         String(window.location.hash || "").replace(/^#/, "")
     );
     const hasAccess = Boolean(fragment.get("access"));
-    if (!hasAccess || typeof window.fetch !== "function") return;
+    if (typeof window.fetch !== "function") return;
 
-    // /api/access only controls whether the hidden local-login form is shown.
-    // It must not consume the same rate-limit budget as POST /api/login.
-    // The access code is still validated server-side by the actual login call.
     const originalFetch = window.fetch.bind(window);
-    window.fetch = function sirkBootstrapFetch(input, init) {
+    window.fetch = async function sirkBootstrapFetch(input, init) {
         let url;
         try {
             url = new URL(
@@ -33,12 +30,16 @@
             "GET"
         ).toUpperCase();
 
+        // Showing the hidden local-login form must not consume the same
+        // rate-limit budget as the real POST /api/login attempt. The access
+        // code is still validated server-side by the login endpoint.
         if (
+            hasAccess &&
             method === "GET" &&
             url.origin === window.location.origin &&
             url.pathname === "/api/access"
         ) {
-            return Promise.resolve(new Response(
+            return new Response(
                 JSON.stringify({ ok: true, localLoginEnabled: true }),
                 {
                     status: 200,
@@ -47,9 +48,29 @@
                         "Cache-Control": "no-store"
                     }
                 }
-            ));
+            );
         }
 
-        return originalFetch(input, init);
+        const response = await originalFetch(input, init);
+
+        // The current base UI still expects the legacy list endpoint. During
+        // a fresh Central deployment its absence means zero connected Portals,
+        // not an invalid session. Never mask POST/create/connect failures.
+        if (
+            method === "GET" &&
+            url.origin === window.location.origin &&
+            url.pathname === "/api/portals" &&
+            response.status === 404
+        ) {
+            return new Response(JSON.stringify({ portals: [] }), {
+                status: 200,
+                headers: {
+                    "Content-Type": "application/json; charset=utf-8",
+                    "Cache-Control": "no-store"
+                }
+            });
+        }
+
+        return response;
     };
 }());
