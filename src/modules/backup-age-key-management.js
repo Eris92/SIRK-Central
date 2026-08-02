@@ -67,6 +67,64 @@ function downloadEncryptedExport(res, store, headers = {}) {
     res.end(data);
 }
 
+function audit(app, event, actor, details) {
+    if (app.securityCenter && typeof app.securityCenter.audit === "function") {
+        app.securityCenter.audit(event, actor, details || {});
+    }
+}
+
+function clearSessionCookie() {
+    return "sirk_central_session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0";
+}
+
+function changePassword(app, config, store, actor, currentPassword, newPassword, req, res) {
+    if (!verifySecret(currentPassword, passwordHash(app, config))) {
+        return json(res, 401, { ok: false, error: "Current password is invalid." });
+    }
+    if (typeof newPassword !== "string" || newPassword.length < 12 || Buffer.byteLength(newPassword, "utf8") > 4096) {
+        return json(res, 400, { ok: false, error: "New Break-Glass password is invalid." });
+    }
+    const transaction = store.stageRewrap(currentPassword, newPassword, actor);
+    let passwordChanged = false;
+    try {
+        app.userStore.setBreakGlassPassword(newPassword);
+        passwordChanged = true;
+        transaction.commit();
+    } catch (error) {
+        transaction.abort();
+        if (passwordChanged) {
+            try { app.userStore.setBreakGlassPassword(currentPassword); }
+            catch (rollbackError) {
+                audit(app, "breakglass.password.rollback_failed", actor, {
+                    backupKeyConfigured: transaction.configured,
+                    errorCode: String(rollbackError.code || "ROLLBACK_FAILED")
+                });
+                throw Object.assign(new Error("Break-Glass password change failed and rollback requires recovery."), {
+                    code: "BREAKGLASS_PASSWORD_ROLLBACK_FAILED",
+                    statusCode: 503,
+                    cause: error
+                });
+            }
+        }
+        throw error;
+    }
+    const currentToken = parseCookies(req).sirk_central_session || "";
+    const revoked = app.sessions && typeof app.sessions.revokeWhere === "function"
+        ? app.sessions.revokeWhere(record => record.builtIn === true && record.source === "local", currentToken)
+        : 0;
+    if (app.sessions && typeof app.sessions.revokeToken === "function" && currentToken) app.sessions.revokeToken(currentToken);
+    audit(app, "breakglass.password.changed", actor, {
+        revokedSessions: revoked,
+        backupKeyRewrapped: transaction.configured
+    });
+    return json(res, 200, {
+        ok: true,
+        reauthenticationRequired: true,
+        revokedSessions: revoked,
+        backupKeyRewrapped: transaction.configured
+    }, { "Set-Cookie": clearSessionCookie() });
+}
+
 function registerBackupAgeKeyManagement(app, config) {
     const store = backupAgeStoreFactory.create({ dataDir: config.dataDir });
 
@@ -76,7 +134,8 @@ function registerBackupAgeKeyManagement(app, config) {
             const isStatus = req.method === "GET" && url.pathname === "/api/break-glass/backup-age/status";
             const isGenerate = req.method === "POST" && url.pathname === "/api/break-glass/backup-age/identity";
             const isExport = req.method === "POST" && url.pathname === "/api/break-glass/backup-age/export";
-            if (!isStatus && !isGenerate && !isExport) return false;
+            const isPasswordChange = req.method === "POST" && url.pathname === "/api/break-glass/password";
+            if (!isStatus && !isGenerate && !isExport && !isPasswordChange) return false;
 
             const actor = breakGlassActor(app, req);
             if (!actor) return json(res, 403, { ok: false, error: "Break-Glass session required." });
@@ -86,20 +145,19 @@ function registerBackupAgeKeyManagement(app, config) {
             if (origin && origin !== config.publicOrigin) return json(res, 403, { ok: false, error: "Origin rejected." });
             const body = await readBody(req, 16384);
             const currentPassword = String(body.currentPassword || "");
+
+            if (isPasswordChange) {
+                return changePassword(app, config, store, actor, currentPassword, body.newPassword, req, res);
+            }
+
             if (!verifySecret(currentPassword, passwordHash(app, config))) {
                 return json(res, 401, { ok: false, error: "Current password is invalid." });
             }
 
             if (isExport) {
                 store.unlock(currentPassword);
-                if (app.securityCenter && typeof app.securityCenter.audit === "function") {
-                    app.securityCenter.audit("breakglass.backup_age_key.exported", actor, {
-                        recipient: store.read().recipient
-                    });
-                }
-                return downloadEncryptedExport(res, store, {
-                    "X-SIRK-Age-Recipient": store.read().recipient
-                });
+                audit(app, "breakglass.backup_age_key.exported", actor, { recipient: store.read().recipient });
+                return downloadEncryptedExport(res, store, { "X-SIRK-Age-Recipient": store.read().recipient });
             }
 
             if (body.confirm !== CONFIRMATION) {
@@ -114,15 +172,13 @@ function registerBackupAgeKeyManagement(app, config) {
                 throw Object.assign(new Error("Age key generator returned an invalid result."), { statusCode: 503 });
             }
             const record = store.setIdentity(generated.identity, generated.recipient, currentPassword, actor);
-            if (app.securityCenter && typeof app.securityCenter.audit === "function") {
-                app.securityCenter.audit("breakglass.backup_age_identity.generated", actor, {
-                    recipient: record.recipient,
-                    rotated: Boolean(previous.configured),
-                    previousSource: previous.source,
-                    keyPersisted: true,
-                    rotation: record.rotation
-                });
-            }
+            audit(app, "breakglass.backup_age_identity.generated", actor, {
+                recipient: record.recipient,
+                rotated: Boolean(previous.configured),
+                previousSource: previous.source,
+                keyPersisted: true,
+                rotation: record.rotation
+            });
 
             return downloadEncryptedExport(res, store, {
                 "X-SIRK-Age-Recipient": record.recipient,
@@ -133,6 +189,7 @@ function registerBackupAgeKeyManagement(app, config) {
             const code = error.code || "REQUEST_REJECTED";
             const responseStatus = Number.isInteger(error.statusCode) ? error.statusCode : 500;
             const message = responseStatus >= 500 ? "Encrypted backup key operation failed." : error.message || "Request failed.";
+            audit(app, "breakglass.backup_age_key.operation_failed", null, { code, statusCode: responseStatus });
             if (!res.headersSent) return json(res, responseStatus, { ok: false, code, error: message });
             res.destroy(error);
         }
@@ -146,8 +203,10 @@ function registerBackupAgeKeyManagement(app, config) {
 module.exports = {
     registerBackupAgeKeyManagement,
     breakGlassActor,
+    passwordHash,
     status,
     downloadEncryptedExport,
+    changePassword,
     CONFIRMATION,
     EXPORT_NAME,
     VERSION
