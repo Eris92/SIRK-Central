@@ -44,9 +44,12 @@ try
 
     var reloaded = new WebAuthnCredentialStore(security);
     Require(reloaded.Get(id)?.SignatureCounter == 2, "Credential counter did not persist.");
-    Require((File.GetUnixFileMode(Path.Combine(root, "webauthn-credentials.net10.json")) &
-        (UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.OtherRead | UnixFileMode.OtherWrite)) == 0,
-        "Credential store permissions are too broad.");
+    if (!OperatingSystem.IsWindows())
+    {
+        Require((File.GetUnixFileMode(Path.Combine(root, "webauthn-credentials.net10.json")) &
+            (UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.OtherRead | UnixFileMode.OtherWrite)) == 0,
+            "Credential store permissions are too broad.");
+    }
 
     var provider = DataProtectionProvider.Create(new DirectoryInfo(Path.Combine(root, "dp")));
     var ceremonies = new WebAuthnCeremonyStore(provider);
