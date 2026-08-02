@@ -35,11 +35,14 @@ test("Central streams download only for authenticated approved roles", () => {
     assert.match(central, /\/api\\\/settings\\\/backup\\\/download/);
 });
 
-test("UI exposes download and keeps restore identity-gated", () => {
+test("UI exposes download and gates restore with BreakGlass password", () => {
     assert.match(ui, /\/api\/settings\/backup\/download\//);
     assert.match(ui, /download\.download = fileName/);
     assert.match(ui, /restoreAllowed/);
-    assert.match(ui, /\.agekey/);
+    assert.match(ui, /breakGlassPassword: password/);
+    assert.match(ui, /lokalnego klucza zaszyfrowanego hasłem Break-Glass/i);
+    assert.doesNotMatch(ui, /\.agekey/);
+    assert.doesNotMatch(ui, /input\.type = "file"/);
     assert.match(compose, /appliance-restore-server\.js/);
     assert.match(dockerfile, /COPY updater\/appliance-download-server\.js/);
     assert.match(dockerfile, /COPY updater\/appliance-restore-server\.js/);
