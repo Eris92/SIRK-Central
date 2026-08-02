@@ -26,6 +26,9 @@ internal sealed class PortalTelemetryStore
     public PortalHeartbeatSnapshot? Get(string portalId) =>
         _snapshots.TryGetValue(portalId, out var snapshot) ? snapshot : null;
 
+    public bool Remove(string portalId) =>
+        _snapshots.TryRemove(portalId, out _);
+
     public IReadOnlyList<PortalHeartbeatSnapshot> List() =>
         _snapshots.Values
             .OrderBy(item => item.PortalName, StringComparer.OrdinalIgnoreCase)
