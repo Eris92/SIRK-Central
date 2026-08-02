@@ -93,6 +93,7 @@ internal static class ProductionSecurityGuards
 internal sealed class SingleWriterLease : IDisposable
 {
     private readonly FileStream? _lease;
+    private readonly bool _rangeLocked;
 
     public SingleWriterLease(IOptions<SecurityOptions> options)
     {
@@ -109,7 +110,11 @@ internal sealed class SingleWriterLease : IDisposable
         {
             _lease = new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read, 4096,
                 FileOptions.WriteThrough);
-            _lease.Lock(0, 1);
+            if (!OperatingSystem.IsMacOS())
+            {
+                _lease.Lock(0, 1);
+                _rangeLocked = true;
+            }
             _lease.SetLength(0);
             using var writer = new StreamWriter(_lease, leaveOpen: true);
             writer.Write($"pid={Environment.ProcessId}\nstartedUtc={DateTimeOffset.UtcNow:O}\n");
@@ -131,8 +136,11 @@ internal sealed class SingleWriterLease : IDisposable
     public void Dispose()
     {
         if (_lease is null) return;
-        try { _lease.Unlock(0, 1); }
-        catch (IOException) { }
+        if (_rangeLocked && !OperatingSystem.IsMacOS())
+        {
+            try { _lease.Unlock(0, 1); }
+            catch (IOException) { }
+        }
         _lease.Dispose();
     }
 
