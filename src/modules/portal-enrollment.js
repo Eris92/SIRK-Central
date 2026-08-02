@@ -22,14 +22,30 @@ function bearer(req) {
 
 function encryptBootstrap(publicKeyPem, bundle) {
     const plaintext = Buffer.from(JSON.stringify(bundle), "utf8");
-    if (plaintext.length > 1024) throw new Error("Bootstrap payload is too large.");
-    const key = crypto.createPublicKey(publicKeyPem);
-    const encrypted = crypto.publicEncrypt({
-        key,
+    if (plaintext.length > 65536) throw new Error("Bootstrap payload is too large.");
+
+    const contentKey = crypto.randomBytes(32);
+    const iv = crypto.randomBytes(12);
+    const cipher = crypto.createCipheriv("aes-256-gcm", contentKey, iv);
+    cipher.setAAD(Buffer.from("SIRK-Portal-Enrollment-v1", "utf8"));
+    const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+    const tag = cipher.getAuthTag();
+
+    const encryptedKey = crypto.publicEncrypt({
+        key: crypto.createPublicKey(publicKeyPem),
         padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
         oaepHash: "sha256"
-    }, plaintext);
-    return encrypted.toString("base64");
+    }, contentKey);
+
+    contentKey.fill(0);
+    return Buffer.from(JSON.stringify({
+        schemaVersion: 1,
+        algorithm: "RSA-OAEP-256+A256GCM",
+        encryptedKey: encryptedKey.toString("base64"),
+        iv: iv.toString("base64"),
+        tag: tag.toString("base64"),
+        ciphertext: ciphertext.toString("base64")
+    }), "utf8").toString("base64");
 }
 
 function audit(app, action, actor, req, details = {}) {
