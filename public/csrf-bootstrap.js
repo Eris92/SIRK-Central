@@ -1,18 +1,55 @@
 "use strict";
 
 (function () {
-    // The .NET 10 API uses same-site HttpOnly session cookies and validates
-    // request origin server-side. This remains the integration point for a
-    // future synchronizer-token endpoint.
     window.__SIRK_CSRF_BOOTSTRAP = Object.freeze({ enabled: true });
+    if (typeof window.fetch !== "function") return;
 
+    const originalFetch = window.fetch.bind(window);
     const fragment = new URLSearchParams(
         String(window.location.hash || "").replace(/^#/, "")
     );
     const hasAccess = Boolean(fragment.get("access"));
-    if (typeof window.fetch !== "function") return;
+    let csrfPromise = null;
 
-    const originalFetch = window.fetch.bind(window);
+    function requestMethod(input, init) {
+        return String(
+            (init && init.method) ||
+            (typeof input !== "string" && input && input.method) ||
+            "GET"
+        ).toUpperCase();
+    }
+
+    function isUnsafe(method) {
+        return !["GET", "HEAD", "OPTIONS", "TRACE"].includes(method);
+    }
+
+    function isAnonymousWrite(url) {
+        return url.pathname === "/api/login" ||
+            /^\/api\/v1\/break-glass\/[^/]+\/login$/.test(url.pathname) ||
+            url.pathname === "/auth/entra/frontchannel-logout";
+    }
+
+    async function csrfToken() {
+        if (!csrfPromise) {
+            csrfPromise = originalFetch("/api/v1/auth/csrf", {
+                method: "GET",
+                credentials: "same-origin",
+                cache: "no-store",
+                headers: { Accept: "application/json" }
+            }).then(async response => {
+                const body = await response.json().catch(() => ({}));
+                if (!response.ok || !body.headerName || !body.requestToken) {
+                    throw new Error(body.error || "CSRF token could not be issued.");
+                }
+                return body;
+            }).catch(error => {
+                csrfPromise = null;
+                throw error;
+            });
+        }
+        return csrfPromise;
+    }
+
     window.fetch = async function sirkBootstrapFetch(input, init) {
         let url;
         try {
@@ -24,15 +61,8 @@
             return originalFetch(input, init);
         }
 
-        const method = String(
-            (init && init.method) ||
-            (typeof input !== "string" && input.method) ||
-            "GET"
-        ).toUpperCase();
+        const method = requestMethod(input, init);
 
-        // Showing the hidden local-login form must not consume the same
-        // rate-limit budget as the real POST /api/login attempt. The access
-        // code is still validated server-side by the login endpoint.
         if (
             hasAccess &&
             method === "GET" &&
@@ -51,26 +81,25 @@
             );
         }
 
-        const response = await originalFetch(input, init);
-
-        // The current base UI still expects the legacy list endpoint. During
-        // a fresh Central deployment its absence means zero connected Portals,
-        // not an invalid session. Never mask POST/create/connect failures.
         if (
-            method === "GET" &&
             url.origin === window.location.origin &&
-            url.pathname === "/api/portals" &&
-            response.status === 404
+            isUnsafe(method) &&
+            !isAnonymousWrite(url)
         ) {
-            return new Response(JSON.stringify({ portals: [] }), {
-                status: 200,
-                headers: {
-                    "Content-Type": "application/json; charset=utf-8",
-                    "Cache-Control": "no-store"
-                }
-            });
+            const token = await csrfToken();
+            const options = Object.assign({}, init || {});
+            const headers = new Headers(
+                options.headers ||
+                (typeof input !== "string" && input && input.headers) ||
+                undefined
+            );
+            headers.set(token.headerName, token.requestToken);
+            options.headers = headers;
+            options.credentials = "same-origin";
+            options.cache = "no-store";
+            return originalFetch(input, options);
         }
 
-        return response;
+        return originalFetch(input, init);
     };
 }());
