@@ -8,8 +8,11 @@ const { VERSION } = require("../version");
 const API_HOST = "api.github.com";
 const REPOSITORY_PATH = "/repos/Eris92/SIRK-Portal/releases";
 const CACHE_MS = 300000;
+const TRUSTED_HOSTS = new Set(["api.github.com", "github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"]);
 
-function requestJson(hostname, requestPath) {
+function requestJson(hostname, requestPath, redirectsLeft = 3) {
+    hostname = String(hostname || "").toLowerCase();
+    if (!TRUSTED_HOSTS.has(hostname)) return Promise.reject(new Error("GitHub response host is not trusted."));
     return new Promise((resolve, reject) => {
         const request = https.request({
             hostname,
@@ -22,6 +25,16 @@ function requestJson(hostname, requestPath) {
                 "X-GitHub-Api-Version": "2022-11-28"
             }
         }, response => {
+            if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+                response.resume();
+                if (redirectsLeft <= 0) return reject(new Error("GitHub release redirect limit exceeded."));
+                let redirected;
+                try { redirected = new URL(response.headers.location, "https://" + hostname + requestPath); }
+                catch (_) { return reject(new Error("GitHub release redirect is invalid.")); }
+                if (redirected.protocol !== "https:" || !TRUSTED_HOSTS.has(redirected.hostname.toLowerCase())) return reject(new Error("GitHub release redirect host is not trusted."));
+                requestJson(redirected.hostname, redirected.pathname + redirected.search, redirectsLeft - 1).then(resolve, reject);
+                return;
+            }
             const chunks = [];
             let size = 0;
             response.on("data", chunk => {
@@ -43,8 +56,7 @@ function requestJson(hostname, requestPath) {
 
 function requestMetadata(urlText) {
     const parsed = new URL(urlText);
-    const allowed = new Set(["github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"]);
-    if (parsed.protocol !== "https:" || !allowed.has(parsed.hostname.toLowerCase())) throw new Error("Release metadata URL is not trusted.");
+    if (parsed.protocol !== "https:" || !TRUSTED_HOSTS.has(parsed.hostname.toLowerCase())) throw new Error("Release metadata URL is not trusted.");
     return requestJson(parsed.hostname, parsed.pathname + parsed.search);
 }
 
@@ -57,7 +69,7 @@ function validateMetadata(value) {
     if (!/^[0-9A-Za-z][0-9A-Za-z.+_-]{0,79}$/.test(version)) throw new Error("Portal release version is invalid.");
     if (!/^[A-F0-9]{64}$/.test(sha256)) throw new Error("Portal release SHA-256 is invalid.");
     const parsed = new URL(packageUrl);
-    if (parsed.protocol !== "https:" || !["github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"].includes(parsed.hostname.toLowerCase())) throw new Error("Portal package URL is not trusted.");
+    if (parsed.protocol !== "https:" || !TRUSTED_HOSTS.has(parsed.hostname.toLowerCase())) throw new Error("Portal package URL is not trusted.");
     if (!/SIRK-Portal-[^/]+-win-x64\.zip$/i.test(parsed.pathname)) throw new Error("Portal package asset name is invalid.");
     return {
         schemaVersion: 1,
@@ -106,4 +118,4 @@ function registerPortalReleaseCatalog(app) {
     return app;
 }
 
-module.exports = { registerPortalReleaseCatalog, validateMetadata, VERSION };
+module.exports = { registerPortalReleaseCatalog, validateMetadata, VERSION, TRUSTED_HOSTS };
