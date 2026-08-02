@@ -6,11 +6,16 @@ const test = require("node:test");
 
 const source = fs.readFileSync("public/break-glass-mfa.js", "utf8");
 
-test("BreakGlass MFA UI reads the actual passkey inventory", () => {
-    assert.match(source, /request\("\/api\/break-glass\/passkeys"\)/);
-    assert.match(source, /passkeyResult\.passkeys\.filter\(item => item\.status === "active"\)\.length/);
+test("BreakGlass MFA UI reads the canonical .NET 10 passkey inventory", () => {
+    assert.match(source, /request\("\/api\/v1\/webauthn\/credentials"\)/);
+    assert.match(source, /Array\.isArray\(credentials\) \? credentials\.length : 0/);
     assert.match(source, /activePasskeys/);
     assert.match(source, /renderPasskeyStatus\(\)/);
+});
+
+test("BreakGlass MFA mutations use the antiforgery endpoint", () => {
+    assert.match(source, /request\("\/api\/v1\/auth\/csrf"\)/);
+    assert.match(source, /headers: await csrfHeaders\(\)/);
 });
 
 test("BreakGlass MFA UI keeps the inactive message only for zero active passkeys", () => {
