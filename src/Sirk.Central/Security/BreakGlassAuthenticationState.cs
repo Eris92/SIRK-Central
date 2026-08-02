@@ -145,7 +145,7 @@ internal sealed class BreakGlassRecoveryCodeStore
             _document = new BreakGlassRecoveryCodeDocument(
                 CurrentSchema,
                 userId,
-                codes.Select(Hash).ToList(),
+                codes.Select(HashText).ToList(),
                 now,
                 null);
             Persist();
@@ -155,7 +155,7 @@ internal sealed class BreakGlassRecoveryCodeStore
 
     public int VerifyAndConsume(string userId, string? code)
     {
-        var candidate = Hash(code);
+        var candidate = HashBytes(code);
         lock (_sync)
         {
             if (!string.Equals(_document.UserId, userId, StringComparison.Ordinal))
@@ -219,13 +219,13 @@ internal sealed class BreakGlassRecoveryCodeStore
         }
     }
 
-    private static byte[] Hash(string? code)
+    private static byte[] HashBytes(string? code)
     {
         var normalized = (code ?? string.Empty).Trim();
         return SHA256.HashData(Encoding.UTF8.GetBytes(normalized));
     }
 
-    private static string Hash(string code) => Convert.ToBase64String(Hash((string?)code));
+    private static string HashText(string code) => Convert.ToBase64String(HashBytes(code));
 
     private static bool IsHash(string value)
     {
