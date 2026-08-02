@@ -19,6 +19,7 @@
     <InternalsVisibleTo Include="Sirk.Central.BackupKeyTests" />
     <InternalsVisibleTo Include="Sirk.Central.BackupArchiveTests" />
     <InternalsVisibleTo Include="Sirk.Central.EntraTests" />
+    <InternalsVisibleTo Include="Sirk.Central.ApprovalTests" />
   </ItemGroup>
 
   <ItemGroup>
