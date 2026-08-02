@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.RateLimiting;
 using Sirk.Central;
 using Sirk.Central.Approvals;
 using Sirk.Central.Backup;
+using Sirk.Central.Organizations;
 using Sirk.Central.Portals;
 using Sirk.Central.Security;
 using Sirk.Central.Tickets;
@@ -36,6 +37,8 @@ builder.Services.AddSingleton<EntraSettingsStore>();
 builder.Services.AddSingleton<ApprovalStore>();
 builder.Services.AddSingleton<TicketStore>();
 builder.Services.AddSingleton<TicketCommandStore>();
+builder.Services.AddSingleton<OrganizationStore>();
+builder.Services.AddSingleton<PortalAssignmentStore>();
 builder.Services.AddSirkWebAuthn(builder.Configuration);
 builder.Services.AddTransient<IStartupFilter, WebAuthnUiStartupFilter>();
 
@@ -137,6 +140,8 @@ if (securityOptions.Enabled)
     _ = app.Services.GetRequiredService<ApprovalStore>();
     _ = app.Services.GetRequiredService<TicketStore>();
     _ = app.Services.GetRequiredService<TicketCommandStore>();
+    _ = app.Services.GetRequiredService<OrganizationStore>();
+    _ = app.Services.GetRequiredService<PortalAssignmentStore>();
     _ = app.Services.GetRequiredService<WebAuthnCredentialStore>();
     _ = app.Services.GetRequiredService<WebAuthnCeremonyStore>();
     _ = app.Services.GetRequiredService<SecurityAuditLog>().VerifyIntegrity();
@@ -188,6 +193,7 @@ if (securityOptions.Enabled)
     app.MapApprovals();
     app.MapTickets();
     app.MapTicketCommands();
+    app.MapOrganizations();
 }
 app.MapFallback(() => Results.Problem(statusCode: 404, title: "Resource not found"));
 app.Lifetime.ApplicationStarted.Register(runtimeState.MarkReady);
