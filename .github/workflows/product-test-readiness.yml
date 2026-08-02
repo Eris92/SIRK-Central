@@ -1,0 +1,37 @@
+name: SIRK Central Product Test Readiness
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  central-readiness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate syntax and architecture
+        run: npm run check:syntax
+
+      - name: Run enrollment and connection lifecycle tests
+        run: |
+          node test/portal-enrollment.test.js
+          node test/portal-connection-lifecycle.test.js
+          node test/portal-connection-self-service.test.js
+
+      - name: Run Central test suite
+        run: npm test
