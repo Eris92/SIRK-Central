@@ -7,10 +7,10 @@ RUN dotnet restore src/Sirk.Central/Sirk.Central.csproj
 
 COPY public public
 COPY src/Sirk.Central src/Sirk.Central
-RUN dotnet publish src/Sirk.Central/Sirk.Central.csproj \
-    --configuration Release \
-    --no-restore \
-    --output /app/publish
+RUN rm -rf src/Sirk.Central/bin src/Sirk.Central/obj \
+    && dotnet publish src/Sirk.Central/Sirk.Central.csproj \
+        --configuration Release \
+        --output /app/publish
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
