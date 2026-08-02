@@ -16,6 +16,7 @@ const { registerContinuity } = require("./modules/continuity");
 const { registerMaintenance } = require("./modules/maintenance");
 const { registerPortalTelemetry } = require("./modules/portal-telemetry");
 const { registerPortalBootstrap } = require("./modules/portal-bootstrap");
+const { registerPortalEnrollment } = require("./modules/portal-enrollment");
 const { registerPortalReleaseCatalog } = require("./modules/portal-release-catalog");
 const { registerAdministration } = require("./modules/administration");
 const { registerSecurityApi } = require("./modules/security-api");
@@ -43,6 +44,7 @@ function createCentralRuntime(config) {
         registerMaintenance,
         registerPortalTelemetry,
         registerPortalBootstrap,
+        registerPortalEnrollment,
         registerPortalReleaseCatalog,
         registerAdministration,
         registerSecurityApi,
