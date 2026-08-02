@@ -2,6 +2,7 @@ using System.Security.Claims;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
+using Sirk.Central.Access;
 
 namespace Sirk.Central.Security;
 
@@ -14,7 +15,9 @@ internal static class EntraAuthentication
         SirkRoles.SecAdmin,
         SirkRoles.Admin,
         SirkRoles.Auditor,
-        SirkRoles.Operator
+        SirkRoles.OperatorL1,
+        SirkRoles.SupportL2,
+        SirkRoles.EngineerL3
     };
 
     public static IServiceCollection AddSirkEntraAuthentication(this IServiceCollection services)
@@ -166,8 +169,8 @@ internal static class EntraAuthentication
                 return Task.CompletedTask;
             }
 
-            var store = context.HttpContext.RequestServices.GetRequiredService<EntraSettingsStore>();
-            var settings = store.GetPrivate();
+            var settingsStore = context.HttpContext.RequestServices.GetRequiredService<EntraSettingsStore>();
+            var settings = settingsStore.GetPrivate();
             if (settings is not { Enabled: true })
             {
                 context.Fail("Entra configuration is disabled.");
@@ -182,27 +185,50 @@ internal static class EntraAuthentication
                 return Task.CompletedTask;
             }
 
-            var roles = principal.FindAll("roles")
+            var claimedRoles = principal.FindAll("roles")
                 .Select(claim => claim.Value)
                 .Where(SupportedRoles.Contains)
                 .Distinct(StringComparer.Ordinal)
                 .ToArray();
-            if (roles.Length == 0)
+            if (claimedRoles.Length == 0)
             {
                 context.Fail("Entra identity has no supported SIRK application role.");
                 return Task.CompletedTask;
             }
 
-            foreach (var existing in identity.FindAll(ClaimTypes.Role).ToArray())
-                identity.RemoveClaim(existing);
-            foreach (var role in roles)
-                identity.AddClaim(new Claim(ClaimTypes.Role, role));
-
             var name = principal.FindFirstValue("preferred_username")
                        ?? principal.FindFirstValue("name")
                        ?? identityKey;
-            identity.AddClaim(new Claim(ClaimTypes.NameIdentifier, identityKey));
-            identity.AddClaim(new Claim(ClaimTypes.Name, name));
+            var displayName = principal.FindFirstValue("name") ?? name;
+            ManagedIdentity managed;
+            try
+            {
+                managed = context.HttpContext.RequestServices
+                    .GetRequiredService<IdentityAccessStore>()
+                    .ResolveEntra(identityKey, name, displayName, claimedRoles);
+            }
+            catch (Exception exception) when (exception is InvalidDataException or UnauthorizedAccessException)
+            {
+                context.Fail(exception.Message);
+                return Task.CompletedTask;
+            }
+
+            if (managed.Status == "conflict")
+            {
+                context.Fail("Entra identity has conflicting SIRK application roles.");
+                return Task.CompletedTask;
+            }
+            if (managed.Status != "active" || string.IsNullOrWhiteSpace(managed.Role))
+            {
+                context.Fail("Entra privileged role is pending approval in SIRK Central.");
+                return Task.CompletedTask;
+            }
+
+            foreach (var existing in identity.FindAll(ClaimTypes.Role).ToArray())
+                identity.RemoveClaim(existing);
+            identity.AddClaim(new Claim(ClaimTypes.Role, managed.Role));
+            identity.AddClaim(new Claim(ClaimTypes.NameIdentifier, managed.Key));
+            identity.AddClaim(new Claim(ClaimTypes.Name, managed.DisplayName));
             identity.AddClaim(new Claim("sirk:identity_source", "entra"));
             identity.AddClaim(new Claim("amr", "federated"));
             identity.AddClaim(new Claim(
@@ -211,18 +237,19 @@ internal static class EntraAuthentication
 
             var audit = context.HttpContext.RequestServices.GetRequiredService<SecurityAuditLog>();
             audit.Write(new SecurityAuditEvent(
-                identityKey,
-                name,
+                managed.Key,
+                managed.DisplayName,
                 "authentication.entra",
                 "session",
-                identityKey,
+                managed.Key,
                 true,
                 context.HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
                 context.HttpContext.TraceIdentifier,
                 new Dictionary<string, string>
                 {
                     ["tenant"] = tenantId!,
-                    ["roles"] = string.Join(',', roles)
+                    ["claimedRoles"] = string.Join(',', claimedRoles),
+                    ["effectiveRole"] = managed.Role
                 }));
             return Task.CompletedTask;
         },
@@ -233,7 +260,8 @@ internal static class EntraAuthentication
             return context.Response.WriteAsJsonAsync(new
             {
                 ok = false,
-                code = "ENTRA_AUTHENTICATION_FAILED"
+                code = "ENTRA_AUTHENTICATION_FAILED",
+                error = context.Failure?.Message ?? "Entra authentication failed."
             });
         }
     };
