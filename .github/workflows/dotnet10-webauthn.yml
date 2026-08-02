@@ -8,6 +8,8 @@ on:
       - 'src/Sirk.Central/Security/WebAuthn*.cs'
       - 'src/Sirk.Central/Security/Fido2Compatibility.cs'
       - 'tests/Sirk.Central.WebAuthnTests/**'
+      - 'public/webauthn.js'
+      - 'src/Sirk.Central/Program.cs'
       - 'src/Sirk.Central/Sirk.Central.csproj'
       - '.github/workflows/dotnet10-webauthn.yml'
 
@@ -28,3 +30,26 @@ jobs:
         run: dotnet build tests/Sirk.Central.WebAuthnTests/Sirk.Central.WebAuthnTests.csproj --configuration Release --no-restore
       - name: WebAuthn credential and ceremony lifecycle
         run: dotnet run --project tests/Sirk.Central.WebAuthnTests/Sirk.Central.WebAuthnTests.csproj --configuration Release --no-build
+      - name: Validate browser module syntax
+        run: node --check public/webauthn.js
+      - name: Publish runtime
+        run: dotnet publish src/Sirk.Central/Sirk.Central.csproj --configuration Release --no-build --output artifacts/central
+      - name: Live WebAuthn UI injection smoke
+        env:
+          ASPNETCORE_ENVIRONMENT: Development
+          ASPNETCORE_URLS: http://127.0.0.1:18084
+          Sirk__Security__Enabled: 'false'
+          Sirk__PortalProtocol__DataRoot: ${{ runner.temp }}/sirk-webauthn-ui/portal
+        run: |
+          dotnet artifacts/central/Sirk.Central.dll > "${RUNNER_TEMP}/sirk-webauthn-ui.log" 2>&1 &
+          pid=$!
+          cleanup() { kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; }
+          trap cleanup EXIT
+          for attempt in $(seq 1 60); do
+            curl --fail --silent http://127.0.0.1:18084/readyz >/dev/null && break
+            sleep 0.25
+          done
+          curl --fail --silent http://127.0.0.1:18084/app.js | grep --fixed-strings "void import('/webauthn.js');"
+          curl --fail --silent http://127.0.0.1:18084/webauthn.js | grep --fixed-strings "navigator.credentials.get"
+          cleanup
+          trap - EXIT
