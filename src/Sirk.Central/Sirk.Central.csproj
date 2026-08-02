@@ -11,6 +11,8 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" Version="10.0.10" />
+    <PackageReference Include="Fido2" Version="4.0.1" />
+    <PackageReference Include="Fido2.AspNet" Version="4.0.1" />
   </ItemGroup>
 
   <ItemGroup>
@@ -21,6 +23,7 @@
     <InternalsVisibleTo Include="Sirk.Central.EntraTests" />
     <InternalsVisibleTo Include="Sirk.Central.ApprovalTests" />
     <InternalsVisibleTo Include="Sirk.Central.TicketTests" />
+    <InternalsVisibleTo Include="Sirk.Central.WebAuthnTests" />
   </ItemGroup>
 
   <ItemGroup>
