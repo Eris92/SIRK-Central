@@ -12,6 +12,12 @@ function safePortalId(value) {
     return id;
 }
 
+function safePortalName(value) {
+    const name = String(value || "").trim();
+    if (name.length < 2 || name.length > 100) throw new Error("Portal name must contain 2-100 characters.");
+    return name;
+}
+
 function create(options) {
     const dataDir = path.resolve(options.dataDir);
     const storePath = path.join(dataDir, "portals.json");
@@ -37,13 +43,12 @@ function create(options) {
             id: item.id,
             name: item.name,
             createdAtUtc: item.createdAtUtc,
+            updatedAtUtc: item.updatedAtUtc || item.createdAtUtc,
             tokenRotatedAtUtc: item.tokenRotatedAtUtc || null
         } : null;
     }
 
-    function list() {
-        return read().portals.map(publicPortal);
-    }
+    function list() { return read().portals.map(publicPortal); }
 
     function get(id) {
         let portalId;
@@ -53,19 +58,12 @@ function create(options) {
 
     function createPortal(input) {
         const id = safePortalId(input.id);
-        const name = String(input.name || "").trim();
-        if (name.length < 2 || name.length > 100) throw new Error("Portal name must contain 2-100 characters.");
+        const name = safePortalName(input.name);
         const registry = read();
-        if (registry.portals.some((item) => item.id === id)) throw new Error("Portal ID already exists.");
+        if (registry.portals.some(item => item.id === id)) throw new Error("Portal ID already exists.");
         const token = randomToken(32);
         const createdAtUtc = new Date().toISOString();
-        registry.portals.push({
-            id,
-            name,
-            tokenHash: hashSecret(token),
-            createdAtUtc,
-            tokenRotatedAtUtc: createdAtUtc
-        });
+        registry.portals.push({ id, name, tokenHash: hashSecret(token), createdAtUtc, updatedAtUtc: createdAtUtc, tokenRotatedAtUtc: createdAtUtc });
         write(registry);
         return { id, name, token, createdAtUtc };
     }
@@ -73,20 +71,30 @@ function create(options) {
     function authenticate(id, token) {
         let portalId;
         try { portalId = safePortalId(id); } catch (_) { return null; }
-        const portal = read().portals.find((item) => item.id === portalId);
-        return portal && verifySecret(token, portal.tokenHash)
-            ? publicPortal(portal)
-            : null;
+        const portal = read().portals.find(item => item.id === portalId);
+        return portal && verifySecret(token, portal.tokenHash) ? publicPortal(portal) : null;
+    }
+
+    function update(id, input) {
+        const portalId = safePortalId(id);
+        const registry = read();
+        const portal = registry.portals.find(item => item.id === portalId);
+        if (!portal) throw Object.assign(new Error("Portal was not found."), { statusCode: 404 });
+        if (Object.prototype.hasOwnProperty.call(input || {}, "name")) portal.name = safePortalName(input.name);
+        portal.updatedAtUtc = new Date().toISOString();
+        write(registry);
+        return publicPortal(portal);
     }
 
     function rotateToken(id) {
         const portalId = safePortalId(id);
         const registry = read();
         const portal = registry.portals.find(item => item.id === portalId);
-        if (!portal) throw new Error("Portal was not found.");
+        if (!portal) throw Object.assign(new Error("Portal was not found."), { statusCode: 404 });
         const token = randomToken(32);
         portal.tokenHash = hashSecret(token);
         portal.tokenRotatedAtUtc = new Date().toISOString();
+        portal.updatedAtUtc = portal.tokenRotatedAtUtc;
         write(registry);
         return Object.assign(publicPortal(portal), { token });
     }
@@ -101,7 +109,7 @@ function create(options) {
         return publicPortal(removed);
     }
 
-    return { list, get, createPortal, authenticate, rotateToken, remove };
+    return { list, get, createPortal, authenticate, update, rotateToken, remove };
 }
 
-module.exports = { create, safePortalId };
+module.exports = { create, safePortalId, safePortalName };
