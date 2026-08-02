@@ -18,28 +18,20 @@
         ), "");
         if (phrase !== "RESTORE SIRK CENTRAL") throw new Error(text("Nieprawidłowa fraza potwierdzająca.", "Invalid confirmation phrase."));
 
-        const input = document.createElement("input");
-        input.type = "file";
-        input.accept = ".agekey,text/plain";
-        input.hidden = true;
-        document.body.append(input);
+        let password = prompt(text(
+            "Podaj aktualne hasło Break-Glass. Lokalny zaszyfrowany klucz zostanie użyty automatycznie.",
+            "Enter the current Break-Glass password. The local encrypted key will be used automatically."
+        ), "");
+        if (!password) return;
         try {
-            const file = await new Promise(resolve => {
-                input.addEventListener("change", () => resolve(input.files && input.files[0] || null), { once: true });
-                input.click();
-            });
-            if (!file) return;
-            if (file.size < 1 || file.size > 16384) throw new Error(text("Plik identity ma nieprawidłowy rozmiar.", "The identity file has an invalid size."));
-            let identity = await file.text();
-            if (!/^AGE-SECRET-KEY-1[0-9A-Z]+$/m.test(identity)) throw new Error(text("Plik nie zawiera prawidłowej identity age.", "The file does not contain a valid age identity."));
             const response = await fetch("/api/settings/backup/restore-encrypted", {
                 method: "POST",
                 credentials: "same-origin",
                 cache: "no-store",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ name: fileName, identity, confirm: phrase })
+                body: JSON.stringify({ name: fileName, breakGlassPassword: password, confirm: phrase })
             });
-            identity = "";
+            password = "";
             const result = await response.json().catch(() => ({}));
             if (!response.ok) throw new Error(result.error || text("Odtworzenie zostało odrzucone.", "Restore was rejected."));
             alert(text(
@@ -47,8 +39,7 @@
                 "Restore has started. Check its state in the System tab."
             ));
         } finally {
-            input.value = "";
-            input.remove();
+            password = "";
         }
     }
 
@@ -76,8 +67,8 @@
                 restore.disabled = !restoreAllowed;
                 restore.textContent = restoreAllowed ? text("Odtwórz", "Restore") : text("Brak uprawnień", "Not allowed");
                 restore.title = restoreAllowed ? text(
-                    "Wskaż prywatny plik identity age pasujący do backupu.",
-                    "Select the private age identity matching this backup."
+                    "Restore użyje lokalnego klucza zaszyfrowanego hasłem Break-Glass.",
+                    "Restore uses the local key encrypted with the Break-Glass password."
                 ) : text("Restore wymaga roli Admin lub Break-Glass.", "Restore requires Admin or Break-Glass.");
                 if (restoreAllowed) restore.addEventListener("click", event => {
                     event.preventDefault();
