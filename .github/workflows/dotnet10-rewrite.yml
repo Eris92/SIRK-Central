@@ -14,6 +14,11 @@ on:
       - '.github/scripts/test-dotnet10-portal-endpoints.py'
       - '.github/scripts/test-dotnet10-breakglass-auth.py'
       - 'public/**'
+      - 'website/**'
+      - 'deploy/dotnet10/**'
+      - 'deploy/install-dotnet10.sh'
+      - 'deploy/reinstall-dotnet10.sh'
+      - 'deploy/upgrade-dotnet10-vps.sh'
       - '.github/workflows/dotnet10-rewrite.yml'
   pull_request:
     branches: [ main ]
@@ -27,6 +32,11 @@ on:
       - '.github/scripts/test-dotnet10-portal-endpoints.py'
       - '.github/scripts/test-dotnet10-breakglass-auth.py'
       - 'public/**'
+      - 'website/**'
+      - 'deploy/dotnet10/**'
+      - 'deploy/install-dotnet10.sh'
+      - 'deploy/reinstall-dotnet10.sh'
+      - 'deploy/upgrade-dotnet10-vps.sh'
       - '.github/workflows/dotnet10-rewrite.yml'
 
 permissions:
@@ -46,6 +56,29 @@ jobs:
         run: |
           dotnet --info
           grep -R --line-number --include='*.csproj' --include='*.props' --include='global.json' -E 'net8\.0|net9\.0' src/Sirk.Central tests/Sirk.Central.ProtocolTests tests/Sirk.Central.SecurityTests Directory.Build.props global.json && exit 1 || true
+
+      - name: Deployment syntax and three-host edge contract
+        run: |
+          bash -n deploy/install-dotnet10.sh
+          bash -n deploy/reinstall-dotnet10.sh
+          bash -n deploy/upgrade-dotnet10-vps.sh
+          test -s website/index.html
+          grep --fixed-strings 'root * /srv/website' deploy/dotnet10/Caddyfile
+          grep --fixed-strings 'root * /srv/sir-k' deploy/dotnet10/Caddyfile
+          grep --fixed-strings 'reverse_proxy central:8080' deploy/dotnet10/Caddyfile
+          if grep -E 'redir https://\{\$SIRK_CENTRAL_DOMAIN\}.*' deploy/dotnet10/Caddyfile | grep -E 'WEBSITE|BUSINESS'; then
+            echo 'Public websites must not redirect to SIRK Central.' >&2
+            exit 1
+          fi
+          docker run --rm \
+            -e SIRK_ACME_EMAIL=ci@example.invalid \
+            -e SIRK_WEBSITE_DOMAIN=sirkportal.example.invalid \
+            -e SIRK_BUSINESS_DOMAIN=sir-k.example.invalid \
+            -e SIRK_CENTRAL_DOMAIN=central.example.invalid \
+            -e SIRK_AUTH_DOMAIN=auth.example.invalid \
+            -v "$PWD/deploy/dotnet10/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2.10.0-alpine \
+            caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
 
       - name: Restore protocol tests
         run: dotnet restore tests/Sirk.Central.ProtocolTests/Sirk.Central.ProtocolTests.csproj
