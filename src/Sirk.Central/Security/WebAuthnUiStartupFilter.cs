@@ -1,6 +1,8 @@
 using System.Text;
 using Microsoft.Extensions.Options;
+using Sirk.Central.Access;
 using Sirk.Central.Operations;
+using Sirk.Central.Portals;
 
 namespace Sirk.Central.Security;
 
@@ -8,11 +10,18 @@ internal sealed class WebAuthnUiStartupFilter : IStartupFilter
 {
     private readonly IWebHostEnvironment _environment;
     private readonly OperationsMiddleware _operations;
+    private readonly PortalTunnelMiddleware _tunnel;
 
-    public WebAuthnUiStartupFilter(IWebHostEnvironment environment, IOptions<SecurityOptions> options)
+    public WebAuthnUiStartupFilter(
+        IWebHostEnvironment environment,
+        IOptions<SecurityOptions> options,
+        PortalRequestAuthenticator portalAuthenticator,
+        FilePortalRegistry portals,
+        IdentityAccessStore access)
     {
         _environment = environment;
         _operations = new OperationsMiddleware(options);
+        _tunnel = new PortalTunnelMiddleware(portalAuthenticator, portals, access);
     }
 
     public Action<IApplicationBuilder> Configure(Action<IApplicationBuilder> next) => app =>
@@ -20,6 +29,7 @@ internal sealed class WebAuthnUiStartupFilter : IStartupFilter
         app.Use(async (context, continuation) =>
         {
             if (await _operations.TryHandleAsync(context)) return;
+            if (await _tunnel.TryHandleAsync(context)) return;
 
             if (!HttpMethods.IsGet(context.Request.Method) ||
                 !context.Request.Path.Equals("/app.js", StringComparison.Ordinal))
