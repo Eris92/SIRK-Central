@@ -3,6 +3,7 @@
 const { Readable } = require("node:stream");
 const { parseCookies, csrfAccepted, json, readBody } = require("../http/transport");
 const { identityActive, hasPermission } = require("../rbac");
+const { verifySecret } = require("../security");
 
 const ENCRYPTED_BACKUP_PATTERN = /^sirk-central-\d{8}T\d{6}Z\.tar\.gz\.age$/;
 
@@ -20,6 +21,12 @@ function writable(actor) {
     if (!identityActive(actor)) return false;
     if (actor.builtIn === true) return true;
     return actor.role === "Admin";
+}
+function passwordHash(app, config) {
+    const overrides = app.userStore && typeof app.userStore.securityOverrides === "function"
+        ? app.userStore.securityOverrides()
+        : {};
+    return overrides.breakGlassPasswordHash || config.adminPasswordHash;
 }
 function updaterOrigin(config) {
     const value = String(config.env.SIRK_UPDATER_ORIGIN || "").replace(/\/+$/, "");
@@ -68,10 +75,8 @@ async function downloadBackup(config, name, res) {
     res.writeHead(200, headers);
     Readable.fromWeb(response.body).on("error", error => res.destroy(error)).pipe(res);
 }
-async function restoreEncryptedBackup(config, body) {
-    const name = String(body && body.name || "");
-    const identity = String(body && body.identity || "");
-    if (!ENCRYPTED_BACKUP_PATTERN.test(name)) throw Object.assign(new Error("Encrypted backup name is invalid."), { statusCode: 400 });
+async function restoreEncryptedBackup(config, name, identity) {
+    if (!ENCRYPTED_BACKUP_PATTERN.test(String(name || ""))) throw Object.assign(new Error("Encrypted backup name is invalid."), { statusCode: 400 });
     if (!identity || Buffer.byteLength(identity, "utf8") > 16384 || identity.includes("\0")) throw Object.assign(new Error("Age identity is invalid."), { statusCode: 400 });
     const response = await fetch(updaterOrigin(config) + "/backup/encrypted/restore", {
         method: "POST",
@@ -88,6 +93,11 @@ async function restoreEncryptedBackup(config, body) {
     return result;
 }
 function audit(app, actor, action, result, target, details) {
+    if (app.securityCenter && typeof app.securityCenter.audit === "function") {
+        try { app.securityCenter.audit(action, actor, Object.assign({ result, target: String(target || "") }, details || {})); }
+        catch (_) { /* audit failure must not expose secret material */ }
+        return;
+    }
     if (!app.auditStore || typeof app.auditStore.append !== "function") return;
     try {
         app.auditStore.append({ actor: actor || {}, action, category: "operations", result, target: String(target || ""), details: details || {} });
@@ -115,17 +125,36 @@ function registerApplianceManagement(app, config) {
                 const actor = sessionActor(app, req);
                 if (!writable(actor)) return json(res, 403, { ok: false, error: "Permission denied." });
                 if (!csrfAccepted(req, config)) return json(res, 403, { ok: false, error: "CSRF validation failed." });
-                const body = await readBody(req);
+                const body = await readBody(req, 16384);
                 if (body.confirm !== "RESTORE SIRK CENTRAL") return json(res, 400, { ok: false, error: "Restore confirmation is invalid." });
-                const result = await restoreEncryptedBackup(config, body);
-                audit(app, actor, "backup.encrypted_restore_scheduled", "success", body.name, { accepted: true });
-                return json(res, 202, result);
+                const password = String(body.breakGlassPassword || "");
+                if (!verifySecret(password, passwordHash(app, config))) {
+                    audit(app, actor, "backup.encrypted_restore_rejected", "failure", body.name, { reason: "invalid_breakglass_password" });
+                    return json(res, 401, { ok: false, error: "Break-Glass password is invalid." });
+                }
+                if (!app.backupAgeStore || typeof app.backupAgeStore.unlock !== "function") {
+                    throw Object.assign(new Error("Encrypted backup key is not configured."), { statusCode: 409 });
+                }
+                let unlocked = app.backupAgeStore.unlock(password);
+                try {
+                    const result = await restoreEncryptedBackup(config, body.name, unlocked.identity);
+                    audit(app, actor, "backup.encrypted_restore_scheduled", "success", body.name, {
+                        accepted: true,
+                        recipient: unlocked.recipient,
+                        localEncryptedKey: true
+                    });
+                    return json(res, 202, result);
+                } finally {
+                    unlocked.identity = "";
+                    unlocked = null;
+                }
             }
             return false;
         } catch (error) {
             if (res.headersSent) return res.destroy(error);
             return json(res, Number.isInteger(error.statusCode) ? error.statusCode : 500, {
                 ok: false,
+                code: error.code || "REQUEST_REJECTED",
                 error: Number.isInteger(error.statusCode) && error.statusCode < 500 ? error.message : "Internal service error."
             });
         }
@@ -134,4 +163,15 @@ function registerApplianceManagement(app, config) {
     return app;
 }
 
-module.exports = { registerApplianceManagement, allowed, writable, updaterOrigin, updaterToken, requestStatus, downloadBackup, restoreEncryptedBackup, ENCRYPTED_BACKUP_PATTERN };
+module.exports = {
+    registerApplianceManagement,
+    allowed,
+    writable,
+    passwordHash,
+    updaterOrigin,
+    updaterToken,
+    requestStatus,
+    downloadBackup,
+    restoreEncryptedBackup,
+    ENCRYPTED_BACKUP_PATTERN
+};
