@@ -10,7 +10,6 @@
     });
 
     const buttonWorkspaces = Object.freeze({
-        backButton: "portals",
         accessButton: "permissions",
         securityButton: "security",
         settingsButton: "settings",
@@ -31,24 +30,39 @@
     let identityRefresh = null;
     let openTimer = null;
 
-    function workspacesFromIdentity(identity) {
-        if (!identity || !identity.ok) return ["portals"];
-        if (identity.builtIn === true && identity.source === "local" && identity.role === "BreakGlass") {
-            return ["portals", "permissions", "security", "settings", "break-glass"];
-        }
-        const result = ["portals"];
-        if (identity.role === "Admin") result.push("permissions", "settings");
-        if (identity.role === "SecAdmin") result.push("permissions", "security", "settings");
-        return result;
+    function isAuthenticatedIdentity(identity) {
+        if (!identity || typeof identity !== "object") return false;
+        if (identity.authenticated === true || identity.ok === true) return true;
+        return Boolean(
+            (identity.id || identity.userId) &&
+            (identity.username || identity.userName || identity.displayName)
+        );
     }
 
-    function synchronizeMenu() {
-        for (const [id, workspace] of Object.entries(buttonWorkspaces)) {
-            const button = document.getElementById(id);
-            if (!button) continue;
-            const hidden = !allowed.has(workspace);
-            if (button.hidden !== hidden) button.hidden = hidden;
+    function permissionsOf(identity) {
+        return Array.isArray(identity && identity.permissions) ? identity.permissions : [];
+    }
+
+    function workspacesFromIdentity(identity) {
+        if (!isAuthenticatedIdentity(identity)) return ["portals"];
+
+        const permissions = permissionsOf(identity);
+        const unrestricted = permissions.includes("*");
+        const role = String(identity.role || "");
+        const isBreakGlass = identity.builtIn === true &&
+            identity.source === "local" &&
+            role === "BreakGlass";
+
+        if (isBreakGlass || unrestricted) {
+            return ["portals", "permissions", "security", "settings", "break-glass"];
         }
+
+        const result = ["portals"];
+        if (role === "Admin") result.push("permissions", "settings");
+        if (role === "SecAdmin") result.push("permissions", "security", "settings");
+        if (permissions.includes("access.manage")) result.push("permissions");
+        if (permissions.includes("security.manage")) result.push("security");
+        return Array.from(new Set(result));
     }
 
     function isWorkspaceOpen(workspace) {
@@ -58,6 +72,18 @@
         }
         const view = document.getElementById(viewIds[workspace]);
         return Boolean(view && !view.hidden);
+    }
+
+    function synchronizeMenu() {
+        for (const [id, workspace] of Object.entries(buttonWorkspaces)) {
+            const button = document.getElementById(id);
+            if (!button) continue;
+            const hidden = !allowed.has(workspace);
+            if (button.hidden !== hidden) button.hidden = hidden;
+        }
+
+        const backButton = document.getElementById("backButton");
+        if (backButton) backButton.hidden = isWorkspaceOpen("portals");
     }
 
     function activateCurrentWorkspace() {
@@ -103,11 +129,17 @@
                     cache: "no-store",
                     headers: { Accept: "application/json" }
                 });
-                if (!response.ok) return;
+                if (!response.ok) {
+                    allowed = new Set(["portals"]);
+                    synchronizeMenu();
+                    return;
+                }
+
                 const identity = await response.json();
                 allowed = new Set(workspacesFromIdentity(identity));
                 window.__SIRK_WORKSPACE_BOOTSTRAP = {
-                    authenticated: Boolean(identity && identity.ok),
+                    authenticated: isAuthenticatedIdentity(identity),
+                    identity,
                     workspaces: Array.from(allowed)
                 };
                 synchronizeMenu();
@@ -129,12 +161,25 @@
     function dashboardBecameVisible() {
         if (!dashboardVisible()) return;
         refreshAllowedFromSession();
+        synchronizeMenu();
         enforceCurrentWorkspace();
     }
 
     document.addEventListener("click", function (event) {
         const button = event.target && event.target.closest ? event.target.closest("button") : null;
         if (!button) return;
+
+        if (button.id === "backButton") {
+            if (button.dataset.workspaceInternalOpen === "1") return;
+            const route = routes.portals;
+            if (window.location.pathname !== route) {
+                event.preventDefault();
+                event.stopImmediatePropagation();
+                window.location.assign(route);
+            }
+            return;
+        }
+
         const workspace = buttonWorkspaces[button.id];
         if (!workspace || button.dataset.workspaceInternalOpen === "1") return;
         if (!allowed.has(workspace)) {
@@ -159,6 +204,15 @@
         if (dashboard) {
             const observer = new MutationObserver(dashboardBecameVisible);
             observer.observe(dashboard, { attributes: true, attributeFilter: ["hidden"] });
+        }
+
+        for (const id of ["portalsView", ...Object.values(viewIds)]) {
+            const view = document.getElementById(id);
+            if (!view) continue;
+            new MutationObserver(synchronizeMenu).observe(view, {
+                attributes: true,
+                attributeFilter: ["hidden"]
+            });
         }
 
         dashboardBecameVisible();
