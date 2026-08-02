@@ -14,12 +14,16 @@ RUN dotnet publish src/Sirk.Central/Sirk.Central.csproj \
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends age ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 ENV ASPNETCORE_URLS=http://+:8080 \
     DOTNET_EnableDiagnostics=0 \
-    Sirk__PortalProtocol__DataRoot=/var/lib/sirk-central
+    Sirk__PortalProtocol__DataRoot=/var/lib/sirk-central \
+    Sirk__Security__DataRoot=/var/lib/sirk-central/security
 EXPOSE 8080
 COPY --from=build /app/publish ./
-RUN mkdir -p /var/lib/sirk-central \
+RUN mkdir -p /var/lib/sirk-central/security \
     && chown -R "$APP_UID:$APP_UID" /var/lib/sirk-central
 VOLUME ["/var/lib/sirk-central"]
 HEALTHCHECK --interval=20s --timeout=7s --start-period=10s --retries=3 \
