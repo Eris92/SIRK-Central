@@ -10,7 +10,9 @@ on:
       - 'Dockerfile.dotnet10'
       - 'src/Sirk.Central/**'
       - 'tests/Sirk.Central.ProtocolTests/**'
+      - 'tests/Sirk.Central.SecurityTests/**'
       - '.github/scripts/test-dotnet10-portal-endpoints.py'
+      - '.github/scripts/test-dotnet10-breakglass-auth.py'
       - 'public/**'
       - '.github/workflows/dotnet10-rewrite.yml'
   pull_request:
@@ -21,7 +23,9 @@ on:
       - 'Dockerfile.dotnet10'
       - 'src/Sirk.Central/**'
       - 'tests/Sirk.Central.ProtocolTests/**'
+      - 'tests/Sirk.Central.SecurityTests/**'
       - '.github/scripts/test-dotnet10-portal-endpoints.py'
+      - '.github/scripts/test-dotnet10-breakglass-auth.py'
       - 'public/**'
       - '.github/workflows/dotnet10-rewrite.yml'
 
@@ -41,16 +45,25 @@ jobs:
       - name: SDK contract
         run: |
           dotnet --info
-          grep -R --line-number --include='*.csproj' --include='*.props' --include='global.json' -E 'net8\.0|net9\.0' src/Sirk.Central tests/Sirk.Central.ProtocolTests Directory.Build.props global.json && exit 1 || true
+          grep -R --line-number --include='*.csproj' --include='*.props' --include='global.json' -E 'net8\.0|net9\.0' src/Sirk.Central tests/Sirk.Central.ProtocolTests tests/Sirk.Central.SecurityTests Directory.Build.props global.json && exit 1 || true
 
-      - name: Restore
+      - name: Restore protocol tests
         run: dotnet restore tests/Sirk.Central.ProtocolTests/Sirk.Central.ProtocolTests.csproj
 
-      - name: Build
+      - name: Restore security tests
+        run: dotnet restore tests/Sirk.Central.SecurityTests/Sirk.Central.SecurityTests.csproj
+
+      - name: Build protocol tests
         run: dotnet build tests/Sirk.Central.ProtocolTests/Sirk.Central.ProtocolTests.csproj --configuration Release --no-restore
+
+      - name: Build security tests
+        run: dotnet build tests/Sirk.Central.SecurityTests/Sirk.Central.SecurityTests.csproj --configuration Release --no-restore
 
       - name: Portal protocol contracts
         run: dotnet run --project tests/Sirk.Central.ProtocolTests/Sirk.Central.ProtocolTests.csproj --configuration Release --no-build
+
+      - name: Security contracts
+        run: dotnet run --project tests/Sirk.Central.SecurityTests/Sirk.Central.SecurityTests.csproj --configuration Release --no-build
 
       - name: Publish
         run: dotnet publish src/Sirk.Central/Sirk.Central.csproj --configuration Release --no-build --output artifacts/central
@@ -79,6 +92,33 @@ jobs:
           trap cleanup EXIT
           if ! python3 .github/scripts/test-dotnet10-portal-endpoints.py; then
             cat "$RUNNER_TEMP/sirk-central-endpoint-smoke.log"
+            exit 1
+          fi
+          cleanup
+          trap - EXIT
+
+      - name: Break Glass HTTP auth smoke
+        env:
+          ASPNETCORE_ENVIRONMENT: Development
+          ASPNETCORE_URLS: http://127.0.0.1:18081
+          Sirk__Security__DataRoot: ${{ runner.temp }}/sirk-central-breakglass-smoke
+          Sirk__Security__BreakGlassAccessCode: ci-breakglass-access
+          Sirk__Security__BreakGlassInitialPassword: CI-BreakGlass-Password-2026!
+          SIRK_TEST_BASE_URL: http://127.0.0.1:18081
+          SIRK_TEST_BREAKGLASS_ACCESS_CODE: ci-breakglass-access
+          SIRK_TEST_BREAKGLASS_PASSWORD: CI-BreakGlass-Password-2026!
+        run: |
+          rm -rf "$Sirk__Security__DataRoot"
+          mkdir -p "$Sirk__Security__DataRoot"
+          dotnet artifacts/central/Sirk.Central.dll > "$RUNNER_TEMP/sirk-central-breakglass-smoke.log" 2>&1 &
+          central_pid=$!
+          cleanup() {
+            kill "$central_pid" 2>/dev/null || true
+            wait "$central_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          if ! python3 .github/scripts/test-dotnet10-breakglass-auth.py; then
+            cat "$RUNNER_TEMP/sirk-central-breakglass-smoke.log"
             exit 1
           fi
           cleanup
