@@ -49,7 +49,8 @@ internal sealed record PortalCredentialRecord(
     string Name,
     PortalTokenHash TokenHash,
     DateTimeOffset CreatedAtUtc,
-    DateTimeOffset UpdatedAtUtc);
+    DateTimeOffset UpdatedAtUtc,
+    DateTimeOffset TokenRotatedAtUtc);
 
 internal sealed record PortalTokenHash(
     string Algorithm,
@@ -58,6 +59,17 @@ internal sealed record PortalTokenHash(
     string HashBase64);
 
 internal sealed record PortalIdentity(string Id, string Name);
+
+internal sealed record PortalSummary(
+    string Id,
+    string Name,
+    DateTimeOffset CreatedAtUtc,
+    DateTimeOffset UpdatedAtUtc,
+    DateTimeOffset TokenRotatedAtUtc);
+
+internal sealed record PortalCredentialIssue(
+    PortalSummary Portal,
+    string Token);
 
 internal sealed record PortalErrorResponse(
     bool Ok,
