@@ -1,0 +1,52 @@
+name: SIRK Central .NET 10 Rewrite
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ rewrite/dotnet10 ]
+    paths:
+      - 'global.json'
+      - 'Directory.Build.props'
+      - 'Dockerfile.dotnet10'
+      - 'src/Sirk.Central/**'
+      - 'public/**'
+      - '.github/workflows/dotnet10-rewrite.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'global.json'
+      - 'Directory.Build.props'
+      - 'Dockerfile.dotnet10'
+      - 'src/Sirk.Central/**'
+      - 'public/**'
+      - '.github/workflows/dotnet10-rewrite.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: SDK contract
+        run: |
+          dotnet --info
+          grep -R --line-number --include='*.csproj' --include='*.props' --include='global.json' -E 'net8\.0|net9\.0' src/Sirk.Central Directory.Build.props global.json && exit 1 || true
+
+      - name: Restore
+        run: dotnet restore src/Sirk.Central/Sirk.Central.csproj
+
+      - name: Build
+        run: dotnet build src/Sirk.Central/Sirk.Central.csproj --configuration Release --no-restore
+
+      - name: Publish
+        run: dotnet publish src/Sirk.Central/Sirk.Central.csproj --configuration Release --no-build --output artifacts/central
+
+      - name: Container build
+        run: docker build --file Dockerfile.dotnet10 --tag sirk-central:dotnet10 .
