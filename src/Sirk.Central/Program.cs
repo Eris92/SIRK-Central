@@ -2,9 +2,12 @@ using System.Reflection;
 using Microsoft.AspNetCore.HttpOverrides;
 using Sirk.Central.Portals;
 
-var builder = WebApplication.CreateBuilder(args);
+var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+{
+    Args = args,
+    WebRootPath = "public"
+});
 
-builder.WebHost.UseWebRoot("public");
 builder.WebHost.ConfigureKestrel(options => options.AddServerHeader = false);
 
 builder.Services.AddProblemDetails();
