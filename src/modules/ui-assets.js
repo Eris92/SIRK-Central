@@ -1,12 +1,9 @@
 "use strict";
 
 const { securityHeaders, json } = require("../http/transport");
-
 const fs = require("node:fs");
 const path = require("node:path");
-
 const { VERSION } = require("../version");
-
 
 function registerUiAssets(app, config) {
     const publicPath = name => path.join(__dirname, "..", "..", "public", name);
@@ -17,7 +14,7 @@ function registerUiAssets(app, config) {
         publicPath("operations-ui.js"), publicPath("operations-actions.js"), publicPath("encrypted-backup-ui.js"), publicPath("central-ux.js"), publicPath("operations-bootstrap.js"),
         publicPath("update-status-resilience.js"), publicPath("appliance-system-ui.js"), publicPath("audit-ui.js"), publicPath("dashboard-css-loader.js"), publicPath("dashboard-ui.js"),
         publicPath("admin-tools-css-loader.js"), publicPath("admin-tools-ui.js"), publicPath("security-sessions-ui.js"),
-        publicPath("approval-center-ui.js"), publicPath("portal-operations-ui.js"), publicPath("portal-monitoring-ui.js"), publicPath("portal-bootstrap-ui.js"), publicPath("tickets-ui.js"),
+        publicPath("approval-center-ui.js"), publicPath("portal-operations-ui.js"), publicPath("portal-monitoring-ui.js"), publicPath("portal-bootstrap-ui.js"), publicPath("portal-telemetry-ui.js"), publicPath("tickets-ui.js"),
         publicPath("backup-age-ui.js")
     ];
     const stylePaths = [publicPath("dashboard-ui.css"), publicPath("admin-tools-ui.css"), publicPath("portal-monitoring-ui.css"), publicPath("tickets-ui.css")];
@@ -37,8 +34,17 @@ function registerUiAssets(app, config) {
                 return res.end(req.method === "HEAD" ? undefined : data);
             }
             if (req.method === "GET" && url.pathname === "/readyz") {
-                const checks = { passkeyStore: Boolean(app.passkeys && app.passkeys.filePath), webauthnChallenges: Boolean(app.webauthnChallenges && app.webauthnChallenges.filePath), loginTransactions: Boolean(app.loginTransactions && app.loginTransactions.filePath), passkeyUi: [bridgePath, ...scriptPaths].every(fs.existsSync), uiStyles: stylePaths.every(fs.existsSync), attestationBridge: fs.existsSync(bridgePath), attestationParser: true };
-                const ok = Object.values(checks).every(Boolean); return json(res, ok ? 200 : 503, { ok, version: VERSION, checks });
+                const checks = {
+                    passkeyStore: Boolean(app.passkeys && app.passkeys.filePath),
+                    webauthnChallenges: Boolean(app.webauthnChallenges && app.webauthnChallenges.filePath),
+                    loginTransactions: Boolean(app.loginTransactions && app.loginTransactions.filePath),
+                    passkeyUi: [bridgePath, ...scriptPaths].every(fs.existsSync),
+                    uiStyles: stylePaths.every(fs.existsSync),
+                    attestationBridge: fs.existsSync(bridgePath),
+                    attestationParser: true
+                };
+                const ok = Object.values(checks).every(Boolean);
+                return json(res, ok ? 200 : 503, { ok, version: VERSION, checks });
             }
             return false;
         } catch (error) {
@@ -49,7 +55,7 @@ function registerUiAssets(app, config) {
     };
     app.router.prepend(handler);
     Object.assign(app, { version: VERSION });
-    return app
+    return app;
 }
 
 module.exports = { registerUiAssets, VERSION };
