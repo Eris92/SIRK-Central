@@ -27,7 +27,8 @@ internal sealed record AuthenticatedSessionResponse(
 
 internal static class AuthenticationEndpoints
 {
-    public static IEndpointRouteBuilder MapSirkAuthentication(this IEndpointRouteBuilder endpoints)
+    public static IEndpointRouteBuilder MapSirkAuthentication(
+        this IEndpointRouteBuilder endpoints)
     {
         endpoints.MapPost("/api/v1/break-glass/{accessCode}/login", LoginAsync)
             .AllowAnonymous()
@@ -43,57 +44,10 @@ internal static class AuthenticationEndpoints
         endpoints.MapPost("/api/v1/auth/logout", LogoutAsync)
             .RequireAuthorization();
 
-        // Compatibility routes consumed by the current Central UI. They use
-        // the same password-first and MFA-gated implementation as the v1 API.
-        endpoints.MapGet("/api/access", ValidateAccess)
-            .AllowAnonymous()
-            .RequireRateLimiting(SecurityEndpointNames.BreakGlassLoginRateLimit);
-
-        endpoints.MapPost("/api/login", CompatibilityLoginAsync)
-            .AllowAnonymous()
-            .RequireRateLimiting(SecurityEndpointNames.BreakGlassLoginRateLimit)
-            .DisableAntiforgery();
-
-        endpoints.MapGet("/api/session", CompatibilitySession)
-            .RequireAuthorization();
-
-        endpoints.MapPost("/api/logout", LogoutAsync)
-            .RequireAuthorization();
-
         return endpoints;
     }
 
-    private static IResult ValidateAccess(HttpContext context, LocalIdentityStore identityStore)
-    {
-        context.Response.Headers.CacheControl = "no-store";
-        var accessCode = ReadBearerToken(context);
-        if (string.IsNullOrWhiteSpace(accessCode) || !identityStore.VerifyAccessCode(accessCode))
-            return Results.Json(new { ok = false, error = "Access link is invalid or expired." }, statusCode: 404);
-        return Results.Ok(new { ok = true, localLoginEnabled = true });
-    }
-
-    private static Task<IResult> CompatibilityLoginAsync(
-        BreakGlassLoginRequest request,
-        HttpContext context,
-        LocalIdentityStore identityStore,
-        WebAuthnCredentialStore webAuthnCredentials,
-        BreakGlassRecoveryCodeStore recoveryCodes,
-        BreakGlassLoginTransactionStore transactions,
-        BreakGlassSessionService sessions,
-        SecurityAuditLog auditLog) =>
-        LoginCoreAsync(
-            ReadBearerToken(context),
-            request,
-            context,
-            identityStore,
-            webAuthnCredentials,
-            recoveryCodes,
-            transactions,
-            sessions,
-            auditLog,
-            compatibilityResponse: true);
-
-    private static Task<IResult> LoginAsync(
+    private static async Task<IResult> LoginAsync(
         string accessCode,
         BreakGlassLoginRequest request,
         HttpContext context,
@@ -102,30 +56,7 @@ internal static class AuthenticationEndpoints
         BreakGlassRecoveryCodeStore recoveryCodes,
         BreakGlassLoginTransactionStore transactions,
         BreakGlassSessionService sessions,
-        SecurityAuditLog auditLog) =>
-        LoginCoreAsync(
-            accessCode,
-            request,
-            context,
-            identityStore,
-            webAuthnCredentials,
-            recoveryCodes,
-            transactions,
-            sessions,
-            auditLog,
-            compatibilityResponse: false);
-
-    private static async Task<IResult> LoginCoreAsync(
-        string? accessCode,
-        BreakGlassLoginRequest request,
-        HttpContext context,
-        LocalIdentityStore identityStore,
-        WebAuthnCredentialStore webAuthnCredentials,
-        BreakGlassRecoveryCodeStore recoveryCodes,
-        BreakGlassLoginTransactionStore transactions,
-        BreakGlassSessionService sessions,
-        SecurityAuditLog auditLog,
-        bool compatibilityResponse)
+        SecurityAuditLog auditLog)
     {
         context.Response.Headers.CacheControl = "no-store";
         var remoteAddress = RemoteAddress(context);
@@ -139,7 +70,8 @@ internal static class AuthenticationEndpoints
                 request.Password ?? string.Empty,
                 accessCode ?? string.Empty);
         }
-        catch (Exception exception) when (exception is CryptographicException or InvalidDataException)
+        catch (Exception exception) when (
+            exception is CryptographicException or InvalidDataException)
         {
             auditLog.Write(new SecurityAuditEvent(
                 "anonymous",
@@ -150,8 +82,13 @@ internal static class AuthenticationEndpoints
                 false,
                 remoteAddress,
                 context.TraceIdentifier,
-                new Dictionary<string, string> { ["reason"] = "identity-store-error" }));
-            return Results.Problem(statusCode: 503, title: "Authentication service unavailable");
+                new Dictionary<string, string>
+                {
+                    ["reason"] = "identity-store-error"
+                }));
+            return Results.Problem(
+                statusCode: StatusCodes.Status503ServiceUnavailable,
+                title: "Authentication service unavailable");
         }
 
         if (identity is null)
@@ -165,16 +102,26 @@ internal static class AuthenticationEndpoints
                 false,
                 remoteAddress,
                 context.TraceIdentifier,
-                new Dictionary<string, string> { ["reason"] = "invalid-credentials" }));
+                new Dictionary<string, string>
+                {
+                    ["reason"] = "invalid-credentials"
+                }));
             await ApplyFailureDelayAsync(context.RequestAborted);
             return Results.Json(
-                new { ok = false, code = "AUTHENTICATION_FAILED", error = "Authentication failed." },
-                statusCode: 401);
+                new
+                {
+                    ok = false,
+                    code = "AUTHENTICATION_FAILED",
+                    error = "Authentication failed."
+                },
+                statusCode: StatusCodes.Status401Unauthorized);
         }
 
         var methods = new List<string>(2);
-        if (webAuthnCredentials.ListByUser(identity.Id).Count > 0) methods.Add("passkey");
-        if (recoveryCodes.IsConfigured(identity.Id)) methods.Add("recovery-code");
+        if (webAuthnCredentials.ListByUser(identity.Id).Count > 0)
+            methods.Add("passkey");
+        if (recoveryCodes.IsConfigured(identity.Id))
+            methods.Add("recovery-code");
 
         if (methods.Count > 0)
         {
@@ -194,16 +141,22 @@ internal static class AuthenticationEndpoints
                     ["methods"] = string.Join(',', methods),
                     ["expiresAtUtc"] = transaction.ExpiresAtUtc.ToString("O")
                 }));
-            return Results.Json(new
-            {
-                ok = true,
-                authenticated = false,
-                mfaRequired = true,
-                methods,
-                preferredMethod = methods.Contains("passkey", StringComparer.Ordinal) ? "passkey" : methods[0],
-                transactionToken = transaction.Token,
-                expiresAtUtc = transaction.ExpiresAtUtc
-            }, statusCode: 202);
+            return Results.Json(
+                new
+                {
+                    ok = true,
+                    authenticated = false,
+                    mfaRequired = true,
+                    methods,
+                    preferredMethod = methods.Contains(
+                        "passkey",
+                        StringComparer.Ordinal)
+                        ? "passkey"
+                        : methods[0],
+                    transactionToken = transaction.Token,
+                    expiresAtUtc = transaction.ExpiresAtUtc
+                },
+                statusCode: StatusCodes.Status202Accepted);
         }
 
         var expiresAt = await sessions.SignInAsync(context, identity, "pwd");
@@ -224,29 +177,20 @@ internal static class AuthenticationEndpoints
                 ["mfaEnrollmentRecommended"] = "true"
             }));
 
-        if (compatibilityResponse)
-            return Results.Ok(BreakGlassSessionService.CompatibilityIdentity(identity, enrollmentRecommended: true));
-
         return Results.Ok(new
         {
             ok = true,
             authenticated = true,
             mfaRequired = false,
             mfaEnrollmentRecommended = true,
-            user = new { id = identity.Id, name = identity.UserName, roles = identity.Roles },
+            user = new
+            {
+                id = identity.Id,
+                name = identity.UserName,
+                roles = identity.Roles
+            },
             expiresAtUtc = expiresAt
         });
-    }
-
-    private static IResult CompatibilitySession(HttpContext context)
-    {
-        context.Response.Headers.CacheControl = "no-store";
-        if (context.User.Identity?.IsAuthenticated != true) return Results.Unauthorized();
-        var identity = new LocalIdentity(
-            context.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? string.Empty,
-            context.User.Identity?.Name ?? string.Empty,
-            context.User.FindAll(ClaimTypes.Role).Select(value => value.Value).ToArray());
-        return Results.Ok(BreakGlassSessionService.CompatibilityIdentity(identity, enrollmentRecommended: false));
     }
 
     private static IResult Session(HttpContext context)
@@ -273,13 +217,23 @@ internal static class AuthenticationEndpoints
             expiresAt));
     }
 
-    private static IResult IssueCsrfToken(HttpContext context, IAntiforgery antiforgery)
+    private static IResult IssueCsrfToken(
+        HttpContext context,
+        IAntiforgery antiforgery)
     {
         context.Response.Headers.CacheControl = "no-store";
         var tokens = antiforgery.GetAndStoreTokens(context);
         if (string.IsNullOrWhiteSpace(tokens.RequestToken))
-            return Results.Problem(statusCode: 503, title: "CSRF token could not be issued");
-        return Results.Ok(new { headerName = tokens.HeaderName, requestToken = tokens.RequestToken });
+        {
+            return Results.Problem(
+                statusCode: StatusCodes.Status503ServiceUnavailable,
+                title: "CSRF token could not be issued");
+        }
+        return Results.Ok(new
+        {
+            headerName = tokens.HeaderName,
+            requestToken = tokens.RequestToken
+        });
     }
 
     private static async Task<IResult> LogoutAsync(
@@ -295,11 +249,17 @@ internal static class AuthenticationEndpoints
         catch (AntiforgeryValidationException)
         {
             return Results.Json(
-                new { ok = false, code = "CSRF_VALIDATION_FAILED", error = "CSRF validation failed." },
-                statusCode: 400);
+                new
+                {
+                    ok = false,
+                    code = "CSRF_VALIDATION_FAILED",
+                    error = "CSRF validation failed."
+                },
+                statusCode: StatusCodes.Status400BadRequest);
         }
 
-        var actorId = context.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? "unknown";
+        var actorId = context.User.FindFirstValue(ClaimTypes.NameIdentifier)
+                      ?? "unknown";
         var actorName = context.User.Identity?.Name ?? "unknown";
         auditLog.Write(new SecurityAuditEvent(
             actorId,
@@ -325,7 +285,8 @@ internal static class AuthenticationEndpoints
 
     internal static string RemoteAddress(HttpContext context)
     {
-        var address = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        var address = context.Connection.RemoteIpAddress?.ToString()
+                      ?? "unknown";
         return address[..Math.Min(address.Length, 128)];
     }
 
@@ -340,18 +301,24 @@ internal static class AuthenticationEndpoints
                 not '.' and
                 not '_' and
                 not '-')
+            {
                 return "unknown";
+            }
         }
         return normalized;
     }
 
-    private static async Task ApplyFailureDelayAsync(CancellationToken cancellationToken)
+    private static async Task ApplyFailureDelayAsync(
+        CancellationToken cancellationToken)
     {
         try
         {
-            await Task.Delay(Random.Shared.Next(150, 351), cancellationToken);
+            await Task.Delay(
+                Random.Shared.Next(150, 351),
+                cancellationToken);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (
+            cancellationToken.IsCancellationRequested)
         {
         }
     }

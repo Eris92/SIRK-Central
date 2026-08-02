@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>SIRK Central</title>
+  <link rel="stylesheet" href="/workspace.css">
+</head>
+<body>
+  <section id="loginPage" class="login-page">
+    <div class="login-card">
+      <div class="row">
+        <h1>SIRK Central</h1>
+        <button type="button" data-lang="pl">PL</button>
+        <button type="button" data-lang="en">EN</button>
+      </div>
+      <p id="loginIntro">Centralne zarządzanie infrastrukturą.</p>
+      <button id="entraLogin" type="button" class="primary">Zaloguj przez Microsoft Entra</button>
+      <div class="login-separator">Break-Glass</div>
+      <form id="localLogin">
+        <label>Login<input id="loginUser" autocomplete="username" required></label>
+        <label>Hasło<input id="loginPassword" type="password" autocomplete="current-password" required></label>
+        <button class="primary">Zaloguj lokalnie</button>
+      </form>
+      <section id="mfaPanel" class="card" hidden>
+        <h2>Dodatkowe uwierzytelnienie</h2>
+        <p id="mfaInfo" class="status"></p>
+        <label id="recoveryCodeLabel" hidden>Kod odzyskiwania<input id="recoveryCode" autocomplete="one-time-code"></label>
+        <div class="actions">
+          <button id="passkeyComplete" type="button" hidden>Użyj Passkey / YubiKey</button>
+          <button id="recoveryComplete" type="button" hidden>Użyj kodu odzyskiwania</button>
+        </div>
+      </section>
+      <p id="loginStatus" class="status"></p>
+    </div>
+  </section>
+
+  <section id="workspace" class="shell" hidden>
+    <header class="topbar">
+      <div class="brand">SIRK Central</div>
+      <span id="identity" class="identity"></span>
+      <button type="button" data-lang="pl">PL</button>
+      <button type="button" data-lang="en">EN</button>
+      <button id="logout" type="button">Wyloguj</button>
+    </header>
+    <div class="layout">
+      <nav class="sidebar" aria-label="Nawigacja">
+        <button type="button" data-view="overview" class="active">Overview</button>
+        <button type="button" data-view="portals">Portale</button>
+        <button type="button" data-view="identity-access">Identity &amp; Access</button>
+        <button type="button" data-view="entra">Microsoft Entra</button>
+        <button type="button" data-view="approvals">Approvals</button>
+        <button type="button" data-view="tickets">Tickets</button>
+        <button type="button" data-view="organizations">Organizations</button>
+        <button type="button" data-view="backup">Backup</button>
+        <button type="button" data-view="operations">Operations</button>
+        <button type="button" data-view="api">API Console</button>
+      </nav>
+
+      <main class="content">
+        <section class="view" data-view-panel="overview">
+          <h1>Overview</h1>
+          <div class="grid">
+            <article class="card"><h2>System</h2><pre id="systemOutput" class="output"></pre><button data-load="system">Odśwież</button></article>
+            <article class="card"><h2>Session</h2><pre id="sessionOutput" class="output"></pre><button data-load="session">Odśwież</button></article>
+            <article class="card"><h2>Entra status</h2><pre id="entraPublicOutput" class="output"></pre><button data-load="entra-status">Odśwież</button></article>
+          </div>
+        </section>
+
+        <section class="view" data-view-panel="portals" hidden>
+          <h1>Portale</h1>
+          <article class="card">
+            <div class="actions">
+              <button id="portalsRefresh">Odśwież</button>
+              <button id="portalConnect">Połącz</button>
+              <button id="portalRotate">Rotuj token</button>
+              <button id="portalDelete" class="danger">Usuń</button>
+            </div>
+            <label>Wybrany Portal<select id="portalSelect"></select></label>
+            <div id="portalTable" class="table-wrap"></div>
+          </article>
+          <article class="card">
+            <h2>Dodaj Portal</h2>
+            <form id="portalCreate" class="grid">
+              <label>ID<input id="portalId" required pattern="[a-z0-9-]{3,63}"></label>
+              <label>Nazwa<input id="portalName" required></label>
+              <button class="primary">Utwórz</button>
+            </form>
+            <pre id="portalCredential" class="output"></pre>
+          </article>
+        </section>
+
+        <section class="view" data-view-panel="identity-access" hidden>
+          <h1>Identity &amp; Access</h1>
+          <article class="card">
+            <div class="actions"><button id="identityRefresh">Odśwież snapshot</button></div>
+            <pre id="identityOutput" class="output"></pre>
+          </article>
+          <article class="card">
+            <h2>Mutation</h2>
+            <label>Action<select id="identityAction">
+              <option>local-create</option><option>entra-sync</option><option>role-assign</option>
+              <option>identity-enable</option><option>identity-disable</option>
+              <option>team-save</option><option>team-delete</option>
+              <option>portal-policy-save</option><option>simulate</option>
+            </select></label>
+            <label>Payload JSON<textarea id="identityPayload">{}</textarea></label>
+            <button id="identityMutate" class="primary">Wykonaj</button>
+            <pre id="identityMutationOutput" class="output"></pre>
+          </article>
+        </section>
+
+        <section class="view" data-view-panel="entra" hidden>
+          <h1>Microsoft Entra</h1>
+          <article class="card">
+            <div class="actions"><button id="entraRefresh">Odśwież</button><button id="entraSave" class="primary">Zapisz</button><button id="entraTest">Testuj</button></div>
+            <label>Konfiguracja JSON<textarea id="entraConfig">{}</textarea></label>
+            <pre id="entraOutput" class="output"></pre>
+          </article>
+        </section>
+
+        <section class="view" data-view-panel="approvals" hidden>
+          <h1>Approvals</h1>
+          <article class="card module-console" data-module="approvals"></article>
+        </section>
+
+        <section class="view" data-view-panel="tickets" hidden>
+          <h1>Tickets</h1>
+          <article class="card module-console" data-module="tickets"></article>
+        </section>
+
+        <section class="view" data-view-panel="organizations" hidden>
+          <h1>Organizations</h1>
+          <article class="card module-console" data-module="organizations"></article>
+        </section>
+
+        <section class="view" data-view-panel="backup" hidden>
+          <h1>Backup</h1>
+          <article class="card module-console" data-module="backup"></article>
+        </section>
+
+        <section class="view" data-view-panel="operations" hidden>
+          <h1>Operations</h1>
+          <article class="card module-console" data-module="operations"></article>
+        </section>
+
+        <section class="view" data-view-panel="api" hidden>
+          <h1>Canonical API Console</h1>
+          <article class="card">
+            <div class="row">
+              <select id="apiMethod"><option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option></select>
+              <input id="apiPath" value="/api/v1/system/version" aria-label="API path">
+              <button id="apiRun" class="primary">Wykonaj</button>
+            </div>
+            <label>Body JSON<textarea id="apiBody">{}</textarea></label>
+            <pre id="apiOutput" class="output"></pre>
+          </article>
+        </section>
+      </main>
+    </div>
+  </section>
+
+  <script src="/workspace.js" defer></script>
+</body>
+</html>

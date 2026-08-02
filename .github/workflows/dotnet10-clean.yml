@@ -1,0 +1,64 @@
+name: SIRK Central .NET 10 Clean
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - rewrite/dotnet10-clean
+  pull_request:
+    branches:
+      - rewrite/dotnet10
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: SDK contract
+        run: |
+          dotnet --info
+          python3 - <<'PY'
+          from pathlib import Path
+          roots = [Path('src/Sirk.Central'), Path('tests'), Path('Directory.Build.props'), Path('global.json')]
+          forbidden = ('net8.0', 'net9.0')
+          failures = []
+          for root in roots:
+              paths = [root] if root.is_file() else list(root.rglob('*'))
+              for path in paths:
+                  if path.is_file() and path.suffix in {'.csproj', '.props', '.json'}:
+                      text = path.read_text(encoding='utf-8', errors='ignore')
+                      if any(value in text for value in forbidden):
+                          failures.append(str(path))
+          if failures:
+              raise SystemExit('Unsupported target framework reference: ' + ', '.join(failures))
+          PY
+
+      - name: Restore
+        run: dotnet restore src/Sirk.Central/Sirk.Central.csproj
+
+      - name: Build
+        run: dotnet build src/Sirk.Central/Sirk.Central.csproj --configuration Release --no-restore
+
+      - name: Test contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          for project in tests/*/*.csproj; do
+            echo "Running $project"
+            dotnet run --project "$project" --configuration Release
+          done
+
+      - name: Publish Linux x64
+        run: dotnet publish src/Sirk.Central/Sirk.Central.csproj --configuration Release --runtime linux-x64 --self-contained false --output artifacts/linux-x64
+
+      - name: Container build
+        run: docker build --file Dockerfile.dotnet10 --tag sirk-central:dotnet10-clean .
