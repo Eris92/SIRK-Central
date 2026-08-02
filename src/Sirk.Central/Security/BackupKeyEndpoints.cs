@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Antiforgery;
+using Sirk.Central.Backup;
 
 namespace Sirk.Central.Security;
 
@@ -24,6 +25,7 @@ internal static class BackupKeyEndpoints
         group.MapPost("/unlock", UnlockAsync);
         group.MapPost("/rewrap", RewrapAsync);
         group.MapPost("/export", ExportAsync);
+        endpoints.MapSirkBackup();
         return endpoints;
     }
 
