@@ -197,7 +197,7 @@ if (securityOptions.Enabled)
     app.MapTickets();
     app.MapTicketCommands();
     app.MapOrganizations();
-    app.MapIdentityAccess();
+    app.MapIdentityAccessV2();
 }
 app.MapFallback(() => Results.Problem(statusCode: 404, title: "Resource not found"));
 app.Lifetime.ApplicationStarted.Register(runtimeState.MarkReady);
