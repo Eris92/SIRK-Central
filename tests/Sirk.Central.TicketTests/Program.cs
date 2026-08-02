@@ -13,7 +13,8 @@ try
         .AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["Sirk:Tickets:MaxProjections"] = "100",
-            ["Sirk:Tickets:EventIdRetention"] = "100"
+            ["Sirk:Tickets:EventIdRetention"] = "100",
+            ["Sirk:Tickets:MaxCommands"] = "100"
         })
         .Build();
     var store = new TicketStore(Options.Create(options), configuration);
@@ -61,6 +62,46 @@ try
         Input("ticket-001", "Initial issue", timestamp.AddMinutes(1), "in_progress", "critical")));
     Assert(replayAfterRestart.Duplicate, "Event replay guard did not survive restart.");
 
+    var commands = new TicketCommandStore(Options.Create(options), configuration);
+    var command = commands.Create(
+        "portal-01",
+        "ticket-001",
+        new TicketCommandCreateRequest("ticket.status.change", "ticket-command-key-0001",
+            new Dictionary<string, System.Text.Json.JsonElement>()),
+        "operator-1");
+    Assert(command.State == "pending", "New ticket command must be pending.");
+    var idempotent = commands.Create(
+        "portal-01",
+        "ticket-001",
+        new TicketCommandCreateRequest("ticket.status.change", "ticket-command-key-0001",
+            new Dictionary<string, System.Text.Json.JsonElement>()),
+        "operator-1");
+    Assert(idempotent.Id == command.Id, "Ticket command idempotency failed.");
+    Assert(commands.Poll("portal-01", 10).Single().Id == command.Id,
+        "Portal polling did not return pending command.");
+    var acknowledged = commands.Acknowledge(
+        "portal-01",
+        new TicketCommandAckRequest(command.Id, "completed", null, null));
+    Assert(acknowledged.State == "completed" && acknowledged.AcknowledgedAtUtc is not null,
+        "Ticket command acknowledgement failed.");
+    Assert(commands.Poll("portal-01", 10).Count == 0,
+        "Acknowledged command remained in pending polling queue.");
+    var replayedAck = commands.Acknowledge(
+        "portal-01",
+        new TicketCommandAckRequest(command.Id, "completed", null, null));
+    Assert(replayedAck.State == "completed", "Idempotent command acknowledgement failed.");
+    AssertThrows<InvalidOperationException>(() => commands.Acknowledge(
+        "portal-01",
+        new TicketCommandAckRequest(command.Id, "failed", "conflict", null)),
+        "Conflicting command acknowledgement must be rejected.");
+
+    var commandPath = Path.Combine(root, "ticket-commands.net10.json");
+    Assert(File.Exists(commandPath), "Ticket command state was not persisted.");
+    AssertProtectedFile(commandPath);
+    var reloadedCommands = new TicketCommandStore(Options.Create(options), configuration);
+    Assert(reloadedCommands.List("portal-01", "ticket-001", "completed", 10).Single().Id == command.Id,
+        "Ticket command did not survive restart.");
+
     AssertThrows<InvalidDataException>(() => store.ApplyEvent("portal-01", new TicketEventRequest(
         "event-005", "unsupported.event", timestamp.AddMinutes(2), ticket)),
         "Unsupported event type must be rejected.");
@@ -69,7 +110,7 @@ try
         Input("ticket-001", "Invalid status", timestamp.AddMinutes(2), "invalid", "normal"))),
         "Unsupported ticket status must be rejected.");
 
-    Console.WriteLine("SIRK Central ticket projection, replay and conflict contracts: OK");
+    Console.WriteLine("SIRK Central ticket projection, replay, command and acknowledgement contracts: OK");
 }
 finally
 {
@@ -95,14 +136,8 @@ static void AssertProtectedFile(string path)
 static void AssertThrows<TException>(Action action, string message)
     where TException : Exception
 {
-    try
-    {
-        action();
-    }
-    catch (TException)
-    {
-        return;
-    }
+    try { action(); }
+    catch (TException) { return; }
     throw new InvalidOperationException(message);
 }
 
