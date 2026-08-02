@@ -42,14 +42,20 @@ def request_json(opener, method: str, path: str, body=None, headers=None):
 
 def wait_ready(opener) -> None:
     deadline = time.monotonic() + 30
+    last_error = None
     last_status = None
     while time.monotonic() < deadline:
-        status, _ = request_json(opener, "GET", "/readyz")
-        last_status = status
-        if status == 200:
-            return
+        try:
+            status, _ = request_json(opener, "GET", "/readyz")
+            last_status = status
+            if status == 200:
+                return
+        except urllib.error.URLError as error:
+            last_error = error
         time.sleep(0.25)
-    raise RuntimeError(f"Central did not become ready; last HTTP status: {last_status}")
+    raise RuntimeError(
+        f"Central did not become ready; last HTTP status: {last_status}; last error: {last_error}"
+    )
 
 
 def assert_mode_600(path: Path) -> None:
