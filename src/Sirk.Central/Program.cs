@@ -38,6 +38,7 @@ builder.Services.Configure<SecurityOptions>(
     builder.Configuration.GetSection(SecurityOptions.SectionName));
 builder.Services.AddSingleton<LocalIdentityStore>();
 builder.Services.AddSingleton<SecurityAuditLog>();
+builder.Services.AddSingleton<BackupKeyStore>();
 
 var dataProtection = builder.Services
     .AddDataProtection()
@@ -188,6 +189,7 @@ _ = app.Services.GetRequiredService<FilePortalRegistry>();
 if (securityOptions.Enabled)
 {
     _ = app.Services.GetRequiredService<LocalIdentityStore>();
+    _ = app.Services.GetRequiredService<BackupKeyStore>();
     var auditLog = app.Services.GetRequiredService<SecurityAuditLog>();
     _ = auditLog.VerifyIntegrity();
 }
@@ -258,6 +260,7 @@ app.MapPortalProtocol();
 if (securityOptions.Enabled)
 {
     app.MapSirkAuthentication();
+    app.MapBackupKeyLifecycle();
 }
 
 app.MapFallback(() => Results.Problem(
