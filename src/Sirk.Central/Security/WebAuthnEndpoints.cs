@@ -167,7 +167,7 @@ internal static class WebAuthnEndpoints
                 StoredSignatureCounter = credential.SignatureCounter,
                 IsUserHandleOwnerOfCredentialIdCallback = owner
             }, context.RequestAborted);
-            store.UpdateCounter(result.CredentialId, result.Counter, result.IsBackedUp);
+            store.UpdateCounter(result.CredentialId, result.SignCount, result.IsBackedUp);
             var expiresAt = DateTimeOffset.UtcNow.AddMinutes(securityOptions.Value.SessionMinutes);
             var claims = new List<Claim>
             {
