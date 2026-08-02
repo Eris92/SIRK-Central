@@ -10,13 +10,8 @@ const RECIPIENT_PATTERN = /^age1[0-9a-z]{58}$/;
 const IDENTITY_PATTERN = /(?:^|\n)AGE-SECRET-KEY-1[0-9A-Z]+(?:\n|$)/;
 const KDF = Object.freeze({ name: "scrypt", N: 32768, r: 8, p: 1, keyLength: 32 });
 
-function validRecipient(value) {
-    return RECIPIENT_PATTERN.test(String(value || ""));
-}
-
-function validIdentity(value) {
-    return IDENTITY_PATTERN.test(String(value || "").trim() + "\n");
-}
+function validRecipient(value) { return RECIPIENT_PATTERN.test(String(value || "")); }
+function validIdentity(value) { return IDENTITY_PATTERN.test(String(value || "").trim() + "\n"); }
 
 function atomicJson(filePath, value) {
     fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
@@ -31,10 +26,8 @@ function atomicJson(filePath, value) {
         fs.renameSync(temporary, filePath);
         fs.chmodSync(filePath, 0o600);
     } catch (error) {
-        if (descriptor !== undefined) {
-            try { fs.closeSync(descriptor); } catch (_) { /* cleanup only */ }
-        }
-        try { fs.rmSync(temporary, { force: true }); } catch (_) { /* cleanup only */ }
+        if (descriptor !== undefined) { try { fs.closeSync(descriptor); } catch (_) {} }
+        try { fs.rmSync(temporary, { force: true }); } catch (_) {}
         throw error;
     }
 }
@@ -45,10 +38,7 @@ function deriveKey(password, salt, parameters = KDF) {
         throw Object.assign(new Error("Break-Glass password is invalid."), { code: "BREAKGLASS_PASSWORD_INVALID", statusCode: 400 });
     }
     return crypto.scryptSync(secret, salt, parameters.keyLength, {
-        N: parameters.N,
-        r: parameters.r,
-        p: parameters.p,
-        maxmem: 128 * 1024 * 1024
+        N: parameters.N, r: parameters.r, p: parameters.p, maxmem: 128 * 1024 * 1024
     });
 }
 
@@ -58,28 +48,27 @@ function encryptIdentity(identity, password, recipient, metadata = {}) {
     const salt = crypto.randomBytes(32);
     const nonce = crypto.randomBytes(12);
     const key = deriveKey(password, salt);
-    const cipher = crypto.createCipheriv("aes-256-gcm", key, nonce);
-    const aad = Buffer.from("SIRK-Central/backup-age-key/v2\n" + recipient, "utf8");
-    cipher.setAAD(aad);
-    const ciphertext = Buffer.concat([cipher.update(String(identity).trim() + "\n", "utf8"), cipher.final()]);
-    const tag = cipher.getAuthTag();
-    key.fill(0);
-    return {
-        version: 2,
-        recipient,
-        encryption: {
-            algorithm: "aes-256-gcm",
-            kdf: KDF,
-            salt: salt.toString("base64"),
-            nonce: nonce.toString("base64"),
-            tag: tag.toString("base64"),
-            ciphertext: ciphertext.toString("base64")
-        },
-        createdAtUtc: String(metadata.createdAtUtc || new Date().toISOString()),
-        updatedAtUtc: new Date().toISOString(),
-        updatedBy: String(metadata.updatedBy || "break-glass").slice(0, 200),
-        rotation: Number(metadata.rotation || 1)
-    };
+    try {
+        const cipher = crypto.createCipheriv("aes-256-gcm", key, nonce);
+        cipher.setAAD(Buffer.from("SIRK-Central/backup-age-key/v2\n" + recipient, "utf8"));
+        const ciphertext = Buffer.concat([cipher.update(String(identity).trim() + "\n", "utf8"), cipher.final()]);
+        return {
+            version: 2,
+            recipient,
+            encryption: {
+                algorithm: "aes-256-gcm",
+                kdf: KDF,
+                salt: salt.toString("base64"),
+                nonce: nonce.toString("base64"),
+                tag: cipher.getAuthTag().toString("base64"),
+                ciphertext: ciphertext.toString("base64")
+            },
+            createdAtUtc: String(metadata.createdAtUtc || new Date().toISOString()),
+            updatedAtUtc: new Date().toISOString(),
+            updatedBy: String(metadata.updatedBy || "break-glass").slice(0, 200),
+            rotation: Number(metadata.rotation || 1)
+        };
+    } finally { key.fill(0); }
 }
 
 function validateRecord(value) {
@@ -100,27 +89,25 @@ function validateRecord(value) {
 
 function decryptRecord(record, password) {
     validateRecord(record);
+    let key;
     try {
         const salt = Buffer.from(record.encryption.salt, "base64");
         const nonce = Buffer.from(record.encryption.nonce, "base64");
         const tag = Buffer.from(record.encryption.tag, "base64");
         const ciphertext = Buffer.from(record.encryption.ciphertext, "base64");
         if (salt.length !== 32 || nonce.length !== 12 || tag.length !== 16 || ciphertext.length < 32) throw new Error("Invalid encrypted key parameters.");
-        const key = deriveKey(password, salt, record.encryption.kdf);
+        key = deriveKey(password, salt, record.encryption.kdf);
         const decipher = crypto.createDecipheriv("aes-256-gcm", key, nonce);
         decipher.setAAD(Buffer.from("SIRK-Central/backup-age-key/v2\n" + record.recipient, "utf8"));
         decipher.setAuthTag(tag);
         const identity = Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString("utf8");
-        key.fill(0);
         if (!validIdentity(identity)) throw new Error("Decrypted age identity is invalid.");
         return identity.trim() + "\n";
     } catch (error) {
         throw Object.assign(new Error("Break-Glass password cannot unlock the backup key."), {
-            code: "BACKUP_AGE_KEY_UNLOCK_FAILED",
-            statusCode: 401,
-            cause: error
+            code: "BACKUP_AGE_KEY_UNLOCK_FAILED", statusCode: 401, cause: error
         });
-    }
+    } finally { if (key) key.fill(0); }
 }
 
 function create(options = {}) {
@@ -130,10 +117,7 @@ function create(options = {}) {
 
     function raw() {
         try { return validateRecord(JSON.parse(fs.readFileSync(filePath, "utf8"))); }
-        catch (error) {
-            if (error.code === "ENOENT") return null;
-            throw error;
-        }
+        catch (error) { if (error.code === "ENOENT") return null; throw error; }
     }
 
     function read() {
@@ -168,7 +152,7 @@ function create(options = {}) {
             rotation: old ? Number(old.rotation || 1) + 1 : 1
         });
         atomicJson(filePath, record);
-        try { fs.rmSync(legacyPath, { force: true }); } catch (_) { /* best effort */ }
+        try { fs.rmSync(legacyPath, { force: true }); } catch (_) {}
         return read();
     }
 
@@ -214,13 +198,6 @@ function create(options = {}) {
 }
 
 module.exports = {
-    create,
-    validRecipient,
-    validIdentity,
-    encryptIdentity,
-    decryptRecord,
-    FILE_NAME,
-    LEGACY_FILE_NAME,
-    RECIPIENT_PATTERN,
-    IDENTITY_PATTERN
+    create, validRecipient, validIdentity, encryptIdentity, decryptRecord,
+    FILE_NAME, LEGACY_FILE_NAME, RECIPIENT_PATTERN, IDENTITY_PATTERN
 };
