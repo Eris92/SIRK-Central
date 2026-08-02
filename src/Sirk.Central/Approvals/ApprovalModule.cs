@@ -68,13 +68,14 @@ internal sealed class ApprovalStore
         lock (_sync)
         {
             ExpireInternal();
-            if (!Types.Contains(input.Type ?? string.Empty))
+            var type = input.Type ?? string.Empty;
+            if (!Types.Contains(type))
                 throw new InvalidDataException("Unsupported approval type.");
             var now = DateTimeOffset.UtcNow;
             var ttl = Math.Clamp(input.TtlMinutes == 0 ? 60 : input.TtlMinutes, 5, 1440);
             var request = new ApprovalRequest(
                 "apr-" + Base64Url(RandomNumberGenerator.GetBytes(18)).ToLowerInvariant(),
-                input.Type,
+                type,
                 "pending",
                 Normalize(input.Title, 160, "Title"),
                 Normalize(input.Reason, 1000, "Reason"),
@@ -107,11 +108,13 @@ internal sealed class ApprovalStore
             if (request.Decisions.Any(value => value.Reviewer == reviewer))
                 throw new InvalidOperationException("Reviewer already decided this request.");
 
+            var comment = (input.Comment ?? string.Empty).Trim();
+            if (comment.Length > 1000) comment = comment[..1000];
             var decisions = request.Decisions.ToList();
             decisions.Add(new ApprovalDecision(
                 reviewer,
                 input.Decision,
-                (input.Comment ?? string.Empty).Trim()[..Math.Min((input.Comment ?? string.Empty).Trim().Length, 1000)],
+                comment,
                 DateTimeOffset.UtcNow));
             var state = input.Decision == "reject"
                 ? "rejected"
