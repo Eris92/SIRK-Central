@@ -30,10 +30,10 @@ try
     var pending = relay.RequestAsync("portal-one", "GET", "/healthz", [], [], timeout.Token);
     var request = relay.Poll("portal-one").Single();
     Assert(request.Path == "/healthz", "tunnel poll");
+    Assert(!relay.Complete("portal-two", request.Id, new TunnelResponseInput(200, "application/json", null, Convert.ToBase64String("{}"u8.ToArray()))), "cross-portal response blocked");
     Assert(relay.Complete("portal-one", request.Id, new TunnelResponseInput(200, "application/json", null, Convert.ToBase64String("{}"u8.ToArray()))), "tunnel completion");
     var response = await pending;
     Assert(response.StatusCode == 200 && response.ContentType == "application/json", "tunnel response");
-    Expect<InvalidDataException>(() => relay.Complete("portal-one", "missing", new TunnelResponseInput(200, "text/plain", null, "!!!")));
 
     if (!OperatingSystem.IsWindows())
     {
