@@ -20,7 +20,14 @@ RUN apt-get update \
 ENV ASPNETCORE_URLS=http://+:8080 \
     DOTNET_EnableDiagnostics=0 \
     Sirk__PortalProtocol__DataRoot=/var/lib/sirk-central \
-    Sirk__Security__DataRoot=/var/lib/sirk-central/security
+    Sirk__Security__Enabled=true \
+    Sirk__Security__DataRoot=/var/lib/sirk-central/security \
+    Sirk__Security__DataProtectionCertificatePath=/run/secrets/sirk-central-dataprotection.pfx \
+    Sirk__Security__DataProtectionCertificatePasswordFile=/run/secrets/sirk-central-dataprotection-password \
+    Sirk__Security__ReleaseSigningPublicKeyFile=/run/secrets/sirk-release-signing-public-key \
+    Sirk__Security__RequireProtectedDataProtectionKeys=true \
+    Sirk__Security__RequireSignedReleases=true \
+    Sirk__Security__RequireSingleWriterLease=true
 EXPOSE 8080
 COPY --from=build /app/publish ./
 RUN mkdir -p /var/lib/sirk-central/security \
