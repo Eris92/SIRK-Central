@@ -242,7 +242,7 @@ internal static class EntraAuthentication
     {
         if (string.IsNullOrWhiteSpace(returnUrl)) return "/";
         if (!Uri.TryCreate(returnUrl, UriKind.Relative, out _) ||
-            !returnUrl.StartsWith('/', StringComparison.Ordinal) ||
+            !returnUrl.StartsWith("/", StringComparison.Ordinal) ||
             returnUrl.StartsWith("//", StringComparison.Ordinal) ||
             returnUrl.Contains("\\", StringComparison.Ordinal))
             return "/";
