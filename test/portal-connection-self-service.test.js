@@ -28,6 +28,11 @@ function response() {
         headers: {},
         body: "",
         setHeader(name, value) { this.headers[String(name).toLowerCase()] = value; },
+        writeHead(status, headers = {}) {
+            this.statusCode = status;
+            for (const [name, value] of Object.entries(headers)) this.setHeader(name, value);
+            return this;
+        },
         end(value) { this.body = value == null ? "" : String(value); }
     };
 }
