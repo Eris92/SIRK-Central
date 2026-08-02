@@ -1,7 +1,11 @@
 using System.Reflection;
+using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.RateLimiting;
 using Sirk.Central;
 using Sirk.Central.Portals;
+using Sirk.Central.Security;
 
 if (RuntimeHealthProbe.IsRequested(args))
 {
@@ -17,6 +21,10 @@ var builder = WebApplication.CreateBuilder(new WebApplicationOptions
 
 builder.WebHost.ConfigureKestrel(options => options.AddServerHeader = false);
 
+var securityOptions = builder.Configuration
+    .GetSection(SecurityOptions.SectionName)
+    .Get<SecurityOptions>() ?? new SecurityOptions();
+
 builder.Services.AddProblemDetails();
 builder.Services.AddSingleton<RuntimeState>();
 builder.Services.Configure<PortalProtocolOptions>(
@@ -25,6 +33,141 @@ builder.Services.AddSingleton<FilePortalRegistry>();
 builder.Services.AddSingleton<PortalNonceReplayGuard>();
 builder.Services.AddSingleton<PortalRequestAuthenticator>();
 builder.Services.AddSingleton<PortalTelemetryStore>();
+
+builder.Services.Configure<SecurityOptions>(
+    builder.Configuration.GetSection(SecurityOptions.SectionName));
+builder.Services.AddSingleton<LocalIdentityStore>();
+builder.Services.AddSingleton<SecurityAuditLog>();
+
+var dataProtection = builder.Services
+    .AddDataProtection()
+    .SetApplicationName("SIRK Central .NET 10");
+if (securityOptions.Enabled)
+{
+    var keyDirectory = Path.Combine(
+        securityOptions.DataRoot,
+        securityOptions.DataProtectionDirectoryName);
+    Directory.CreateDirectory(keyDirectory);
+    SecureDirectory(keyDirectory);
+    dataProtection.PersistKeysToFileSystem(new DirectoryInfo(keyDirectory));
+}
+
+var secureCookies = !builder.Environment.IsDevelopment();
+builder.Services
+    .AddAuthentication(options =>
+    {
+        options.DefaultAuthenticateScheme = SirkAuthenticationSchemes.Session;
+        options.DefaultChallengeScheme = SirkAuthenticationSchemes.Session;
+        options.DefaultForbidScheme = SirkAuthenticationSchemes.Session;
+        options.DefaultSignInScheme = SirkAuthenticationSchemes.Session;
+        options.DefaultSignOutScheme = SirkAuthenticationSchemes.Session;
+    })
+    .AddCookie(SirkAuthenticationSchemes.Session, options =>
+    {
+        options.Cookie.Name = secureCookies
+            ? "__Host-SIRK-Central-Session"
+            : "SIRK-Central-Session-Development";
+        options.Cookie.HttpOnly = true;
+        options.Cookie.IsEssential = true;
+        options.Cookie.Path = "/";
+        options.Cookie.SameSite = SameSiteMode.Strict;
+        options.Cookie.SecurePolicy = secureCookies
+            ? CookieSecurePolicy.Always
+            : CookieSecurePolicy.SameAsRequest;
+        options.ExpireTimeSpan = TimeSpan.FromMinutes(securityOptions.SessionMinutes);
+        options.SlidingExpiration = false;
+        options.Events = new CookieAuthenticationEvents
+        {
+            OnRedirectToLogin = context =>
+            {
+                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                return Task.CompletedTask;
+            },
+            OnRedirectToAccessDenied = context =>
+            {
+                context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                return Task.CompletedTask;
+            },
+            OnValidatePrincipal = context =>
+            {
+                var store = context.HttpContext.RequestServices
+                    .GetRequiredService<LocalIdentityStore>();
+                var currentIdentity = store.GetBreakGlassIdentity();
+                var currentId = context.Principal?
+                    .FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)
+                    ?.Value;
+                if (currentIdentity is null ||
+                    !string.Equals(currentIdentity.Id, currentId, StringComparison.Ordinal))
+                {
+                    context.RejectPrincipal();
+                }
+
+                return Task.CompletedTask;
+            }
+        };
+    });
+
+builder.Services.AddAuthorizationBuilder()
+    .AddPolicy(
+        SirkPolicies.PortalManagement,
+        policy => policy
+            .RequireAuthenticatedUser()
+            .RequireRole(
+                SirkRoles.BreakGlass,
+                SirkRoles.SecAdmin,
+                SirkRoles.Admin))
+    .AddPolicy(
+        SirkPolicies.SecurityAdministration,
+        policy => policy
+            .RequireAuthenticatedUser()
+            .RequireRole(
+                SirkRoles.BreakGlass,
+                SirkRoles.SecAdmin))
+    .AddPolicy(
+        SirkPolicies.AuditRead,
+        policy => policy
+            .RequireAuthenticatedUser()
+            .RequireRole(
+                SirkRoles.BreakGlass,
+                SirkRoles.SecAdmin,
+                SirkRoles.Auditor));
+
+builder.Services.AddAntiforgery(options =>
+{
+    options.HeaderName = "X-SIRK-CSRF";
+    options.Cookie.Name = secureCookies
+        ? "__Host-SIRK-Central-CSRF"
+        : "SIRK-Central-CSRF-Development";
+    options.Cookie.HttpOnly = true;
+    options.Cookie.IsEssential = true;
+    options.Cookie.Path = "/";
+    options.Cookie.SameSite = SameSiteMode.Strict;
+    options.Cookie.SecurePolicy = secureCookies
+        ? CookieSecurePolicy.Always
+        : CookieSecurePolicy.SameAsRequest;
+});
+
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddPolicy(
+        SecurityEndpointNames.BreakGlassLoginRateLimit,
+        context => RateLimitPartition.GetSlidingWindowLimiter(
+            context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new SlidingWindowRateLimiterOptions
+            {
+                PermitLimit = Math.Clamp(
+                    securityOptions.LoginAttemptsPerFiveMinutes,
+                    1,
+                    100),
+                Window = TimeSpan.FromMinutes(5),
+                SegmentsPerWindow = 5,
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
+});
+
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
 {
     options.ForwardedHeaders = ForwardedHeaders.XForwardedFor |
@@ -42,6 +185,12 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 var app = builder.Build();
 var runtimeState = app.Services.GetRequiredService<RuntimeState>();
 _ = app.Services.GetRequiredService<FilePortalRegistry>();
+if (securityOptions.Enabled)
+{
+    _ = app.Services.GetRequiredService<LocalIdentityStore>();
+    var auditLog = app.Services.GetRequiredService<SecurityAuditLog>();
+    _ = auditLog.VerifyIntegrity();
+}
 
 app.UseForwardedHeaders();
 
@@ -66,6 +215,9 @@ app.Use(async (context, next) =>
     await next();
 });
 
+app.UseRateLimiter();
+app.UseAuthentication();
+app.UseAuthorization();
 app.UseDefaultFiles();
 app.UseStaticFiles();
 
@@ -98,10 +250,15 @@ app.MapGet("/api/v1/system/version", () => Results.Ok(new
     runtime = ".NET 10",
     framework = AppContext.TargetFrameworkName,
     version = VersionInfo.Current,
-    environment = app.Environment.EnvironmentName
+    environment = app.Environment.EnvironmentName,
+    securityEnabled = securityOptions.Enabled
 }));
 
 app.MapPortalProtocol();
+if (securityOptions.Enabled)
+{
+    app.MapSirkAuthentication();
+}
 
 app.MapFallback(() => Results.Problem(
     statusCode: StatusCodes.Status404NotFound,
@@ -111,6 +268,18 @@ app.Lifetime.ApplicationStarted.Register(runtimeState.MarkReady);
 app.Lifetime.ApplicationStopping.Register(runtimeState.MarkStopping);
 
 app.Run();
+
+static void SecureDirectory(string path)
+{
+    if (!OperatingSystem.IsWindows())
+    {
+        File.SetUnixFileMode(
+            path,
+            UnixFileMode.UserRead |
+            UnixFileMode.UserWrite |
+            UnixFileMode.UserExecute);
+    }
+}
 
 internal sealed class RuntimeState
 {
