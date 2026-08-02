@@ -272,7 +272,7 @@ if (securityOptions.Enabled)
 
 app.MapFallback(() => Results.Problem(
     statusCode: StatusCodes.Status404NotFound,
-    title = "Resource not found"));
+    title: "Resource not found"));
 
 app.Lifetime.ApplicationStarted.Register(runtimeState.MarkReady);
 app.Lifetime.ApplicationStopping.Register(runtimeState.MarkStopping);
