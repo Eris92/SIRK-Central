@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
 using Sirk.Central;
+using Sirk.Central.Backup;
 using Sirk.Central.Portals;
 using Sirk.Central.Security;
 
@@ -39,6 +40,7 @@ builder.Services.Configure<SecurityOptions>(
 builder.Services.AddSingleton<LocalIdentityStore>();
 builder.Services.AddSingleton<SecurityAuditLog>();
 builder.Services.AddSingleton<BackupKeyStore>();
+builder.Services.AddSingleton<BackupArchiveService>();
 
 var dataProtection = builder.Services
     .AddDataProtection()
@@ -190,6 +192,7 @@ if (securityOptions.Enabled)
 {
     _ = app.Services.GetRequiredService<LocalIdentityStore>();
     _ = app.Services.GetRequiredService<BackupKeyStore>();
+    _ = app.Services.GetRequiredService<BackupArchiveService>();
     var auditLog = app.Services.GetRequiredService<SecurityAuditLog>();
     _ = auditLog.VerifyIntegrity();
 }
@@ -261,6 +264,7 @@ if (securityOptions.Enabled)
 {
     app.MapSirkAuthentication();
     app.MapBackupKeyLifecycle();
+    app.MapSirkBackup();
 }
 
 app.MapFallback(() => Results.Problem(
