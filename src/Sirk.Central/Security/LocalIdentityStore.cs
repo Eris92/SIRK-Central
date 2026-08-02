@@ -93,6 +93,16 @@ internal sealed class LocalIdentityStore
         }
     }
 
+    public bool VerifyAccessCode(string accessCode)
+    {
+        lock (_sync)
+        {
+            return _options.Enabled && _document is not null &&
+                   _document.BreakGlass.Enabled &&
+                   VerifyCredential(accessCode, _document.BreakGlass.AccessCodeHash);
+        }
+    }
+
     public LocalIdentity ChangePassword(string currentPassword, string newPassword)
     {
         ValidatePassword(newPassword);
