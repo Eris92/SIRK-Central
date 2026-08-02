@@ -1,5 +1,4 @@
-using System.Net.Http.Headers;
-using System.Security.Cryptography;
+using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.Extensions.Options;
@@ -114,27 +113,31 @@ internal sealed class OperationsStore
     }
 }
 
-internal sealed class PortalReleaseCatalog
+internal sealed class PortalReleaseCatalog : IDisposable
 {
     private static readonly HashSet<string> TrustedHosts = new(StringComparer.OrdinalIgnoreCase)
     { "api.github.com", "github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com" };
-    private readonly IHttpClientFactory _clients;
+    private readonly HttpClient _client;
     private readonly object _sync = new();
     private readonly Dictionary<string, (DateTimeOffset Expires, PortalReleaseMetadata Value)> _cache = [];
 
-    public PortalReleaseCatalog(IHttpClientFactory clients) => _clients = clients;
+    public PortalReleaseCatalog()
+    {
+        _client = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(15) };
+        _client.DefaultRequestHeaders.UserAgent.ParseAdd("SIRK-Central/.NET10");
+        _client.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
+        _client.DefaultRequestHeaders.Add("X-GitHub-Api-Version", "2022-11-28");
+    }
 
     public async Task<PortalReleaseMetadata> LatestAsync(string channel, CancellationToken cancellationToken)
     {
         channel = channel == "stable" ? "stable" : "dev";
         lock (_sync) if (_cache.TryGetValue(channel, out var cached) && cached.Expires > DateTimeOffset.UtcNow) return cached.Value;
-        var client = _clients.CreateClient("PortalReleaseCatalog");
-        using var response = await client.GetAsync("https://api.github.com/repos/Eris92/SIRK-Portal/releases?per_page=30", cancellationToken);
-        response.EnsureSuccessStatusCode();
+        using var response = await GetTrustedAsync(new Uri("https://api.github.com/repos/Eris92/SIRK-Portal/releases?per_page=30"), cancellationToken);
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
         if (document.RootElement.ValueKind != JsonValueKind.Array) throw new InvalidDataException("GitHub releases response is invalid.");
-        string? metadataUrl = null;
+        Uri? metadataUri = null;
         foreach (var release in document.RootElement.EnumerateArray())
         {
             if (release.TryGetProperty("draft", out var draft) && draft.GetBoolean()) continue;
@@ -144,66 +147,111 @@ internal sealed class PortalReleaseCatalog
             {
                 var name = asset.GetProperty("name").GetString() ?? string.Empty;
                 if (!name.StartsWith("SIRK-Portal-", StringComparison.OrdinalIgnoreCase) || !name.EndsWith("-release.json", StringComparison.OrdinalIgnoreCase)) continue;
-                metadataUrl = asset.GetProperty("browser_download_url").GetString(); break;
+                var url = asset.GetProperty("browser_download_url").GetString();
+                if (url is not null) metadataUri = ValidateTrustedUri(url);
+                break;
             }
-            if (metadataUrl is not null) break;
+            if (metadataUri is not null) break;
         }
-        if (metadataUrl is null) throw new KeyNotFoundException("No matching SIRK Portal release was found.");
-        ValidateTrustedUri(metadataUrl);
-        var metadata = await client.GetFromJsonAsync<PortalReleaseMetadata>(metadataUrl, cancellationToken)
+        if (metadataUri is null) throw new KeyNotFoundException("No matching SIRK Portal release was found.");
+        using var metadataResponse = await GetTrustedAsync(metadataUri, cancellationToken);
+        var metadata = await metadataResponse.Content.ReadFromJsonAsync<PortalReleaseMetadata>(cancellationToken: cancellationToken)
             ?? throw new InvalidDataException("Portal release metadata is empty.");
         metadata = Validate(metadata, channel);
         lock (_sync) _cache[channel] = (DateTimeOffset.UtcNow.AddMinutes(5), metadata);
         return metadata;
     }
 
+    private async Task<HttpResponseMessage> GetTrustedAsync(Uri uri, CancellationToken cancellationToken)
+    {
+        for (var redirect = 0; redirect <= 3; redirect++)
+        {
+            ValidateTrustedUri(uri.ToString());
+            var response = await _client.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            if ((int)response.StatusCode is >= 300 and < 400 && response.Headers.Location is not null)
+            {
+                var next = response.Headers.Location.IsAbsoluteUri ? response.Headers.Location : new Uri(uri, response.Headers.Location);
+                response.Dispose();
+                uri = ValidateTrustedUri(next.ToString());
+                continue;
+            }
+            response.EnsureSuccessStatusCode();
+            if (response.Content.Headers.ContentLength is > 2_097_152) { response.Dispose(); throw new InvalidDataException("Release response is too large."); }
+            return response;
+        }
+        throw new HttpRequestException("GitHub redirect limit exceeded.");
+    }
+
     internal static PortalReleaseMetadata Validate(PortalReleaseMetadata value, string requestedChannel)
     {
         if (value.SchemaVersion != 1 || value.ApplicationId != "sirk-portal") throw new InvalidDataException("Portal release metadata schema is invalid.");
         if (value.Architecture != "win-x64") throw new InvalidDataException("Portal release architecture is invalid.");
-        if (value.Version.Length is < 1 or > 80 || value.Version.Any(ch => !(char.IsAsciiLetterOrDigit(ch) || ch is '.' or '+' or '_' or '-')))
+        if (string.IsNullOrWhiteSpace(value.Version) || value.Version.Length > 80 || value.Version.Any(ch => !(char.IsAsciiLetterOrDigit(ch) || ch is '.' or '+' or '_' or '-')))
             throw new InvalidDataException("Portal release version is invalid.");
-        if (value.Sha256.Length != 64 || value.Sha256.Any(ch => !Uri.IsHexDigit(ch))) throw new InvalidDataException("Portal release SHA-256 is invalid.");
-        ValidateTrustedUri(value.PackageUrl);
-        var uri = new Uri(value.PackageUrl);
-        if (!uri.AbsolutePath.EndsWith("-win-x64.zip", StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("Portal package asset is invalid.");
+        if (string.IsNullOrWhiteSpace(value.Sha256) || value.Sha256.Length != 64 || value.Sha256.Any(ch => !Uri.IsHexDigit(ch))) throw new InvalidDataException("Portal release SHA-256 is invalid.");
+        var packageUri = ValidateTrustedUri(value.PackageUrl);
+        if (!packageUri.AbsolutePath.EndsWith("-win-x64.zip", StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("Portal package asset is invalid.");
         var channel = value.Channel == "stable" ? "stable" : "dev";
         if (requestedChannel == "stable" && channel != "stable") throw new InvalidDataException("Stable release metadata has a non-stable channel.");
-        return value with { Channel = channel, Sha256 = value.Sha256.ToUpperInvariant(), Commit = (value.Commit ?? string.Empty)[..Math.Min(value.Commit?.Length ?? 0, 80)] };
+        var commit = value.Commit ?? string.Empty;
+        if (commit.Length > 80) commit = commit[..80];
+        return value with { Channel = channel, Sha256 = value.Sha256.ToUpperInvariant(), Commit = commit };
     }
-    private static void ValidateTrustedUri(string value)
+    private static Uri ValidateTrustedUri(string value)
     {
         if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps || !TrustedHosts.Contains(uri.Host) || !string.IsNullOrEmpty(uri.UserInfo))
             throw new InvalidDataException("Release URL is not trusted.");
+        return uri;
     }
+    public void Dispose() => _client.Dispose();
 }
 
-internal static class OperationsEndpoints
+internal sealed class OperationsMiddleware
 {
-    public static IEndpointRouteBuilder MapOperations(this IEndpointRouteBuilder endpoints)
+    private readonly OperationsStore _store;
+    private readonly PortalReleaseCatalog _catalog = new();
+
+    public OperationsMiddleware(IOptions<SecurityOptions> options) => _store = new OperationsStore(options);
+
+    public async Task<bool> TryHandleAsync(HttpContext context)
     {
-        var group = endpoints.MapGroup("/api/v1/operations").RequireAuthorization(SirkPolicies.PortalManagement);
-        group.MapGet("/maintenance", (OperationsStore store) => Results.Ok(new { policy = store.Policy(), jobs = store.Jobs() }));
-        group.MapPut("/maintenance/policy", SavePolicyAsync);
-        group.MapPost("/updates", QueueUpdateAsync);
-        group.MapGet("/portal-releases/latest", async (string? channel, PortalReleaseCatalog catalog, CancellationToken ct) =>
+        if (!context.Request.Path.StartsWithSegments("/api/v1/operations", out var remainder)) return false;
+        if (context.User.Identity?.IsAuthenticated != true || !(context.User.IsInRole(SirkRoles.BreakGlass) || context.User.IsInRole(SirkRoles.Admin) || context.User.IsInRole(SirkRoles.SecAdmin)))
         {
-            try { return Results.Ok(new { release = await catalog.LatestAsync(channel == "stable" ? "stable" : "dev", ct) }); }
-            catch (KeyNotFoundException ex) { return Results.Json(new { error = ex.Message }, statusCode: 404); }
-            catch (Exception ex) when (ex is HttpRequestException or InvalidDataException or TaskCanceledException)
-            { return Results.Json(new { code = "PORTAL_RELEASE_LOOKUP_FAILED", error = ex.Message }, statusCode: 502); }
-        });
-        return endpoints;
+            context.Response.StatusCode = context.User.Identity?.IsAuthenticated == true ? 403 : 401;
+            return true;
+        }
+        try
+        {
+            if (HttpMethods.IsGet(context.Request.Method) && remainder == "/maintenance")
+            {
+                await context.Response.WriteAsJsonAsync(new { policy = _store.Policy(), jobs = _store.Jobs() }, context.RequestAborted); return true;
+            }
+            if (HttpMethods.IsPut(context.Request.Method) && remainder == "/maintenance/policy")
+            {
+                await ValidateCsrf(context);
+                var request = await context.Request.ReadFromJsonAsync<MaintenancePolicy>(cancellationToken: context.RequestAborted) ?? throw new InvalidDataException("Request body is required.");
+                await context.Response.WriteAsJsonAsync(_store.SavePolicy(request, Actor(context)), context.RequestAborted); return true;
+            }
+            if (HttpMethods.IsPost(context.Request.Method) && remainder == "/updates")
+            {
+                await ValidateCsrf(context);
+                var request = await context.Request.ReadFromJsonAsync<UpdateRequest>(cancellationToken: context.RequestAborted) ?? throw new InvalidDataException("Request body is required.");
+                context.Response.StatusCode = 202;
+                await context.Response.WriteAsJsonAsync(_store.Queue(request, Actor(context)), context.RequestAborted); return true;
+            }
+            if (HttpMethods.IsGet(context.Request.Method) && remainder == "/portal-releases/latest")
+            {
+                var channel = context.Request.Query["channel"] == "stable" ? "stable" : "dev";
+                await context.Response.WriteAsJsonAsync(new { release = await _catalog.LatestAsync(channel, context.RequestAborted) }, context.RequestAborted); return true;
+            }
+            context.Response.StatusCode = 404; return true;
+        }
+        catch (AntiforgeryValidationException) { context.Response.StatusCode = 400; await context.Response.WriteAsJsonAsync(new { code = "CSRF_VALIDATION_FAILED" }); return true; }
+        catch (KeyNotFoundException ex) { context.Response.StatusCode = 404; await context.Response.WriteAsJsonAsync(new { error = ex.Message }); return true; }
+        catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException) { context.Response.StatusCode = 409; await context.Response.WriteAsJsonAsync(new { error = ex.Message }); return true; }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException) { context.Response.StatusCode = 502; await context.Response.WriteAsJsonAsync(new { code = "PORTAL_RELEASE_LOOKUP_FAILED", error = ex.Message }); return true; }
     }
-    private static async Task<IResult> SavePolicyAsync(MaintenancePolicy request, HttpContext context, IAntiforgery antiforgery, OperationsStore store)
-        => await Mutate(context, antiforgery, () => Results.Ok(store.SavePolicy(request, Actor(context))));
-    private static async Task<IResult> QueueUpdateAsync(UpdateRequest request, HttpContext context, IAntiforgery antiforgery, OperationsStore store)
-        => await Mutate(context, antiforgery, () => Results.Accepted(value: store.Queue(request, Actor(context))));
-    private static async Task<IResult> Mutate(HttpContext context, IAntiforgery antiforgery, Func<IResult> action)
-    {
-        try { await antiforgery.ValidateRequestAsync(context); return action(); }
-        catch (AntiforgeryValidationException) { return Results.Json(new { code = "CSRF_VALIDATION_FAILED" }, statusCode: 400); }
-        catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException) { return Results.Json(new { error = ex.Message }, statusCode: 409); }
-    }
+    private static Task ValidateCsrf(HttpContext context) => context.RequestServices.GetRequiredService<IAntiforgery>().ValidateRequestAsync(context);
     private static string Actor(HttpContext context) => context.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? "unknown";
 }
