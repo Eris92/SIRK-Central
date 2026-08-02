@@ -36,6 +36,7 @@ builder.Services.AddSingleton<EntraSettingsStore>();
 builder.Services.AddSingleton<ApprovalStore>();
 builder.Services.AddSingleton<TicketStore>();
 builder.Services.AddSirkWebAuthn(builder.Configuration);
+builder.Services.AddTransient<IStartupFilter, WebAuthnUiStartupFilter>();
 
 var dataProtection = builder.Services.AddDataProtection().SetApplicationName("SIRK Central .NET 10");
 if (securityOptions.Enabled)
