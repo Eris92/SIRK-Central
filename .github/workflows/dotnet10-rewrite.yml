@@ -106,10 +106,24 @@ jobs:
       - name: Container build
         run: docker build --file Dockerfile.dotnet10 --tag sirk-central:dotnet10 .
 
+      - name: Production container fails closed without secrets
+        run: |
+          set +e
+          output=$(timeout 15s docker run --rm --name sirk-central-missing-secrets sirk-central:dotnet10 2>&1)
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          if [ "$status" -eq 0 ] || [ "$status" -eq 124 ]; then
+            echo 'Production container did not fail closed when required secrets were absent.' >&2
+            exit 1
+          fi
+          printf '%s' "$output" | grep -E 'Production startup refused|Data Protection certificate|ReleaseSigningPublicKeyFile'
+
       - name: Container runtime health smoke
         run: |
           docker run --detach \
             --name sirk-central-dotnet10-smoke \
+            --env Sirk__Security__Enabled=false \
             --health-interval 1s \
             --health-timeout 5s \
             --health-start-period 1s \
