@@ -1,5 +1,6 @@
 using System.Reflection;
 using Microsoft.AspNetCore.HttpOverrides;
+using Sirk.Central.Portals;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -8,6 +9,12 @@ builder.WebHost.ConfigureKestrel(options => options.AddServerHeader = false);
 
 builder.Services.AddProblemDetails();
 builder.Services.AddSingleton<RuntimeState>();
+builder.Services.Configure<PortalProtocolOptions>(
+    builder.Configuration.GetSection(PortalProtocolOptions.SectionName));
+builder.Services.AddSingleton<FilePortalRegistry>();
+builder.Services.AddSingleton<PortalNonceReplayGuard>();
+builder.Services.AddSingleton<PortalRequestAuthenticator>();
+builder.Services.AddSingleton<PortalTelemetryStore>();
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
 {
     options.ForwardedHeaders = ForwardedHeaders.XForwardedFor |
@@ -24,6 +31,7 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 
 var app = builder.Build();
 var runtimeState = app.Services.GetRequiredService<RuntimeState>();
+_ = app.Services.GetRequiredService<FilePortalRegistry>();
 
 app.UseForwardedHeaders();
 
@@ -82,6 +90,8 @@ app.MapGet("/api/v1/system/version", () => Results.Ok(new
     version = VersionInfo.Current,
     environment = app.Environment.EnvironmentName
 }));
+
+app.MapPortalProtocol();
 
 app.MapFallback(() => Results.Problem(
     statusCode: StatusCodes.Status404NotFound,
