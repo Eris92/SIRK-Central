@@ -140,9 +140,9 @@ internal static class EntraAuthentication
         {
             var store = context.HttpContext.RequestServices.GetRequiredService<EntraSettingsStore>();
             var settings = store.GetPrivate();
-            if (settings is not { Enabled: true })
+            if (settings is not { Enabled: true } || context.TokenEndpointRequest is null)
             {
-                context.Fail("Entra configuration is disabled.");
+                context.Fail("Entra configuration or token request is unavailable.");
                 return Task.CompletedTask;
             }
 
@@ -152,15 +152,13 @@ internal static class EntraAuthentication
         },
         OnTokenValidated = context =>
         {
-            var principal = context.Principal;
-            var identity = principal?.Identity as ClaimsIdentity;
-            if (identity is null)
+            if (context.Principal is not { Identity: ClaimsIdentity identity } principal)
             {
                 context.Fail("Entra identity is missing.");
                 return Task.CompletedTask;
             }
 
-            var tenantId = principal!.FindFirstValue("tid")?.ToLowerInvariant();
+            var tenantId = principal.FindFirstValue("tid")?.ToLowerInvariant();
             var objectId = principal.FindFirstValue("oid")?.ToLowerInvariant();
             if (!Guid.TryParse(tenantId, out _) || !Guid.TryParse(objectId, out _))
             {
@@ -246,7 +244,7 @@ internal static class EntraAuthentication
         if (!Uri.TryCreate(returnUrl, UriKind.Relative, out _) ||
             !returnUrl.StartsWith('/', StringComparison.Ordinal) ||
             returnUrl.StartsWith("//", StringComparison.Ordinal) ||
-            returnUrl.Contains('\\'))
+            returnUrl.Contains("\\", StringComparison.Ordinal))
             return "/";
         return returnUrl;
     }
