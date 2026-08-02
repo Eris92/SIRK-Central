@@ -1,7 +1,6 @@
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
-using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.Extensions.Options;
 using Sirk.Central.Security;
 
@@ -36,13 +35,13 @@ internal sealed record TicketProjection(
     DateTimeOffset ReceivedAtUtc);
 
 internal sealed record TicketInput(
-    string TicketId,
+    string? TicketId,
     string? TenantId,
     string? CustomerId,
     string? SiteId,
     string? ExternalSystem,
     string? ExternalId,
-    string Title,
+    string? Title,
     string? Description,
     string? Status,
     string? Priority,
@@ -57,10 +56,10 @@ internal sealed record TicketInput(
     TicketSync? Sync);
 
 internal sealed record TicketEventRequest(
-    string EventId,
-    string Type,
+    string? EventId,
+    string? Type,
     DateTimeOffset? OccurredAtUtc,
-    TicketInput Ticket);
+    TicketInput? Ticket);
 
 internal sealed record TicketEventResult(
     bool Accepted,
@@ -115,11 +114,15 @@ internal sealed class TicketStore
 
     public TicketEventResult ApplyEvent(string portalId, TicketEventRequest request)
     {
+        ArgumentNullException.ThrowIfNull(request);
+        var eventType = (request.Type ?? string.Empty).Trim();
+        var ticketInput = request.Ticket ?? throw new InvalidDataException("Ticket event payload is missing.");
+
         lock (_sync)
         {
             portalId = Identifier(portalId, "Portal ID");
             var eventId = Identifier(request.EventId, "Event ID");
-            if (!EventTypes.Contains(request.Type ?? string.Empty))
+            if (!EventTypes.Contains(eventType))
                 throw new InvalidDataException("Unsupported ticket event type.");
 
             var retained = _state.PortalEventIds.TryGetValue(portalId, out var ids)
@@ -127,18 +130,18 @@ internal sealed class TicketStore
                 : _state.PortalEventIds[portalId] = [];
             if (retained.Contains(eventId, StringComparer.Ordinal))
             {
-                var duplicateKey = Key(portalId, request.Ticket.TicketId);
+                var duplicateKey = Key(portalId, ticketInput.TicketId);
                 if (!_state.Tickets.TryGetValue(duplicateKey, out var duplicateTicket))
                     throw new InvalidDataException("Duplicate event references an unknown ticket.");
-                return new TicketEventResult(false, true, false, request.Type, duplicateTicket);
+                return new TicketEventResult(false, true, false, eventType, duplicateTicket);
             }
 
-            var result = UpsertInternal(portalId, request.Ticket);
+            var result = UpsertInternal(portalId, ticketInput);
             retained.Add(eventId);
             if (retained.Count > _maxEventIds)
                 retained.RemoveRange(0, retained.Count - _maxEventIds);
             Persist();
-            return new TicketEventResult(result.Changed, false, result.Stale, request.Type, result.Ticket);
+            return new TicketEventResult(result.Changed, false, result.Stale, eventType, result.Ticket);
         }
     }
 
@@ -201,15 +204,15 @@ internal sealed class TicketStore
 
     private (TicketProjection Ticket, bool Changed, bool Stale) UpsertInternal(string portalId, TicketInput input)
     {
-        if (input is null) throw new InvalidDataException("Ticket payload is invalid.");
+        ArgumentNullException.ThrowIfNull(input);
         var ticketId = Identifier(input.TicketId, "Ticket ID");
         var key = Key(portalId, ticketId);
         _state.Tickets.TryGetValue(key, out var previous);
         if (previous is null && _state.Tickets.Count >= _maxTickets)
             throw new InvalidOperationException("Ticket projection capacity was reached.");
 
-        var status = string.IsNullOrWhiteSpace(input.Status) ? previous?.Status ?? "new" : input.Status;
-        var priority = string.IsNullOrWhiteSpace(input.Priority) ? previous?.Priority ?? "normal" : input.Priority;
+        var status = string.IsNullOrWhiteSpace(input.Status) ? previous?.Status ?? "new" : input.Status.Trim();
+        var priority = string.IsNullOrWhiteSpace(input.Priority) ? previous?.Priority ?? "normal" : input.Priority.Trim();
         if (!Statuses.Contains(status)) throw new InvalidDataException("Unsupported ticket status.");
         if (!Priorities.Contains(priority)) throw new InvalidDataException("Unsupported ticket priority.");
 
@@ -320,7 +323,7 @@ internal sealed class TicketStore
         return new string(text.Select(character => char.IsControl(character) ? ' ' : character).ToArray());
     }
 
-    private static string Key(string portalId, string ticketId) =>
+    private static string Key(string portalId, string? ticketId) =>
         $"{Identifier(portalId, "Portal ID")}::{Identifier(ticketId, "Ticket ID")}";
 
     private static string Digest(TicketProjection value) =>
@@ -382,11 +385,10 @@ internal static class TicketEndpoints
         if (authenticated is null)
             return Results.Json(new { ok = false, code = "PORTAL_AUTHENTICATION_FAILED" }, statusCode: 404);
 
-        TicketEventRequest? request;
         try
         {
-            request = await context.Request.ReadFromJsonAsync<TicketEventRequest>(cancellationToken);
-            if (request is null) throw new InvalidDataException("Ticket event is empty.");
+            var request = await context.Request.ReadFromJsonAsync<TicketEventRequest>(cancellationToken)
+                ?? throw new InvalidDataException("Ticket event is empty.");
             var result = store.ApplyEvent(authenticated.PortalId, request);
             audit.Write(new SecurityAuditEvent(
                 authenticated.PortalId,
