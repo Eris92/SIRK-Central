@@ -125,7 +125,7 @@ internal sealed class BackupArchiveService
             if (!string.Equals(unlocked.Recipient, info.Recipient, StringComparison.Ordinal))
                 throw new InvalidDataException("Backup recipient does not match the active encrypted key.");
 
-            var operationRoot = Path.Combine(_backupRoot, $".restore-{Guid.NewGuid():N}");
+            var operationRoot = Path.Combine(Path.GetTempPath(), $"sirk-central-restore-{Guid.NewGuid():N}");
             var identityPath = Path.Combine(operationRoot, "identity.agekey");
             var decryptedTar = Path.Combine(operationRoot, "restore.tar.gz");
             var stagingRoot = Path.Combine(operationRoot, "staging");
