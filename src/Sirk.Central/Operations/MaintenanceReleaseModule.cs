@@ -1,4 +1,6 @@
 using System.Net.Http.Json;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.Extensions.Options;
@@ -10,7 +12,18 @@ internal sealed record MaintenancePolicy(bool AutomaticUpdates, string Channel, 
 internal sealed record UpdateRequest(string? Version, string? Channel, bool DryRun, string Confirmation);
 internal sealed record UpdateJob(string Id, string State, string Version, string Channel, bool DryRun, DateTimeOffset CreatedAtUtc, string RequestedBy, string? Error);
 internal sealed record OperationsState(int Schema, MaintenancePolicy Policy, Dictionary<string, UpdateJob> Jobs);
-internal sealed record PortalReleaseMetadata(int SchemaVersion, string ApplicationId, string Version, string Channel, string PackageUrl, string Sha256, string Architecture, DateTimeOffset? PublishedAtUtc, string Commit);
+internal sealed record PortalReleaseMetadata(
+    int SchemaVersion,
+    string ApplicationId,
+    string Version,
+    string Channel,
+    string PackageUrl,
+    string Sha256,
+    string Architecture,
+    DateTimeOffset? PublishedAtUtc,
+    string Commit,
+    string? KeyId,
+    string? Signature);
 
 internal sealed class OperationsStore
 {
@@ -80,6 +93,7 @@ internal sealed class OperationsStore
         using var stream = File.OpenRead(_path);
         return JsonSerializer.Deserialize<OperationsState>(stream, JsonOptions);
     }
+
     private void Persist()
     {
         var temporary = $"{_path}.tmp-{Environment.ProcessId}-{Guid.NewGuid():N}";
@@ -96,8 +110,10 @@ internal sealed class OperationsStore
         }
         finally { File.Delete(temporary); }
     }
+
     private static string NormalizeChannel(string? value) => (value ?? string.Empty).Trim().ToLowerInvariant() switch
     { "stable" => "stable", "dev" => "dev", _ => throw new InvalidDataException("Channel must be stable or dev.") };
+
     private static string NormalizeVersion(string? value)
     {
         var result = (value ?? string.Empty).Trim();
@@ -105,6 +121,7 @@ internal sealed class OperationsStore
             throw new InvalidDataException("Version is invalid.");
         return result;
     }
+
     private static string NormalizeText(string? value, int max)
     {
         var result = (value ?? string.Empty).Trim();
@@ -120,13 +137,17 @@ internal sealed class PortalReleaseCatalog : IDisposable
     private readonly HttpClient _client;
     private readonly object _sync = new();
     private readonly Dictionary<string, (DateTimeOffset Expires, PortalReleaseMetadata Value)> _cache = [];
+    private readonly byte[]? _publicKey;
+    private readonly bool _requireSignature;
 
-    public PortalReleaseCatalog()
+    public PortalReleaseCatalog(IOptions<SecurityOptions> options, IHostEnvironment environment)
     {
         _client = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(15) };
         _client.DefaultRequestHeaders.UserAgent.ParseAdd("SIRK-Central/.NET10");
         _client.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
         _client.DefaultRequestHeaders.Add("X-GitHub-Api-Version", "2022-11-28");
+        _requireSignature = options.Value.RequireSignedReleases && !environment.IsDevelopment();
+        _publicKey = LoadPublicKey(options.Value.ReleaseSigningPublicKeyFile, _requireSignature);
     }
 
     public async Task<PortalReleaseMetadata> LatestAsync(string channel, CancellationToken cancellationToken)
@@ -157,7 +178,7 @@ internal sealed class PortalReleaseCatalog : IDisposable
         using var metadataResponse = await GetTrustedAsync(metadataUri, cancellationToken);
         var metadata = await metadataResponse.Content.ReadFromJsonAsync<PortalReleaseMetadata>(cancellationToken: cancellationToken)
             ?? throw new InvalidDataException("Portal release metadata is empty.");
-        metadata = Validate(metadata, channel);
+        metadata = Validate(metadata, channel, _publicKey, _requireSignature);
         lock (_sync) _cache[channel] = (DateTimeOffset.UtcNow.AddMinutes(5), metadata);
         return metadata;
     }
@@ -176,42 +197,126 @@ internal sealed class PortalReleaseCatalog : IDisposable
                 continue;
             }
             response.EnsureSuccessStatusCode();
-            if (response.Content.Headers.ContentLength is > 2_097_152) { response.Dispose(); throw new InvalidDataException("Release response is too large."); }
+            if (response.Content.Headers.ContentLength is > 2_097_152)
+            {
+                response.Dispose();
+                throw new InvalidDataException("Release response is too large.");
+            }
             return response;
         }
         throw new HttpRequestException("GitHub redirect limit exceeded.");
     }
 
-    internal static PortalReleaseMetadata Validate(PortalReleaseMetadata value, string requestedChannel)
+    internal static PortalReleaseMetadata Validate(
+        PortalReleaseMetadata value,
+        string requestedChannel,
+        byte[]? publicKey = null,
+        bool requireSignature = false)
     {
         if (value.SchemaVersion != 1 || value.ApplicationId != "sirk-portal") throw new InvalidDataException("Portal release metadata schema is invalid.");
         if (value.Architecture != "win-x64") throw new InvalidDataException("Portal release architecture is invalid.");
         if (string.IsNullOrWhiteSpace(value.Version) || value.Version.Length > 80 || value.Version.Any(ch => !(char.IsAsciiLetterOrDigit(ch) || ch is '.' or '+' or '_' or '-')))
             throw new InvalidDataException("Portal release version is invalid.");
-        if (string.IsNullOrWhiteSpace(value.Sha256) || value.Sha256.Length != 64 || value.Sha256.Any(ch => !Uri.IsHexDigit(ch))) throw new InvalidDataException("Portal release SHA-256 is invalid.");
+        if (string.IsNullOrWhiteSpace(value.Sha256) || value.Sha256.Length != 64 || value.Sha256.Any(ch => !Uri.IsHexDigit(ch)))
+            throw new InvalidDataException("Portal release SHA-256 is invalid.");
         var packageUri = ValidateTrustedUri(value.PackageUrl);
-        if (!packageUri.AbsolutePath.EndsWith("-win-x64.zip", StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("Portal package asset is invalid.");
+        if (!packageUri.AbsolutePath.EndsWith("-win-x64.zip", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("Portal package asset is invalid.");
         var channel = value.Channel == "stable" ? "stable" : "dev";
-        if (requestedChannel == "stable" && channel != "stable") throw new InvalidDataException("Stable release metadata has a non-stable channel.");
+        if (requestedChannel == "stable" && channel != "stable")
+            throw new InvalidDataException("Stable release metadata has a non-stable channel.");
         var commit = value.Commit ?? string.Empty;
         if (commit.Length > 80) commit = commit[..80];
-        return value with { Channel = channel, Sha256 = value.Sha256.ToUpperInvariant(), Commit = commit };
+        var normalized = value with { Channel = channel, Sha256 = value.Sha256.ToUpperInvariant(), Commit = commit };
+        VerifySignature(normalized, publicKey, requireSignature);
+        return normalized;
     }
+
+    private static void VerifySignature(PortalReleaseMetadata value, byte[]? publicKey, bool required)
+    {
+        if (publicKey is null)
+        {
+            if (required) throw new InvalidDataException("Release signing public key is not configured.");
+            return;
+        }
+        if (publicKey.Length != 32) throw new InvalidDataException("Release signing public key must contain 32 bytes.");
+        if (string.IsNullOrWhiteSpace(value.KeyId) || value.KeyId.Length > 80 ||
+            value.KeyId.Any(ch => !(char.IsAsciiLetterOrDigit(ch) || ch is '.' or '_' or '-')))
+            throw new InvalidDataException("Release signing key ID is invalid.");
+        byte[] signature;
+        try { signature = Convert.FromBase64String(value.Signature ?? string.Empty); }
+        catch (FormatException exception) { throw new InvalidDataException("Release signature is not valid Base64.", exception); }
+        if (signature.Length != 64) throw new InvalidDataException("Release signature must contain 64 bytes.");
+        var data = Encoding.UTF8.GetBytes(CanonicalPayload(value));
+        try
+        {
+            if (!Ed25519.Verify(signature, data, publicKey))
+                throw new InvalidDataException("Release metadata signature verification failed.");
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(signature);
+            CryptographicOperations.ZeroMemory(data);
+        }
+    }
+
+    internal static string CanonicalPayload(PortalReleaseMetadata value) => string.Join('\n',
+        value.SchemaVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        value.ApplicationId,
+        value.Version,
+        value.Channel,
+        value.PackageUrl,
+        value.Sha256.ToUpperInvariant(),
+        value.Architecture,
+        value.Commit ?? string.Empty);
+
+    private static byte[]? LoadPublicKey(string path, bool required)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            if (required) throw new InvalidOperationException("Production startup refused: ReleaseSigningPublicKeyFile is required.");
+            return null;
+        }
+        var fullPath = Path.GetFullPath(path);
+        var info = new FileInfo(fullPath);
+        if (!info.Exists || info.Length is <= 0 or > 4096)
+            throw new InvalidDataException("Release signing public key file is missing, empty or too large.");
+        try
+        {
+            var key = Convert.FromBase64String(File.ReadAllText(fullPath).Trim());
+            if (key.Length != 32) throw new InvalidDataException("Release signing public key must contain 32 bytes.");
+            return key;
+        }
+        catch (FormatException exception)
+        {
+            throw new InvalidDataException("Release signing public key is not valid Base64.", exception);
+        }
+    }
+
     private static Uri ValidateTrustedUri(string value)
     {
         if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps || !TrustedHosts.Contains(uri.Host) || !string.IsNullOrEmpty(uri.UserInfo))
             throw new InvalidDataException("Release URL is not trusted.");
         return uri;
     }
-    public void Dispose() => _client.Dispose();
+
+    public void Dispose()
+    {
+        _client.Dispose();
+        if (_publicKey is not null) CryptographicOperations.ZeroMemory(_publicKey);
+    }
 }
 
 internal sealed class OperationsMiddleware
 {
     private readonly OperationsStore _store;
-    private readonly PortalReleaseCatalog _catalog = new();
+    private readonly PortalReleaseCatalog _catalog;
 
-    public OperationsMiddleware(IOptions<SecurityOptions> options) => _store = new OperationsStore(options);
+    public OperationsMiddleware(IOptions<SecurityOptions> options, IHostEnvironment environment)
+    {
+        _store = new OperationsStore(options);
+        _catalog = new PortalReleaseCatalog(options, environment);
+    }
 
     public async Task<bool> TryHandleAsync(HttpContext context)
     {
@@ -252,6 +357,7 @@ internal sealed class OperationsMiddleware
         catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException) { context.Response.StatusCode = 409; await context.Response.WriteAsJsonAsync(new { error = ex.Message }); return true; }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException) { context.Response.StatusCode = 502; await context.Response.WriteAsJsonAsync(new { code = "PORTAL_RELEASE_LOOKUP_FAILED", error = ex.Message }); return true; }
     }
+
     private static Task ValidateCsrf(HttpContext context) => context.RequestServices.GetRequiredService<IAntiforgery>().ValidateRequestAsync(context);
     private static string Actor(HttpContext context) => context.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? "unknown";
 }
