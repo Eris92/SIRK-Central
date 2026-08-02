@@ -12,6 +12,7 @@ using Sirk.Central.Organizations;
 using Sirk.Central.Portals;
 using Sirk.Central.Security;
 using Sirk.Central.Tickets;
+using Sirk.Central.Ui;
 
 if (RuntimeHealthProbe.IsRequested(args))
 {
@@ -90,12 +91,12 @@ builder.Services.AddAuthentication(options =>
     {
         OnRedirectToLogin = context =>
         {
-            context.Response.StatusCode = 401;
+            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
             return Task.CompletedTask;
         },
         OnRedirectToAccessDenied = context =>
         {
-            context.Response.StatusCode = 403;
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
             return Task.CompletedTask;
         },
         OnValidatePrincipal = context =>
@@ -103,6 +104,7 @@ builder.Services.AddAuthentication(options =>
             var source = context.Principal?.FindFirst("sirk:identity_source")?.Value;
             var currentId = context.Principal?
                 .FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+
             if (source == "local-break-glass")
             {
                 var current = context.HttpContext.RequestServices
@@ -113,6 +115,7 @@ builder.Services.AddAuthentication(options =>
                     context.RejectPrincipal();
                 return Task.CompletedTask;
             }
+
             if (source is "local-managed" or "entra")
             {
                 var current = currentId is null
@@ -127,6 +130,7 @@ builder.Services.AddAuthentication(options =>
                     !string.Equals(current.Role, role, StringComparison.Ordinal))
                     context.RejectPrincipal();
             }
+
             return Task.CompletedTask;
         }
     };
@@ -279,7 +283,7 @@ app.MapGet("/readyz", () => runtimeState.IsReady
         status = "starting",
         service = "sirk-central",
         utc = DateTimeOffset.UtcNow
-    }, statusCode: 503));
+    }, statusCode: StatusCodes.Status503ServiceUnavailable));
 app.MapGet("/api/v1/system/version", () => Results.Ok(new
 {
     product = "SIRK Central",
@@ -301,6 +305,8 @@ if (securityOptions.Enabled)
     app.MapBackupKeyLifecycle();
     app.MapSirkBackup();
     app.MapEntraSettings();
+    app.MapPortalManagement();
+    app.MapCurrentUiApi();
     app.MapApprovals();
     app.MapTickets();
     app.MapTicketCommands();
@@ -308,7 +314,7 @@ if (securityOptions.Enabled)
     app.MapIdentityAccessV2();
 }
 app.MapFallback(() => Results.Problem(
-    statusCode: 404,
+    statusCode: StatusCodes.Status404NotFound,
     title: "Resource not found"));
 app.Lifetime.ApplicationStarted.Register(runtimeState.MarkReady);
 app.Lifetime.ApplicationStopping.Register(runtimeState.MarkStopping);
