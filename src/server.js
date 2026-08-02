@@ -18,6 +18,7 @@ const { registerPortalTelemetry } = require("./modules/portal-telemetry");
 const { registerPortalBootstrap } = require("./modules/portal-bootstrap");
 const { registerPortalEnrollment } = require("./modules/portal-enrollment");
 const { registerPortalEnrollmentUi } = require("./modules/portal-enrollment-ui");
+const { registerPortalConnectionAdmin } = require("./modules/portal-connection-admin");
 const { registerPortalReleaseCatalog } = require("./modules/portal-release-catalog");
 const { registerAdministration } = require("./modules/administration");
 const { registerSecurityApi } = require("./modules/security-api");
@@ -25,7 +26,6 @@ const { registerApprovals } = require("./modules/approvals");
 const { registerPortalCommands } = require("./modules/portal-commands");
 const { registerTickets } = require("./modules/tickets");
 const { registerPortalTunnel } = require("./modules/portal-tunnel");
-
 const { VERSION } = require("./version");
 
 function createCentralRuntime(config) {
@@ -47,6 +47,7 @@ function createCentralRuntime(config) {
         registerPortalBootstrap,
         registerPortalEnrollment,
         registerPortalEnrollmentUi,
+        registerPortalConnectionAdmin,
         registerPortalReleaseCatalog,
         registerAdministration,
         registerSecurityApi,
