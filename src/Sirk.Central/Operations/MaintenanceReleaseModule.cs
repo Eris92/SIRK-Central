@@ -239,19 +239,26 @@ internal sealed class PortalReleaseCatalog : IDisposable
             if (required) throw new InvalidDataException("Release signing public key is not configured.");
             return;
         }
-        if (publicKey.Length != 32) throw new InvalidDataException("Release signing public key must contain 32 bytes.");
         if (string.IsNullOrWhiteSpace(value.KeyId) || value.KeyId.Length > 80 ||
             value.KeyId.Any(ch => !(char.IsAsciiLetterOrDigit(ch) || ch is '.' or '_' or '-')))
             throw new InvalidDataException("Release signing key ID is invalid.");
         byte[] signature;
         try { signature = Convert.FromBase64String(value.Signature ?? string.Empty); }
         catch (FormatException exception) { throw new InvalidDataException("Release signature is not valid Base64.", exception); }
-        if (signature.Length != 64) throw new InvalidDataException("Release signature must contain 64 bytes.");
+        if (signature.Length is < 64 or > 80) throw new InvalidDataException("Release ECDSA signature length is invalid.");
         var data = Encoding.UTF8.GetBytes(CanonicalPayload(value));
         try
         {
-            if (!Ed25519.Verify(signature, data, publicKey))
+            using var ecdsa = ECDsa.Create();
+            ecdsa.ImportSubjectPublicKeyInfo(publicKey, out var bytesRead);
+            if (bytesRead != publicKey.Length || ecdsa.KeySize != 256)
+                throw new InvalidDataException("Release signing key must be an ECDSA P-256 SubjectPublicKeyInfo key.");
+            if (!ecdsa.VerifyData(data, signature, HashAlgorithmName.SHA256, DSASignatureFormat.Rfc3279DerSequence))
                 throw new InvalidDataException("Release metadata signature verification failed.");
+        }
+        catch (CryptographicException exception)
+        {
+            throw new InvalidDataException("Release signing public key or signature is invalid.", exception);
         }
         finally
         {
@@ -284,12 +291,19 @@ internal sealed class PortalReleaseCatalog : IDisposable
         try
         {
             var key = Convert.FromBase64String(File.ReadAllText(fullPath).Trim());
-            if (key.Length != 32) throw new InvalidDataException("Release signing public key must contain 32 bytes.");
+            using var ecdsa = ECDsa.Create();
+            ecdsa.ImportSubjectPublicKeyInfo(key, out var bytesRead);
+            if (bytesRead != key.Length || ecdsa.KeySize != 256)
+                throw new InvalidDataException("Release signing key must be ECDSA P-256 SubjectPublicKeyInfo.");
             return key;
         }
         catch (FormatException exception)
         {
             throw new InvalidDataException("Release signing public key is not valid Base64.", exception);
+        }
+        catch (CryptographicException exception)
+        {
+            throw new InvalidDataException("Release signing public key is invalid.", exception);
         }
     }
 
