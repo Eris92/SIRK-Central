@@ -94,6 +94,10 @@ builder.Services
             },
             OnValidatePrincipal = context =>
             {
+                var source = context.Principal?.FindFirst("sirk:identity_source")?.Value;
+                if (!string.Equals(source, "local-break-glass", StringComparison.Ordinal))
+                    return Task.CompletedTask;
+
                 var store = context.HttpContext.RequestServices
                     .GetRequiredService<LocalIdentityStore>();
                 var currentIdentity = store.GetBreakGlassIdentity();
@@ -110,6 +114,7 @@ builder.Services
             }
         };
     });
+builder.Services.AddSirkEntraAuthentication();
 
 builder.Services.AddAuthorizationBuilder()
     .AddPolicy(
@@ -265,6 +270,7 @@ app.MapPortalProtocol();
 if (securityOptions.Enabled)
 {
     app.MapSirkAuthentication();
+    app.MapSirkEntraAuthentication();
     app.MapBackupKeyLifecycle();
     app.MapSirkBackup();
     app.MapEntraSettings();
