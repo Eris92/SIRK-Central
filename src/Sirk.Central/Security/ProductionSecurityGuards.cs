@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Security.Cryptography.X509Certificates;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.Options;
@@ -92,8 +93,13 @@ internal static class ProductionSecurityGuards
 
 internal sealed class SingleWriterLease : IDisposable
 {
+    private static readonly ConcurrentDictionary<string, byte> ProcessLeases =
+        new(StringComparer.OrdinalIgnoreCase);
+
     private readonly FileStream? _lease;
     private readonly bool _rangeLocked;
+    private readonly string? _path;
+    private int _disposed;
 
     public SingleWriterLease(IOptions<SecurityOptions> options)
     {
@@ -105,10 +111,14 @@ internal sealed class SingleWriterLease : IDisposable
             File.SetUnixFileMode(value.DataRoot, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
 
         var fileName = ValidateFileName(value.WriterLeaseFileName);
-        var path = Path.Combine(value.DataRoot, fileName);
+        _path = Path.GetFullPath(Path.Combine(value.DataRoot, fileName));
+        if (!ProcessLeases.TryAdd(_path, 0))
+            throw new InvalidOperationException(
+                "SIRK Central storage is already owned by another writer in this process.");
+
         try
         {
-            _lease = new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read, 4096,
+            _lease = new FileStream(_path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read, 4096,
                 FileOptions.WriteThrough);
             if (!OperatingSystem.IsMacOS())
             {
@@ -122,26 +132,37 @@ internal sealed class SingleWriterLease : IDisposable
             _lease.Flush(true);
             _lease.Position = 0;
             if (!OperatingSystem.IsWindows())
-                File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+                File.SetUnixFileMode(_path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
             _lease?.Dispose();
+            ProcessLeases.TryRemove(_path, out _);
             throw new InvalidOperationException(
                 "SIRK Central storage is already owned by another writer. File-backed storage supports exactly one active instance.",
                 exception);
+        }
+        catch
+        {
+            _lease?.Dispose();
+            ProcessLeases.TryRemove(_path, out _);
+            throw;
         }
     }
 
     public void Dispose()
     {
-        if (_lease is null) return;
-        if (_rangeLocked && !OperatingSystem.IsMacOS())
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        if (_lease is not null)
         {
-            try { _lease.Unlock(0, 1); }
-            catch (IOException) { }
+            if (_rangeLocked && !OperatingSystem.IsMacOS())
+            {
+                try { _lease.Unlock(0, 1); }
+                catch (IOException) { }
+            }
+            _lease.Dispose();
         }
-        _lease.Dispose();
+        if (_path is not null) ProcessLeases.TryRemove(_path, out _);
     }
 
     private static string ValidateFileName(string value)
