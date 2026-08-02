@@ -99,30 +99,9 @@ jobs:
 
       - name: Break Glass HTTP auth smoke
         env:
-          ASPNETCORE_ENVIRONMENT: Development
-          ASPNETCORE_URLS: http://127.0.0.1:18081
-          Sirk__Security__DataRoot: ${{ runner.temp }}/sirk-central-breakglass-smoke
-          Sirk__Security__BreakGlassAccessCode: ci-breakglass-access
-          Sirk__Security__BreakGlassInitialPassword: CI-BreakGlass-Password-2026!
-          SIRK_TEST_BASE_URL: http://127.0.0.1:18081
-          SIRK_TEST_BREAKGLASS_ACCESS_CODE: ci-breakglass-access
-          SIRK_TEST_BREAKGLASS_PASSWORD: CI-BreakGlass-Password-2026!
-        run: |
-          rm -rf "$Sirk__Security__DataRoot"
-          mkdir -p "$Sirk__Security__DataRoot"
-          dotnet artifacts/central/Sirk.Central.dll > "$RUNNER_TEMP/sirk-central-breakglass-smoke.log" 2>&1 &
-          central_pid=$!
-          cleanup() {
-            kill "$central_pid" 2>/dev/null || true
-            wait "$central_pid" 2>/dev/null || true
-          }
-          trap cleanup EXIT
-          if ! python3 .github/scripts/test-dotnet10-breakglass-auth.py; then
-            cat "$RUNNER_TEMP/sirk-central-breakglass-smoke.log"
-            exit 1
-          fi
-          cleanup
-          trap - EXIT
+          SIRK_TEST_CENTRAL_DLL: ${{ github.workspace }}/artifacts/central/Sirk.Central.dll
+          SIRK_TEST_ROOT: ${{ runner.temp }}/sirk-central-breakglass-smoke
+        run: python3 .github/scripts/test-dotnet10-breakglass-auth.py
 
       - name: Container build
         run: docker build --file Dockerfile.dotnet10 --tag sirk-central:dotnet10 .
