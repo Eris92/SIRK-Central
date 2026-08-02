@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>Sirk.Central.BackupKeyTests</AssemblyName>
+    <RootNamespace>Sirk.Central.BackupKeyTests</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <ProjectReference Include="../../src/Sirk.Central/Sirk.Central.csproj" />
+  </ItemGroup>
+</Project>
