@@ -16,14 +16,13 @@ internal static class BreakGlassMfaEndpoints
             .DisableAntiforgery();
 
         var canonical = endpoints.MapGroup("/api/v1/break-glass/mfa")
-            .RequireAuthorization(SirkPolicies.SecurityAdministration);
+            .RequireAuthorization(policy => policy.RequireRole(SirkRoles.BreakGlass));
         canonical.MapGet("/status", Status);
         canonical.MapPost("/recovery-codes/rotate", RotateAsync);
         canonical.MapDelete("/recovery-codes", RevokeAsync);
 
-        // Compatibility aliases for the existing Break-Glass settings card.
         var compatibility = endpoints.MapGroup("/api/break-glass/mfa")
-            .RequireAuthorization(SirkPolicies.SecurityAdministration);
+            .RequireAuthorization(policy => policy.RequireRole(SirkRoles.BreakGlass));
         compatibility.MapGet("/status", Status);
         compatibility.MapPost("/recovery-codes/rotate", RotateAsync);
         compatibility.MapDelete("/recovery-codes", RevokeAsync);
