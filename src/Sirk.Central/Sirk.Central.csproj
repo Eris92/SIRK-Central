@@ -7,6 +7,7 @@
     <InformationalVersion>2.0.0-dev.1</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <InvariantGlobalization>false</InvariantGlobalization>
+    <NoWarn>$(NoWarn);ASP0017</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
