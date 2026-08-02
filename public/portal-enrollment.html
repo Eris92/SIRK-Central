@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>SIRK Central — Portal Enrollment</title>
+  <link rel="stylesheet" href="/portal-enrollment.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/">SIRK Central</a>
+    <div class="actions">
+      <button id="language" type="button">EN</button>
+      <a href="/" data-i18n="back">Powrót</a>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div>
+        <p class="eyebrow">Control Plane</p>
+        <h1 data-i18n="title">Rejestracja Portali</h1>
+        <p data-i18n="subtitle">Jednorazowy token, zatwierdzenie administratora i szyfrowany bootstrap RSA-OAEP + AES-GCM.</p>
+      </div>
+      <div id="status" class="status" aria-live="polite"></div>
+    </section>
+
+    <section class="card">
+      <h2 data-i18n="newToken">Nowy token enrollment</h2>
+      <div class="form-grid">
+        <label>
+          <span data-i18n="label">Opis</span>
+          <input id="token-label" maxlength="100" value="Portal enrollment">
+        </label>
+        <label>
+          <span data-i18n="ttl">Ważność (minuty)</span>
+          <input id="token-ttl" type="number" min="5" max="1440" value="30">
+        </label>
+      </div>
+      <button id="issue-token" class="primary" type="button" data-i18n="generate">Generuj token</button>
+      <div id="token-result" class="secret hidden">
+        <div>
+          <strong data-i18n="copyNow">Skopiuj teraz — token jest zwracany tylko raz.</strong>
+          <code id="token-value"></code>
+          <small id="token-expiry"></small>
+        </div>
+        <button id="copy-token" type="button" data-i18n="copy">Kopiuj</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="section-heading">
+        <div>
+          <h2 data-i18n="requests">Requesty enrollment</h2>
+          <p data-i18n="requestsHint">Zatwierdzenie tworzy Portal i szyfruje credential dla jego klucza RSA.</p>
+        </div>
+        <button id="refresh" type="button" data-i18n="refresh">Odśwież</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th data-i18n="portal">Portal</th>
+              <th data-i18n="version">Wersja / platforma</th>
+              <th data-i18n="created">Utworzono</th>
+              <th data-i18n="state">Status</th>
+              <th data-i18n="operations">Operacje</th>
+            </tr>
+          </thead>
+          <tbody id="requests-body"></tbody>
+        </table>
+      </div>
+      <div id="empty" class="empty hidden" data-i18n="empty">Brak requestów enrollment.</div>
+    </section>
+  </main>
+
+  <script src="/portal-enrollment.js" defer></script>
+</body>
+</html>
