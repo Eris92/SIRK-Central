@@ -8,6 +8,7 @@ using Sirk.Central.Approvals;
 using Sirk.Central.Backup;
 using Sirk.Central.Portals;
 using Sirk.Central.Security;
+using Sirk.Central.Tickets;
 
 if (RuntimeHealthProbe.IsRequested(args))
 {
@@ -44,6 +45,7 @@ builder.Services.AddSingleton<BackupKeyStore>();
 builder.Services.AddSingleton<BackupArchiveService>();
 builder.Services.AddSingleton<EntraSettingsStore>();
 builder.Services.AddSingleton<ApprovalStore>();
+builder.Services.AddSingleton<TicketStore>();
 
 var dataProtection = builder.Services
     .AddDataProtection()
@@ -203,6 +205,7 @@ if (securityOptions.Enabled)
     _ = app.Services.GetRequiredService<BackupArchiveService>();
     _ = app.Services.GetRequiredService<EntraSettingsStore>();
     _ = app.Services.GetRequiredService<ApprovalStore>();
+    _ = app.Services.GetRequiredService<TicketStore>();
     var auditLog = app.Services.GetRequiredService<SecurityAuditLog>();
     _ = auditLog.VerifyIntegrity();
 }
@@ -278,6 +281,7 @@ if (securityOptions.Enabled)
     app.MapSirkBackup();
     app.MapEntraSettings();
     app.MapApprovals();
+    app.MapTickets();
 }
 
 app.MapFallback(() => Results.Problem(
