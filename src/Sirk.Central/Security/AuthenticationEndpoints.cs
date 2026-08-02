@@ -2,7 +2,6 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Authentication;
-using Microsoft.Extensions.Options;
 
 namespace Sirk.Central.Security;
 
@@ -44,9 +43,9 @@ internal static class AuthenticationEndpoints
         endpoints.MapPost("/api/v1/auth/logout", LogoutAsync)
             .RequireAuthorization();
 
-        // Compatibility routes used by the current Central UI. These are kept
-        // intentionally thin and delegate to the same hardened implementation.
-        endpoints.MapGet("/api/access", ValidateAccessAsync)
+        // Compatibility routes consumed by the current Central UI. They use
+        // the same password-first and MFA-gated implementation as the v1 API.
+        endpoints.MapGet("/api/access", ValidateAccess)
             .AllowAnonymous()
             .RequireRateLimiting(SecurityEndpointNames.BreakGlassLoginRateLimit);
 
@@ -64,15 +63,12 @@ internal static class AuthenticationEndpoints
         return endpoints;
     }
 
-    private static IResult ValidateAccessAsync(HttpContext context, LocalIdentityStore identityStore)
+    private static IResult ValidateAccess(HttpContext context, LocalIdentityStore identityStore)
     {
         context.Response.Headers.CacheControl = "no-store";
         var accessCode = ReadBearerToken(context);
         if (string.IsNullOrWhiteSpace(accessCode) || !identityStore.VerifyAccessCode(accessCode))
-        {
             return Results.Json(new { ok = false, error = "Access link is invalid or expired." }, statusCode: 404);
-        }
-
         return Results.Ok(new { ok = true, localLoginEnabled = true });
     }
 
@@ -80,29 +76,55 @@ internal static class AuthenticationEndpoints
         BreakGlassLoginRequest request,
         HttpContext context,
         LocalIdentityStore identityStore,
-        SecurityAuditLog auditLog,
-        IOptions<SecurityOptions> options)
-    {
-        var accessCode = ReadBearerToken(context);
-        return LoginCoreAsync(accessCode, request, context, identityStore, auditLog, options, compatibilityResponse: true);
-    }
+        WebAuthnCredentialStore webAuthnCredentials,
+        BreakGlassRecoveryCodeStore recoveryCodes,
+        BreakGlassLoginTransactionStore transactions,
+        BreakGlassSessionService sessions,
+        SecurityAuditLog auditLog) =>
+        LoginCoreAsync(
+            ReadBearerToken(context),
+            request,
+            context,
+            identityStore,
+            webAuthnCredentials,
+            recoveryCodes,
+            transactions,
+            sessions,
+            auditLog,
+            compatibilityResponse: true);
 
     private static Task<IResult> LoginAsync(
         string accessCode,
         BreakGlassLoginRequest request,
         HttpContext context,
         LocalIdentityStore identityStore,
-        SecurityAuditLog auditLog,
-        IOptions<SecurityOptions> options) =>
-        LoginCoreAsync(accessCode, request, context, identityStore, auditLog, options, compatibilityResponse: false);
+        WebAuthnCredentialStore webAuthnCredentials,
+        BreakGlassRecoveryCodeStore recoveryCodes,
+        BreakGlassLoginTransactionStore transactions,
+        BreakGlassSessionService sessions,
+        SecurityAuditLog auditLog) =>
+        LoginCoreAsync(
+            accessCode,
+            request,
+            context,
+            identityStore,
+            webAuthnCredentials,
+            recoveryCodes,
+            transactions,
+            sessions,
+            auditLog,
+            compatibilityResponse: false);
 
     private static async Task<IResult> LoginCoreAsync(
         string? accessCode,
         BreakGlassLoginRequest request,
         HttpContext context,
         LocalIdentityStore identityStore,
+        WebAuthnCredentialStore webAuthnCredentials,
+        BreakGlassRecoveryCodeStore recoveryCodes,
+        BreakGlassLoginTransactionStore transactions,
+        BreakGlassSessionService sessions,
         SecurityAuditLog auditLog,
-        IOptions<SecurityOptions> options,
         bool compatibilityResponse)
     {
         context.Response.Headers.CacheControl = "no-store";
@@ -120,8 +142,14 @@ internal static class AuthenticationEndpoints
         catch (Exception exception) when (exception is CryptographicException or InvalidDataException)
         {
             auditLog.Write(new SecurityAuditEvent(
-                "anonymous", suppliedUserName, "authentication.break-glass", "session", string.Empty,
-                false, remoteAddress, context.TraceIdentifier,
+                "anonymous",
+                suppliedUserName,
+                "authentication.break-glass",
+                "session",
+                string.Empty,
+                false,
+                remoteAddress,
+                context.TraceIdentifier,
                 new Dictionary<string, string> { ["reason"] = "identity-store-error" }));
             return Results.Problem(statusCode: 503, title: "Authentication service unavailable");
         }
@@ -129,55 +157,75 @@ internal static class AuthenticationEndpoints
         if (identity is null)
         {
             auditLog.Write(new SecurityAuditEvent(
-                "anonymous", suppliedUserName, "authentication.break-glass", "session", string.Empty,
-                false, remoteAddress, context.TraceIdentifier,
+                "anonymous",
+                suppliedUserName,
+                "authentication.break-glass",
+                "session",
+                string.Empty,
+                false,
+                remoteAddress,
+                context.TraceIdentifier,
                 new Dictionary<string, string> { ["reason"] = "invalid-credentials" }));
             await ApplyFailureDelayAsync(context.RequestAborted);
-            return Results.Json(new { ok = false, code = "AUTHENTICATION_FAILED", error = "Authentication failed." }, statusCode: 401);
+            return Results.Json(
+                new { ok = false, code = "AUTHENTICATION_FAILED", error = "Authentication failed." },
+                statusCode: 401);
         }
 
-        // First login and accounts without enrolled MFA authenticate with the
-        // verified access URL, username and password. MFA is only requested by
-        // the dedicated WebAuthn flow after an authenticator has been enrolled.
-        var expiresAt = DateTimeOffset.UtcNow.AddMinutes(options.Value.SessionMinutes);
-        var claims = new List<Claim>
+        var methods = new List<string>(2);
+        if (webAuthnCredentials.ListByUser(identity.Id).Count > 0) methods.Add("passkey");
+        if (recoveryCodes.IsConfigured(identity.Id)) methods.Add("recovery-code");
+
+        if (methods.Count > 0)
         {
-            new(ClaimTypes.NameIdentifier, identity.Id),
-            new(ClaimTypes.Name, identity.UserName),
-            new("amr", "pwd"),
-            new("sirk:identity_source", "local-break-glass"),
-            new("sirk:expires_at_utc", expiresAt.ToString("O"))
-        };
-        claims.AddRange(identity.Roles.Select(role => new Claim(ClaimTypes.Role, role)));
-
-        var principal = new ClaimsPrincipal(new ClaimsIdentity(
-            claims, SirkAuthenticationSchemes.Session, ClaimTypes.Name, ClaimTypes.Role));
-
-        await context.SignInAsync(
-            SirkAuthenticationSchemes.Session,
-            principal,
-            new AuthenticationProperties
+            var transaction = transactions.Issue(identity, context);
+            auditLog.Write(new SecurityAuditEvent(
+                identity.Id,
+                identity.UserName,
+                "authentication.break-glass.password-verified",
+                "login-transaction",
+                identity.Id,
+                true,
+                remoteAddress,
+                context.TraceIdentifier,
+                new Dictionary<string, string>
+                {
+                    ["mfaRequired"] = "true",
+                    ["methods"] = string.Join(',', methods),
+                    ["expiresAtUtc"] = transaction.ExpiresAtUtc.ToString("O")
+                }));
+            return Results.Json(new
             {
-                AllowRefresh = false,
-                IsPersistent = false,
-                IssuedUtc = DateTimeOffset.UtcNow,
-                ExpiresUtc = expiresAt
-            });
+                ok = true,
+                authenticated = false,
+                mfaRequired = true,
+                methods,
+                preferredMethod = methods.Contains("passkey", StringComparer.Ordinal) ? "passkey" : methods[0],
+                transactionToken = transaction.Token,
+                expiresAtUtc = transaction.ExpiresAtUtc
+            }, statusCode: 202);
+        }
 
+        var expiresAt = await sessions.SignInAsync(context, identity, "pwd");
         auditLog.Write(new SecurityAuditEvent(
-            identity.Id, identity.UserName, "authentication.break-glass", "session", identity.Id,
-            true, remoteAddress, context.TraceIdentifier,
+            identity.Id,
+            identity.UserName,
+            "authentication.break-glass",
+            "session",
+            identity.Id,
+            true,
+            remoteAddress,
+            context.TraceIdentifier,
             new Dictionary<string, string>
             {
                 ["roles"] = string.Join(',', identity.Roles),
                 ["expiresAtUtc"] = expiresAt.ToString("O"),
-                ["mfaRequired"] = "false"
+                ["mfaRequired"] = "false",
+                ["mfaEnrollmentRecommended"] = "true"
             }));
 
         if (compatibilityResponse)
-        {
-            return Results.Ok(ToCompatibilityIdentity(identity));
-        }
+            return Results.Ok(BreakGlassSessionService.CompatibilityIdentity(identity, enrollmentRecommended: true));
 
         return Results.Ok(new
         {
@@ -193,45 +241,28 @@ internal static class AuthenticationEndpoints
     private static IResult CompatibilitySession(HttpContext context)
     {
         context.Response.Headers.CacheControl = "no-store";
-        if (context.User.Identity?.IsAuthenticated != true)
-        {
-            return Results.Unauthorized();
-        }
-
-        var roles = context.User.FindAll(ClaimTypes.Role).Select(x => x.Value).ToArray();
+        if (context.User.Identity?.IsAuthenticated != true) return Results.Unauthorized();
         var identity = new LocalIdentity(
             context.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? string.Empty,
             context.User.Identity?.Name ?? string.Empty,
-            roles);
-        return Results.Ok(ToCompatibilityIdentity(identity));
-    }
-
-    private static object ToCompatibilityIdentity(LocalIdentity identity)
-    {
-        var role = identity.Roles.FirstOrDefault() ?? string.Empty;
-        return new
-        {
-            id = identity.Id,
-            username = identity.UserName,
-            displayName = identity.UserName,
-            role,
-            roles = identity.Roles,
-            permissions = new[] { "*" },
-            source = "local",
-            builtIn = true,
-            mfaRequired = false,
-            mfaEnrollmentRecommended = true
-        };
+            context.User.FindAll(ClaimTypes.Role).Select(value => value.Value).ToArray());
+        return Results.Ok(BreakGlassSessionService.CompatibilityIdentity(identity, enrollmentRecommended: false));
     }
 
     private static IResult Session(HttpContext context)
     {
         context.Response.Headers.CacheControl = "no-store";
         var user = context.User;
-        var roles = user.FindAll(ClaimTypes.Role).Select(c => c.Value)
-            .Distinct(StringComparer.Ordinal).OrderBy(v => v, StringComparer.Ordinal).ToArray();
+        var roles = user.FindAll(ClaimTypes.Role)
+            .Select(claim => claim.Value)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(value => value, StringComparer.Ordinal)
+            .ToArray();
         DateTimeOffset? expiresAt = DateTimeOffset.TryParse(
-            user.FindFirstValue("sirk:expires_at_utc"), out var parsedExpiry) ? parsedExpiry : null;
+            user.FindFirstValue("sirk:expires_at_utc"),
+            out var parsedExpiry)
+            ? parsedExpiry
+            : null;
 
         return Results.Ok(new AuthenticatedSessionResponse(
             user.Identity?.IsAuthenticated == true,
@@ -247,9 +278,7 @@ internal static class AuthenticationEndpoints
         context.Response.Headers.CacheControl = "no-store";
         var tokens = antiforgery.GetAndStoreTokens(context);
         if (string.IsNullOrWhiteSpace(tokens.RequestToken))
-        {
             return Results.Problem(statusCode: 503, title: "CSRF token could not be issued");
-        }
         return Results.Ok(new { headerName = tokens.HeaderName, requestToken = tokens.RequestToken });
     }
 
@@ -265,20 +294,27 @@ internal static class AuthenticationEndpoints
         }
         catch (AntiforgeryValidationException)
         {
-            return Results.Json(new { ok = false, code = "CSRF_VALIDATION_FAILED", error = "CSRF validation failed." }, statusCode: 400);
+            return Results.Json(
+                new { ok = false, code = "CSRF_VALIDATION_FAILED", error = "CSRF validation failed." },
+                statusCode: 400);
         }
 
         var actorId = context.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? "unknown";
         var actorName = context.User.Identity?.Name ?? "unknown";
         auditLog.Write(new SecurityAuditEvent(
-            actorId, actorName, "authentication.logout", "session", actorId,
-            true, RemoteAddress(context), context.TraceIdentifier));
-
+            actorId,
+            actorName,
+            "authentication.logout",
+            "session",
+            actorId,
+            true,
+            RemoteAddress(context),
+            context.TraceIdentifier));
         await context.SignOutAsync(SirkAuthenticationSchemes.Session);
         return Results.Ok(new { ok = true });
     }
 
-    private static string ReadBearerToken(HttpContext context)
+    internal static string ReadBearerToken(HttpContext context)
     {
         var header = context.Request.Headers.Authorization.ToString();
         const string prefix = "Bearer ";
@@ -287,7 +323,7 @@ internal static class AuthenticationEndpoints
             : string.Empty;
     }
 
-    private static string RemoteAddress(HttpContext context)
+    internal static string RemoteAddress(HttpContext context)
     {
         var address = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
         return address[..Math.Min(address.Length, 128)];
@@ -299,7 +335,11 @@ internal static class AuthenticationEndpoints
         if (normalized.Length is < 1 or > 64) return "unknown";
         foreach (var character in normalized)
         {
-            if (character is not (>= 'a' and <= 'z') and not (>= '0' and <= '9') and not '.' and not '_' and not '-')
+            if (character is not (>= 'a' and <= 'z') and
+                not (>= '0' and <= '9') and
+                not '.' and
+                not '_' and
+                not '-')
                 return "unknown";
         }
         return normalized;
