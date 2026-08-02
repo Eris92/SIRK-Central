@@ -23,6 +23,12 @@
         "break-glass": "breakGlassView"
     });
 
+    const settingsPanels = Object.freeze({
+        entra: "settingsTabEntra",
+        updates: "settingsTabUpdates",
+        backup: "settingsTabBackup"
+    });
+
     const bootstrap = window.__SIRK_WORKSPACE_BOOTSTRAP || { workspaces: ["portals"] };
     let allowed = new Set(Array.isArray(bootstrap.workspaces) ? bootstrap.workspaces : ["portals"]);
     const currentPath = window.location.pathname.toLowerCase();
@@ -86,6 +92,50 @@
         if (backButton) backButton.hidden = isWorkspaceOpen("portals");
     }
 
+    function synchronizeSettingsNavigation() {
+        const settingsView = document.getElementById("settingsView");
+        if (!settingsView) return;
+
+        const navigation = settingsView.querySelector(".settings-tabs");
+        if (!navigation) return;
+
+        for (const button of navigation.querySelectorAll("[data-settings-tab]")) {
+            const name = button.dataset.settingsTab;
+            button.hidden = !Object.hasOwn(settingsPanels, name);
+        }
+
+        const visibleActive = navigation.querySelector(
+            '[data-settings-tab]:not([hidden]).active'
+        );
+        if (!visibleActive) openSettingsTab("entra");
+    }
+
+    function openSettingsTab(name) {
+        const selected = Object.hasOwn(settingsPanels, name) ? name : "entra";
+        const settingsView = document.getElementById("settingsView");
+        if (!settingsView) return;
+
+        for (const [tab, panelId] of Object.entries(settingsPanels)) {
+            const panel = document.getElementById(panelId);
+            if (panel) panel.hidden = tab !== selected;
+        }
+
+        const navigation = settingsView.querySelector(".settings-tabs");
+        if (navigation) {
+            for (const button of navigation.querySelectorAll("[data-settings-tab]")) {
+                const tab = button.dataset.settingsTab;
+                button.hidden = !Object.hasOwn(settingsPanels, tab);
+                button.classList.toggle("active", tab === selected);
+            }
+        }
+
+        if (selected === "updates") {
+            document.getElementById("refreshUpdateButton")?.click();
+        } else if (selected === "backup") {
+            document.getElementById("refreshBackupButton")?.click();
+        }
+    }
+
     function activateCurrentWorkspace() {
         if (currentWorkspace === "portals" || !allowed.has(currentWorkspace)) return true;
         if (isWorkspaceOpen(currentWorkspace)) return true;
@@ -116,6 +166,7 @@
         openTimer = window.setInterval(function () {
             attempts += 1;
             synchronizeMenu();
+            synchronizeSettingsNavigation();
             if (activateCurrentWorkspace() || attempts >= 60) stopOpenTimer();
         }, 100);
     }
@@ -143,6 +194,7 @@
                     workspaces: Array.from(allowed)
                 };
                 synchronizeMenu();
+                synchronizeSettingsNavigation();
                 enforceCurrentWorkspace();
             } catch (_) {
                 // The base UI owns authentication errors and login rendering.
@@ -162,12 +214,21 @@
         if (!dashboardVisible()) return;
         refreshAllowedFromSession();
         synchronizeMenu();
+        synchronizeSettingsNavigation();
         enforceCurrentWorkspace();
     }
 
     document.addEventListener("click", function (event) {
         const button = event.target && event.target.closest ? event.target.closest("button") : null;
         if (!button) return;
+
+        const settingsTab = button.dataset.settingsTab;
+        if (settingsTab && Object.hasOwn(settingsPanels, settingsTab)) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            openSettingsTab(settingsTab);
+            return;
+        }
 
         if (button.id === "backButton") {
             if (button.dataset.workspaceInternalOpen === "1") return;
@@ -198,12 +259,29 @@
 
     function initialize() {
         synchronizeMenu();
+        synchronizeSettingsNavigation();
         enforceCurrentWorkspace();
 
         const dashboard = document.getElementById("dashboardView");
         if (dashboard) {
             const observer = new MutationObserver(dashboardBecameVisible);
             observer.observe(dashboard, { attributes: true, attributeFilter: ["hidden"] });
+        }
+
+        const settingsView = document.getElementById("settingsView");
+        if (settingsView) {
+            new MutationObserver(function () {
+                synchronizeSettingsNavigation();
+                if (!settingsView.hidden) {
+                    const current = settingsView.querySelector(
+                        '[data-settings-tab]:not([hidden]).active'
+                    );
+                    openSettingsTab(current?.dataset.settingsTab || "entra");
+                }
+            }).observe(settingsView, {
+                attributes: true,
+                attributeFilter: ["hidden"]
+            });
         }
 
         for (const id of ["portalsView", ...Object.values(viewIds)]) {
@@ -219,6 +297,7 @@
         for (const delay of [0, 100, 350, 800, 1600]) {
             window.setTimeout(function () {
                 synchronizeMenu();
+                synchronizeSettingsNavigation();
                 dashboardBecameVisible();
             }, delay);
         }
