@@ -9,6 +9,7 @@ on:
       - 'Directory.Build.props'
       - 'Dockerfile.dotnet10'
       - 'src/Sirk.Central/**'
+      - 'tests/Sirk.Central.ProtocolTests/**'
       - 'public/**'
       - '.github/workflows/dotnet10-rewrite.yml'
   pull_request:
@@ -18,6 +19,7 @@ on:
       - 'Directory.Build.props'
       - 'Dockerfile.dotnet10'
       - 'src/Sirk.Central/**'
+      - 'tests/Sirk.Central.ProtocolTests/**'
       - 'public/**'
       - '.github/workflows/dotnet10-rewrite.yml'
 
@@ -37,13 +39,16 @@ jobs:
       - name: SDK contract
         run: |
           dotnet --info
-          grep -R --line-number --include='*.csproj' --include='*.props' --include='global.json' -E 'net8\.0|net9\.0' src/Sirk.Central Directory.Build.props global.json && exit 1 || true
+          grep -R --line-number --include='*.csproj' --include='*.props' --include='global.json' -E 'net8\.0|net9\.0' src/Sirk.Central tests/Sirk.Central.ProtocolTests Directory.Build.props global.json && exit 1 || true
 
       - name: Restore
-        run: dotnet restore src/Sirk.Central/Sirk.Central.csproj
+        run: dotnet restore tests/Sirk.Central.ProtocolTests/Sirk.Central.ProtocolTests.csproj
 
       - name: Build
-        run: dotnet build src/Sirk.Central/Sirk.Central.csproj --configuration Release --no-restore
+        run: dotnet build tests/Sirk.Central.ProtocolTests/Sirk.Central.ProtocolTests.csproj --configuration Release --no-restore
+
+      - name: Portal protocol contracts
+        run: dotnet run --project tests/Sirk.Central.ProtocolTests/Sirk.Central.ProtocolTests.csproj --configuration Release --no-build
 
       - name: Publish
         run: dotnet publish src/Sirk.Central/Sirk.Central.csproj --configuration Release --no-build --output artifacts/central
