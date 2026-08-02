@@ -18,12 +18,12 @@ try
     var reopened = new OperationsStore(options);
     Assert(reopened.Jobs().Single().State == "completed", "operations persistence");
 
-    var publicKey = Convert.FromBase64String("nWG8YCVQdKDVL7AEBI8HsNVat3uwNl9WMQ1oMa2j09Y=");
+    var publicKey = Convert.FromBase64String("MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEyAa1Magxap4VLMaf4Qm7cXciGiBoFpHeO3zmaKls7VPaTUiBqZVpPR0nCgIF4gx4pNeiG9hjkFFM4LIfWgaNGw==");
     var metadata = PortalReleaseCatalog.Validate(new PortalReleaseMetadata(
         1, "sirk-portal", "2.0.0", "stable",
         "https://github.com/Eris92/SIRK-Portal/releases/download/v2.0.0/SIRK-Portal-2.0.0-win-x64.zip",
         new string('A', 64), "win-x64", DateTimeOffset.UtcNow, "abcdef", "release-key-2026-01",
-        "MbE7Q2zt/NwjLrjINUQkT1tqOnbO9IclaUKLL/Z0EX7cpSdWIzcL5OYUivwRZk4Z0gW47jbMh+S175RbspZmBA=="),
+        "MEYCIQDGth4USUDA6ShxC4JouOo6P2zAWSA5WTFOtF1UQJq05wIhANmT6dNVvVL6BspYcTiskCkExjk63IwvcHZDOkN/r/4f"),
         "stable", publicKey, requireSignature: true);
     Assert(metadata.Channel == "stable" && metadata.Sha256 == new string('A', 64), "signed release metadata validation");
     Expect<InvalidDataException>(() => PortalReleaseCatalog.Validate(metadata with { PackageUrl = "https://evil.invalid/file.zip" }, "stable", publicKey, true));
