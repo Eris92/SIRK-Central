@@ -19,6 +19,8 @@ internal sealed record PortalAuthenticationResult(
         new(false, null, code, message);
 }
 
+internal sealed record PortalCredentialIdentity(string PortalId);
+
 internal sealed class PortalRequestAuthenticator
 {
     private readonly FilePortalRegistry _registry;
@@ -33,6 +35,17 @@ internal sealed class PortalRequestAuthenticator
         _registry = registry;
         _options = options.Value;
         _nonceGuard = nonceGuard;
+    }
+
+    public Task<PortalCredentialIdentity?> AuthenticateAsync(
+        HttpRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var result = AuthenticateCredentials(request);
+        return Task.FromResult(result.Succeeded && result.Portal is not null
+            ? new PortalCredentialIdentity(result.Portal.Id)
+            : null);
     }
 
     public PortalAuthenticationResult AuthenticateCredentials(HttpRequest request)
