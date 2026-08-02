@@ -1,4 +1,5 @@
 using System.Text;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.Extensions.Options;
 using Sirk.Central.Access;
 using Sirk.Central.Operations;
@@ -28,6 +29,14 @@ internal sealed class WebAuthnUiStartupFilter : IStartupFilter
     {
         app.Use(async (context, continuation) =>
         {
+            if (context.Request.Path.StartsWithSegments("/api/v1/operations") ||
+                context.Request.Path.StartsWithSegments("/api/v1/portals") ||
+                context.Request.Path.StartsWithSegments("/connect"))
+            {
+                var authentication = await context.AuthenticateAsync(SirkAuthenticationSchemes.Session);
+                if (authentication.Principal is not null) context.User = authentication.Principal;
+            }
+
             if (await _operations.TryHandleAsync(context)) return;
             if (await _tunnel.TryHandleAsync(context)) return;
 
