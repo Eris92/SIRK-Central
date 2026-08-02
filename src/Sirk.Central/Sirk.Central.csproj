@@ -11,6 +11,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Sirk.Central.ProtocolTests" />
+    <InternalsVisibleTo Include="Sirk.Central.SecurityTests" />
   </ItemGroup>
 
   <ItemGroup>
