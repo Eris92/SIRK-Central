@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using Microsoft.Extensions.Options;
 
 namespace Sirk.Central.Security;
 
@@ -8,72 +7,70 @@ internal sealed record FailedLoginThrottleResult(
     int RemainingAttempts,
     TimeSpan RetryAfter);
 
-internal sealed class FailedLoginThrottle
+internal static class FailedLoginThrottle
 {
     private static readonly TimeSpan Window = TimeSpan.FromMinutes(5);
-    private readonly ConcurrentDictionary<string, FailureBucket> _buckets =
+    private static readonly ConcurrentDictionary<string, FailureBucket> Buckets =
         new(StringComparer.Ordinal);
-    private readonly int _maximumFailures;
 
-    public FailedLoginThrottle(IOptions<SecurityOptions> options)
+    public static FailedLoginThrottleResult Check(
+        string remoteAddress,
+        string userName,
+        int maximumFailures)
     {
-        _maximumFailures = Math.Clamp(
-            options.Value.LoginAttemptsPerFiveMinutes,
-            1,
-            100);
-    }
-
-    public FailedLoginThrottleResult Check(string remoteAddress, string userName)
-    {
+        maximumFailures = Math.Clamp(maximumFailures, 1, 100);
         var key = Key(remoteAddress, userName);
-        if (!_buckets.TryGetValue(key, out var bucket))
-            return new FailedLoginThrottleResult(false, _maximumFailures, TimeSpan.Zero);
+        if (!Buckets.TryGetValue(key, out var bucket))
+            return new FailedLoginThrottleResult(false, maximumFailures, TimeSpan.Zero);
 
         lock (bucket.Sync)
         {
-            RemoveExpired(bucket, DateTimeOffset.UtcNow);
+            var now = DateTimeOffset.UtcNow;
+            RemoveExpired(bucket, now);
             if (bucket.Failures.Count == 0)
             {
-                _buckets.TryRemove(new KeyValuePair<string, FailureBucket>(key, bucket));
-                return new FailedLoginThrottleResult(false, _maximumFailures, TimeSpan.Zero);
+                Buckets.TryRemove(new KeyValuePair<string, FailureBucket>(key, bucket));
+                return new FailedLoginThrottleResult(false, maximumFailures, TimeSpan.Zero);
             }
 
-            var blocked = bucket.Failures.Count >= _maximumFailures;
+            var blocked = bucket.Failures.Count >= maximumFailures;
             var retryAfter = blocked
-                ? Window - (DateTimeOffset.UtcNow - bucket.Failures.Peek())
+                ? Window - (now - bucket.Failures.Peek())
                 : TimeSpan.Zero;
             if (retryAfter < TimeSpan.Zero) retryAfter = TimeSpan.Zero;
             return new FailedLoginThrottleResult(
                 blocked,
-                Math.Max(0, _maximumFailures - bucket.Failures.Count),
+                Math.Max(0, maximumFailures - bucket.Failures.Count),
                 retryAfter);
         }
     }
 
-    public FailedLoginThrottleResult RecordFailure(
+    public static FailedLoginThrottleResult RecordFailure(
         string remoteAddress,
-        string userName)
+        string userName,
+        int maximumFailures)
     {
+        maximumFailures = Math.Clamp(maximumFailures, 1, 100);
         var key = Key(remoteAddress, userName);
-        var bucket = _buckets.GetOrAdd(key, static _ => new FailureBucket());
+        var bucket = Buckets.GetOrAdd(key, static _ => new FailureBucket());
         lock (bucket.Sync)
         {
             var now = DateTimeOffset.UtcNow;
             RemoveExpired(bucket, now);
             bucket.Failures.Enqueue(now);
-            var blocked = bucket.Failures.Count >= _maximumFailures;
+            var blocked = bucket.Failures.Count >= maximumFailures;
             var retryAfter = blocked
                 ? Window - (now - bucket.Failures.Peek())
                 : TimeSpan.Zero;
             return new FailedLoginThrottleResult(
                 blocked,
-                Math.Max(0, _maximumFailures - bucket.Failures.Count),
+                Math.Max(0, maximumFailures - bucket.Failures.Count),
                 retryAfter);
         }
     }
 
-    public void Reset(string remoteAddress, string userName) =>
-        _buckets.TryRemove(Key(remoteAddress, userName), out _);
+    public static void Reset(string remoteAddress, string userName) =>
+        Buckets.TryRemove(Key(remoteAddress, userName), out _);
 
     private static void RemoveExpired(FailureBucket bucket, DateTimeOffset now)
     {
