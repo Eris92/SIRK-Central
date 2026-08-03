@@ -1,0 +1,119 @@
+{
+    email {$SIRK_ACME_EMAIL}
+    acme_ca https://acme-v02.api.letsencrypt.org/directory
+}
+
+www.{$SIRK_WEBSITE_DOMAIN} {
+    redir https://{$SIRK_WEBSITE_DOMAIN}{uri} permanent
+}
+
+{$SIRK_WEBSITE_DOMAIN} {
+    encode zstd gzip
+    root * /srv/website
+    try_files {path} {path}/index.html /index.html
+    file_server
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+        Content-Security-Policy "default-src 'self'; style-src 'self'; img-src 'self' data:; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; upgrade-insecure-requests"
+        Cache-Control "no-cache"
+        X-Robots-Tag "index, follow"
+        -Server
+    }
+
+    log {
+        output stdout
+        format json
+    }
+}
+
+www.{$SIRK_BUSINESS_DOMAIN} {
+    redir https://{$SIRK_BUSINESS_DOMAIN}{uri} permanent
+}
+
+{$SIRK_BUSINESS_DOMAIN} {
+    encode zstd gzip
+    root * /srv/sir-k
+    try_files {path} {path}.html {path}/index.html /index.html
+    file_server
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+        Content-Security-Policy "default-src 'self'; style-src 'self'; img-src 'self' data:; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self' mailto:; upgrade-insecure-requests"
+        Cache-Control "no-cache"
+        X-Robots-Tag "index, follow"
+        -Server
+    }
+
+    log {
+        output stdout
+        format json
+    }
+}
+
+{$SIRK_CENTRAL_DOMAIN} {
+    encode zstd gzip
+
+    # Only browser UI routes fall back to index.html. API, authentication,
+    # health endpoints and static assets always keep their original paths.
+    @spaRoutes {
+        not path /api/* /auth/* /healthz /readyz
+        not path_regexp staticAsset \.[A-Za-z0-9]{1,10}$
+    }
+    rewrite @spaRoutes /index.html
+
+    # Docker already verifies /readyz. Do not use an active Caddy health check
+    # here: its synthetic Host header is central:8080 and ASP.NET AllowedHosts
+    # correctly rejects it, which would disable the only available upstream.
+    reverse_proxy central:8080 {
+        fail_duration 10s
+        max_fails 3
+        unhealthy_status 500 502 503 504
+
+        transport http {
+            dial_timeout 5s
+            response_header_timeout 60s
+        }
+    }
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "no-referrer"
+        Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+        Cross-Origin-Opener-Policy "same-origin"
+        Cross-Origin-Resource-Policy "same-origin"
+        X-Robots-Tag "noindex, nofollow"
+        -Server
+    }
+
+    log {
+        output stdout
+        format json
+    }
+}
+
+{$SIRK_AUTH_DOMAIN} {
+    @login path / /login
+    redir @login https://{$SIRK_CENTRAL_DOMAIN}/api/v1/auth/entra/login 302
+    respond 404
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "no-referrer"
+        Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+        X-Robots-Tag "noindex, nofollow"
+        -Server
+    }
+}

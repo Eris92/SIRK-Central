@@ -2,8 +2,15 @@
 
 (function () {
     const parameters = new URLSearchParams(String(location.hash || "").replace(/^#/, ""));
+
+    // app.js reads #access synchronously during script initialization. Do not
+    // remove the fragment before the remaining scripts have had a chance to
+    // consume it. Scheduling the cleanup for the next task preserves the
+    // in-memory token while still removing it from the visible URL/history.
     if (parameters.has("access")) {
-        history.replaceState(null, "", location.pathname + location.search);
+        setTimeout(() => {
+            history.replaceState(null, "", location.pathname + location.search);
+        }, 0);
     }
 
     function accessRejectedMessage() {

@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <AssemblyName>Sirk.Central</AssemblyName>
+    <RootNamespace>Sirk.Central</RootNamespace>
+    <Version>2.0.0-test.4</Version>
+    <FileVersion>2.0.0.4</FileVersion>
+    <InformationalVersion>2.0.0-test.4</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <NoWarn>$(NoWarn);ASP0017</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" Version="10.0.10" />
+    <PackageReference Include="Fido2" Version="4.0.1" />
+    <PackageReference Include="Fido2.AspNet" Version="4.0.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Sirk.Central.ProtocolTests" />
+    <InternalsVisibleTo Include="Sirk.Central.SecurityTests" />
+    <InternalsVisibleTo Include="Sirk.Central.BackupKeyTests" />
+    <InternalsVisibleTo Include="Sirk.Central.BackupArchiveTests" />
+    <InternalsVisibleTo Include="Sirk.Central.EntraTests" />
+    <InternalsVisibleTo Include="Sirk.Central.ApprovalTests" />
+    <InternalsVisibleTo Include="Sirk.Central.TicketTests" />
+    <InternalsVisibleTo Include="Sirk.Central.WebAuthnTests" />
+    <InternalsVisibleTo Include="Sirk.Central.OrganizationTests" />
+    <InternalsVisibleTo Include="Sirk.Central.AccessTests" />
+    <InternalsVisibleTo Include="Sirk.Central.OperationsTests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="../../public/**/*"
+             Link="public/%(RecursiveDir)%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

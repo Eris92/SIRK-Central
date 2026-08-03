@@ -1,83 +1,112 @@
 "use strict";
 
 (function () {
-    function fromB64url(value) {
+    function fromBase64Url(value) {
         const text = String(value || "").replace(/-/g, "+").replace(/_/g, "/");
         const padded = text + "=".repeat((4 - text.length % 4) % 4);
         const binary = atob(padded);
-        const bytes = new Uint8Array(binary.length);
-        for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-        return bytes.buffer;
+        return Uint8Array.from(binary, character => character.charCodeAt(0));
     }
 
-    function toB64url(value) {
-        const bytes = new Uint8Array(value || new ArrayBuffer(0));
+    function toBase64Url(value) {
+        const bytes = value instanceof ArrayBuffer
+            ? new Uint8Array(value)
+            : new Uint8Array(value || []);
         let binary = "";
         for (const byte of bytes) binary += String.fromCharCode(byte);
-        return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+        return btoa(binary)
+            .replace(/\+/g, "-")
+            .replace(/\//g, "_")
+            .replace(/=+$/g, "");
     }
 
-    async function request(path, options) {
-        const response = await fetch(path, Object.assign({
-            credentials: "same-origin",
-            cache: "no-store",
-            headers: { "Content-Type": "application/json" }
-        }, options || {}));
-        const result = await response.json();
-        if (!response.ok) throw Object.assign(new Error(result.error || "Request failed."), { status: response.status, data: result });
-        return result;
+    function language() {
+        return document.documentElement.lang === "en" ? "en" : "pl";
     }
 
-    function accessKey() {
+    function message(polish, english) {
+        return language() === "en" ? english : polish;
+    }
+
+    function accessCode() {
         return new URLSearchParams(location.hash.replace(/^#/, "")).get("access") || "";
     }
 
-    function language() { return document.documentElement.lang === "en" ? "en" : "pl"; }
-    function message(pl, en) { return language() === "en" ? en : pl; }
-
-    function registrationOptions(publicKey) {
-        return Object.assign({}, publicKey, {
-            challenge: fromB64url(publicKey.challenge),
-            user: Object.assign({}, publicKey.user, { id: fromB64url(publicKey.user.id) }),
-            excludeCredentials: (publicKey.excludeCredentials || []).map(item => Object.assign({}, item, { id: fromB64url(item.id) }))
-        });
+    function clearAccessAndReload() {
+        history.replaceState(null, "", location.pathname + location.search);
+        location.reload();
     }
 
-    function authenticationOptions(publicKey) {
-        return Object.assign({}, publicKey, {
-            challenge: fromB64url(publicKey.challenge),
-            allowCredentials: (publicKey.allowCredentials || []).map(item => Object.assign({}, item, { id: fromB64url(item.id) }))
-        });
+    async function request(path, options) {
+        const supplied = options || {};
+        const headers = new Headers(supplied.headers || {});
+        if (!headers.has("Content-Type") && supplied.body !== undefined)
+            headers.set("Content-Type", "application/json");
+        const response = await fetch(path, Object.assign({}, supplied, {
+            credentials: "same-origin",
+            cache: "no-store",
+            headers
+        }));
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok)
+            throw Object.assign(
+                new Error(result.error || result.code || `HTTP ${response.status}`),
+                { status: response.status, data: result });
+        return result;
     }
 
-    function registrationPayload(credential) {
-        const response = credential.response;
-        if (typeof response.getPublicKey !== "function" || typeof response.getAuthenticatorData !== "function" || typeof response.getPublicKeyAlgorithm !== "function") {
-            throw new Error(message("Ta przeglądarka nie udostępnia wymaganych metod WebAuthn.", "This browser does not expose the required WebAuthn methods."));
-        }
-        const publicKey = response.getPublicKey();
-        const authenticatorData = response.getAuthenticatorData();
-        if (!publicKey || !authenticatorData) throw new Error(message("Nie udało się odczytać klucza publicznego.", "The public key could not be read."));
+    async function csrfHeaders() {
+        const token = await request("/api/v1/auth/csrf");
+        return { [token.headerName || "X-SIRK-CSRF"]: token.requestToken };
+    }
+
+    function creationOptions(options) {
+        const value = structuredClone(options);
+        value.challenge = fromBase64Url(value.challenge);
+        value.user.id = fromBase64Url(value.user.id);
+        value.excludeCredentials = (value.excludeCredentials || []).map(item =>
+            Object.assign({}, item, { id: fromBase64Url(item.id) }));
+        return value;
+    }
+
+    function assertionOptions(options) {
+        const value = structuredClone(options);
+        value.challenge = fromBase64Url(value.challenge);
+        value.allowCredentials = (value.allowCredentials || []).map(item =>
+            Object.assign({}, item, { id: fromBase64Url(item.id) }));
+        return value;
+    }
+
+    function attestationResponse(credential) {
         return {
-            credentialId: toB64url(credential.rawId),
-            rawId: toB64url(credential.rawId),
-            clientDataJSON: toB64url(response.clientDataJSON),
-            authenticatorData: toB64url(authenticatorData),
-            publicKey: toB64url(publicKey),
-            publicKeyAlgorithm: response.getPublicKeyAlgorithm(),
-            transports: typeof response.getTransports === "function" ? response.getTransports() : []
+            id: credential.id,
+            rawId: toBase64Url(credential.rawId),
+            type: credential.type,
+            response: {
+                attestationObject: toBase64Url(credential.response.attestationObject),
+                clientDataJSON: toBase64Url(credential.response.clientDataJSON),
+                transports: typeof credential.response.getTransports === "function"
+                    ? credential.response.getTransports()
+                    : []
+            },
+            clientExtensionResults: credential.getClientExtensionResults()
         };
     }
 
-    function authenticationPayload(credential) {
-        const response = credential.response;
+    function assertionResponse(credential) {
         return {
-            credentialId: toB64url(credential.rawId),
-            rawId: toB64url(credential.rawId),
-            clientDataJSON: toB64url(response.clientDataJSON),
-            authenticatorData: toB64url(response.authenticatorData),
-            signature: toB64url(response.signature),
-            userHandle: response.userHandle ? toB64url(response.userHandle) : ""
+            id: credential.id,
+            rawId: toBase64Url(credential.rawId),
+            type: credential.type,
+            response: {
+                authenticatorData: toBase64Url(credential.response.authenticatorData),
+                clientDataJSON: toBase64Url(credential.response.clientDataJSON),
+                signature: toBase64Url(credential.response.signature),
+                userHandle: credential.response.userHandle
+                    ? toBase64Url(credential.response.userHandle)
+                    : null
+            },
+            clientExtensionResults: credential.getClientExtensionResults()
         };
     }
 
@@ -87,7 +116,8 @@
         const recoveryCode = document.getElementById("mfaRecoveryCode");
         const recoveryError = document.getElementById("mfaRecoveryError");
         const cancelButton = document.getElementById("cancelMfaButton");
-        if (!loginForm || !recoveryForm || !recoveryCode || !cancelButton) return;
+        if (!loginForm || !recoveryForm || !recoveryCode || !recoveryError || !cancelButton)
+            return;
 
         let transactionToken = "";
         let expiresTimer = null;
@@ -99,34 +129,22 @@
         const actions = recoveryForm.querySelector(".mfa-actions");
 
         const methodHeading = document.createElement("h2");
-        methodHeading.textContent = message("Wybierz metodę weryfikacji", "Choose a verification method");
         methodHeading.hidden = true;
-
         const methodDescription = document.createElement("p");
         methodDescription.className = "muted";
-        methodDescription.textContent = message(
-            "Zaloguj się kluczem bezpieczeństwa albo użyj jednorazowego kodu odzyskiwania.",
-            "Sign in with a security key or use a one-time recovery code."
-        );
         methodDescription.hidden = true;
-
         const methodActions = document.createElement("div");
         methodActions.className = "form-actions mfa-method-actions";
         methodActions.hidden = true;
 
         const passkeyButton = document.createElement("button");
         passkeyButton.type = "button";
-        passkeyButton.textContent = message("Użyj klucza bezpieczeństwa", "Use security key");
-
         const recoveryChoiceButton = document.createElement("button");
         recoveryChoiceButton.type = "button";
         recoveryChoiceButton.className = "secondary";
-        recoveryChoiceButton.textContent = message("Użyj kodu odzyskiwania", "Use recovery code");
-
         const backToMethodsButton = document.createElement("button");
         backToMethodsButton.type = "button";
         backToMethodsButton.className = "secondary";
-        backToMethodsButton.textContent = message("Wróć do wyboru metody", "Back to method selection");
         backToMethodsButton.hidden = true;
 
         methodActions.append(passkeyButton, recoveryChoiceButton);
@@ -135,8 +153,27 @@
         recoveryForm.insertBefore(methodActions, methodDescription.nextSibling);
         if (actions) actions.insertBefore(backToMethodsButton, cancelButton);
 
+        function applyLabels() {
+            methodHeading.textContent = message(
+                "Potwierdź logowanie",
+                "Confirm sign-in");
+            methodDescription.textContent = message(
+                "Hasło zostało zweryfikowane. Użyj Windows Hello, YubiKey lub jednorazowego kodu odzyskiwania.",
+                "Your password was verified. Use Windows Hello, a YubiKey, or a one-time recovery code.");
+            passkeyButton.textContent = message(
+                "Windows Hello / YubiKey / passkey",
+                "Windows Hello / YubiKey / passkey");
+            recoveryChoiceButton.textContent = message(
+                "Użyj kodu odzyskiwania",
+                "Use recovery code");
+            backToMethodsButton.textContent = message(
+                "Wróć do wyboru metody",
+                "Back to method selection");
+        }
+
         function supportsPasskey() {
-            return methods.includes("passkey") && Boolean(window.PublicKeyCredential && navigator.credentials);
+            return methods.includes("passkey") &&
+                Boolean(window.PublicKeyCredential && navigator.credentials);
         }
 
         function supportsRecoveryCode() {
@@ -163,9 +200,8 @@
             methodActions.hidden = true;
             if (originalPrompt) {
                 originalPrompt.textContent = message(
-                    "Kod odzyskiwania jest awaryjną, jednorazową metodą logowania Break-Glass.",
-                    "A recovery code is an emergency, one-time Break-Glass sign-in method."
-                );
+                    "Podaj jednorazowy kod odzyskiwania Break-Glass.",
+                    "Enter a one-time Break-Glass recovery code.");
                 originalPrompt.hidden = false;
             }
             if (recoveryLabel) recoveryLabel.hidden = false;
@@ -195,22 +231,29 @@
         function showMfa(result) {
             transactionToken = String(result.transactionToken || "");
             methods = Array.isArray(result.methods) ? result.methods : [];
-            if (!transactionToken) throw new Error("Missing MFA transaction token.");
+            if (!transactionToken)
+                throw new Error(message(
+                    "Brak transakcji MFA.",
+                    "The MFA transaction is missing."));
             loginForm.hidden = true;
             recoveryForm.hidden = false;
             recoveryError.textContent = "";
-
-            if (supportsPasskey() && supportsRecoveryCode()) showMethodChoice();
-            else if (supportsPasskey()) showMethodChoice();
+            if (supportsPasskey()) showMethodChoice();
             else if (supportsRecoveryCode()) showRecoveryCode();
-            else throw new Error(message("Brak dostępnej metody MFA.", "No MFA method is available."));
+            else throw new Error(message(
+                "Brak dostępnej metody MFA.",
+                "No MFA method is available."));
 
             const expiresAt = Date.parse(result.expiresAtUtc || "");
             expiresTimer = setTimeout(function () {
                 clearTransaction();
                 const target = document.getElementById("loginError");
-                if (target) target.textContent = message("Żądanie MFA wygasło. Zaloguj się ponownie.", "The MFA request expired. Sign in again.");
-            }, Number.isFinite(expiresAt) ? Math.max(1000, expiresAt - Date.now()) : 300000);
+                if (target) target.textContent = message(
+                    "Żądanie MFA wygasło. Zaloguj się ponownie.",
+                    "The MFA request expired. Sign in again.");
+            }, Number.isFinite(expiresAt)
+                ? Math.max(1000, expiresAt - Date.now())
+                : 300000);
         }
 
         async function usePasskey() {
@@ -218,15 +261,37 @@
             passkeyButton.disabled = true;
             recoveryChoiceButton.disabled = true;
             try {
-                const begin = await request("/api/login/mfa/passkey/begin", { method: "POST", body: JSON.stringify({ transactionToken }) });
-                const credential = await navigator.credentials.get({ publicKey: authenticationOptions(begin.publicKey) });
-                if (!credential) throw new Error(message("Nie wybrano klucza bezpieczeństwa.", "No security key was selected."));
-                await request("/api/login/mfa/passkey/finish", { method: "POST", body: JSON.stringify({ transactionToken, challengeId: begin.challengeId, credential: authenticationPayload(credential) }) });
+                const begin = await request("/api/login/mfa/passkey/begin", {
+                    method: "POST",
+                    body: JSON.stringify({ transactionToken })
+                });
+                const options = begin.publicKey || begin.options;
+                const credential = await navigator.credentials.get({
+                    publicKey: assertionOptions(options)
+                });
+                if (!credential)
+                    throw new Error(message(
+                        "Nie wybrano metody WebAuthn.",
+                        "No WebAuthn method was selected."));
+                await request("/api/login/mfa/passkey/finish", {
+                    method: "POST",
+                    body: JSON.stringify({
+                        transactionToken,
+                        challengeId: begin.challengeId,
+                        credential: assertionResponse(credential)
+                    })
+                });
                 transactionToken = "";
-                location.reload();
+                clearAccessAndReload();
             } catch (error) {
-                recoveryError.textContent = error.name === "NotAllowedError" ? message("Operacja klucza została anulowana lub przekroczono czas.", "The security-key operation was cancelled or timed out.") : error.message;
-                if (!supportsRecoveryCode() && (error.status === 401 || error.status === 410)) clearTransaction();
+                recoveryError.textContent = error.name === "NotAllowedError"
+                    ? message(
+                        "Operacja została anulowana lub przekroczono czas.",
+                        "The operation was cancelled or timed out.")
+                    : error.message;
+                if (!supportsRecoveryCode() &&
+                    (error.status === 401 || error.status === 410))
+                    clearTransaction();
             } finally {
                 passkeyButton.disabled = false;
                 recoveryChoiceButton.disabled = false;
@@ -242,17 +307,27 @@
                 const response = await fetch("/api/login", {
                     method: "POST",
                     credentials: "same-origin",
-                    headers: { "Content-Type": "application/json", Authorization: "Bearer " + accessKey() },
-                    body: JSON.stringify({ username: document.getElementById("username").value, password: document.getElementById("password").value })
+                    cache: "no-store",
+                    headers: {
+                        "Content-Type": "application/json",
+                        Authorization: "Bearer " + accessCode()
+                    },
+                    body: JSON.stringify({
+                        userName: document.getElementById("username").value,
+                        password: document.getElementById("password").value
+                    })
                 });
-                const result = await response.json();
+                const result = await response.json().catch(() => ({}));
                 document.getElementById("password").value = "";
                 if (response.status === 202 && result.mfaRequired) {
                     showMfa(result);
                     return;
                 }
-                if (!response.ok) throw new Error(result.error || message("Logowanie nie powiodło się.", "Sign-in failed."));
-                location.reload();
+                if (!response.ok)
+                    throw new Error(result.error || message(
+                        "Logowanie nie powiodło się.",
+                        "Sign-in failed."));
+                clearAccessAndReload();
             } catch (error) {
                 if (errorTarget) errorTarget.textContent = error.message;
             }
@@ -264,71 +339,118 @@
             recoveryError.textContent = "";
             if (!transactionToken) return clearTransaction();
             try {
-                await request("/api/login/mfa/recovery", { method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + accessKey() }, body: JSON.stringify({ transactionToken, recoveryCode: recoveryCode.value }) });
+                await request("/api/login/mfa/recovery", {
+                    method: "POST",
+                    headers: { Authorization: "Bearer " + accessCode() },
+                    body: JSON.stringify({
+                        transactionToken,
+                        recoveryCode: recoveryCode.value
+                    })
+                });
                 transactionToken = "";
-                location.reload();
+                clearAccessAndReload();
             } catch (error) {
                 recoveryCode.value = "";
                 recoveryCode.focus();
                 recoveryError.textContent = error.message;
-                if (error.status === 401 || error.status === 410) clearTransaction();
+                if (error.status === 401 || error.status === 410)
+                    clearTransaction();
             }
         }, true);
 
         passkeyButton.addEventListener("click", usePasskey);
         recoveryChoiceButton.addEventListener("click", showRecoveryCode);
         backToMethodsButton.addEventListener("click", showMethodChoice);
-        cancelButton.addEventListener("click", function (event) { event.stopImmediatePropagation(); clearTransaction(); }, true);
-        addEventListener("pagehide", function () { transactionToken = ""; });
+        cancelButton.addEventListener("click", function (event) {
+            event.stopImmediatePropagation();
+            clearTransaction();
+        }, true);
+        addEventListener("pagehide", function () {
+            transactionToken = "";
+        });
+        new MutationObserver(applyLabels).observe(
+            document.documentElement,
+            { attributes: true, attributeFilter: ["lang"] });
+        applyLabels();
     }
 
     function initializeManagement() {
         const view = document.getElementById("breakGlassView");
-        if (!view) return;
+        const grid = view && view.querySelector(".settings-grid");
+        if (!grid || document.getElementById("webauthnManagementCard")) return;
+
         const article = document.createElement("article");
+        article.id = "webauthnManagementCard";
         article.className = "settings-card danger-card";
-        article.innerHTML = '<h2>YubiKey / WebAuthn</h2><p class="muted" data-passkey-status></p><div class="users-list" data-passkey-list></div><div class="form-actions"><button type="button" data-passkey-register></button><button type="button" class="secondary" data-passkey-refresh></button></div><p class="error" role="status" data-passkey-message></p>';
-        const grid = view.querySelector(".settings-grid") || view;
+        article.innerHTML = [
+            '<h2 data-passkey-title></h2>',
+            '<p class="muted" data-passkey-status></p>',
+            '<label><span data-passkey-name-label></span><input data-passkey-name maxlength="120" value="YubiKey"></label>',
+            '<div class="users-list" data-passkey-list></div>',
+            '<div class="form-actions">',
+            '  <button type="button" data-passkey-register></button>',
+            '  <button type="button" class="secondary" data-passkey-refresh></button>',
+            '</div>',
+            '<p class="error" role="status" data-passkey-message></p>'
+        ].join("");
         grid.append(article);
+
+        const title = article.querySelector("[data-passkey-title]");
         const status = article.querySelector("[data-passkey-status]");
+        const nameLabel = article.querySelector("[data-passkey-name-label]");
+        const name = article.querySelector("[data-passkey-name]");
         const list = article.querySelector("[data-passkey-list]");
         const register = article.querySelector("[data-passkey-register]");
         const refresh = article.querySelector("[data-passkey-refresh]");
         const output = article.querySelector("[data-passkey-message]");
 
         function applyLabels() {
-            register.textContent = message("Zarejestruj YubiKey", "Register YubiKey");
+            title.textContent = "Windows Hello / YubiKey / WebAuthn";
+            nameLabel.textContent = message("Nazwa metody", "Method name");
+            register.textContent = message("Dodaj metodę", "Add method");
             refresh.textContent = message("Odśwież", "Refresh");
         }
 
         async function load() {
             output.textContent = "";
             try {
-                const result = await request("/api/break-glass/passkeys");
-                const active = (result.passkeys || []).filter(item => item.status === "active");
-                status.textContent = active.length ? message("Aktywne klucze: ", "Active keys: ") + active.length : message("Brak zarejestrowanego klucza.", "No security key is registered.");
-                list.replaceChildren(...(result.passkeys || []).map(item => {
+                const credentials = await request("/api/v1/webauthn/credentials");
+                status.textContent = credentials.length
+                    ? message("Aktywne metody: ", "Active methods: ") + credentials.length
+                    : message(
+                        "Brak skonfigurowanego Windows Hello lub YubiKey.",
+                        "Windows Hello or a YubiKey is not configured.");
+                list.replaceChildren(...credentials.map(item => {
                     const row = document.createElement("div");
                     row.className = "user-row";
                     const info = document.createElement("div");
-                    info.innerHTML = "<strong></strong><small></small>";
-                    info.querySelector("strong").textContent = item.displayName || "Passkey";
-                    info.querySelector("small").textContent = item.status + " · " + (item.transports || []).join(", ") + " · " + new Date(item.createdAtUtc).toLocaleString(language());
+                    const strong = document.createElement("strong");
+                    strong.textContent = item.displayName || "Passkey";
+                    const details = document.createElement("small");
+                    details.textContent = (item.transports || []).join(", ") +
+                        " · " + new Date(item.registeredAtUtc).toLocaleString(language());
+                    info.append(strong, document.createElement("br"), details);
                     const remove = document.createElement("button");
                     remove.type = "button";
                     remove.className = "danger";
                     remove.textContent = message("Usuń", "Remove");
-                    remove.disabled = item.status !== "active";
                     remove.addEventListener("click", async function () {
-                        if (!confirm(message("Unieważnić ten klucz bezpieczeństwa?", "Revoke this security key?"))) return;
-                        await request("/api/break-glass/passkeys/" + encodeURIComponent(item.credentialId), { method: "DELETE" });
+                        if (!confirm(message(
+                            "Usunąć tę metodę uwierzytelnienia?",
+                            "Remove this authentication method?"))) return;
+                        await request(
+                            "/api/v1/webauthn/credentials/" +
+                                encodeURIComponent(item.credentialId),
+                            { method: "DELETE", headers: await csrfHeaders() });
                         await load();
                     });
                     row.append(info, remove);
                     return row;
                 }));
             } catch (error) {
-                status.textContent = error.message;
+                status.textContent = error.status === 401 || error.status === 403
+                    ? ""
+                    : error.message;
             }
         }
 
@@ -336,23 +458,51 @@
             output.textContent = "";
             register.disabled = true;
             try {
-                if (!window.PublicKeyCredential || !navigator.credentials) throw new Error(message("Ta przeglądarka nie obsługuje WebAuthn.", "This browser does not support WebAuthn."));
-                const displayName = prompt(message("Nazwa klucza:", "Security-key name:"), "YubiKey") || "YubiKey";
-                const begin = await request("/api/break-glass/passkeys/begin-registration", { method: "POST", body: "{}" });
-                const credential = await navigator.credentials.create({ publicKey: registrationOptions(begin.publicKey) });
-                if (!credential) throw new Error(message("Nie utworzono klucza.", "No credential was created."));
-                await request("/api/break-glass/passkeys/finish-registration", { method: "POST", body: JSON.stringify({ challengeId: begin.challengeId, displayName, credential: registrationPayload(credential) }) });
-                output.textContent = message("Klucz został zarejestrowany.", "The security key was registered.");
+                if (!window.PublicKeyCredential || !navigator.credentials)
+                    throw new Error(message(
+                        "Ta przeglądarka nie obsługuje WebAuthn.",
+                        "This browser does not support WebAuthn."));
+                const issued = await request("/api/v1/webauthn/registration/options", {
+                    method: "POST",
+                    headers: await csrfHeaders(),
+                    body: JSON.stringify({
+                        displayName: name.value.trim() || "YubiKey"
+                    })
+                });
+                const credential = await navigator.credentials.create({
+                    publicKey: creationOptions(issued.options)
+                });
+                if (!credential)
+                    throw new Error(message(
+                        "Nie utworzono metody WebAuthn.",
+                        "No WebAuthn method was created."));
+                await request("/api/v1/webauthn/registration/verify", {
+                    method: "POST",
+                    headers: await csrfHeaders(),
+                    body: JSON.stringify({
+                        ceremonyId: issued.ceremonyId,
+                        response: attestationResponse(credential)
+                    })
+                });
+                output.textContent = message(
+                    "Metoda została zarejestrowana.",
+                    "The method was registered.");
                 await load();
             } catch (error) {
-                output.textContent = error.name === "NotAllowedError" ? message("Rejestracja została anulowana lub przekroczono czas.", "Registration was cancelled or timed out.") : error.message;
+                output.textContent = error.name === "NotAllowedError"
+                    ? message(
+                        "Rejestracja została anulowana lub przekroczono czas.",
+                        "Registration was cancelled or timed out.")
+                    : error.message;
             } finally {
                 register.disabled = false;
             }
         });
 
         refresh.addEventListener("click", load);
-        new MutationObserver(applyLabels).observe(document.documentElement, { attributes: true, attributeFilter: ["lang"] });
+        new MutationObserver(applyLabels).observe(
+            document.documentElement,
+            { attributes: true, attributeFilter: ["lang"] });
         applyLabels();
         load();
     }
@@ -362,6 +512,8 @@
         initializeManagement();
     }
 
-    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", initialize, { once: true });
-    else initialize();
+    if (document.readyState === "loading")
+        document.addEventListener("DOMContentLoaded", initialize, { once: true });
+    else
+        initialize();
 }());

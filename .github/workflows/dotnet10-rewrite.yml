@@ -1,0 +1,185 @@
+name: SIRK Central .NET 10 Rewrite
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ rewrite/dotnet10 ]
+    paths:
+      - 'global.json'
+      - 'Directory.Build.props'
+      - 'Dockerfile.dotnet10'
+      - 'src/Sirk.Central/**'
+      - 'tests/Sirk.Central.ProtocolTests/**'
+      - 'tests/Sirk.Central.SecurityTests/**'
+      - '.github/scripts/test-dotnet10-portal-endpoints.py'
+      - '.github/scripts/test-dotnet10-breakglass-auth.py'
+      - 'public/**'
+      - 'website/**'
+      - 'deploy/dotnet10/**'
+      - 'deploy/install-dotnet10.sh'
+      - 'deploy/reinstall-dotnet10.sh'
+      - 'deploy/upgrade-dotnet10-vps.sh'
+      - '.github/workflows/dotnet10-rewrite.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'global.json'
+      - 'Directory.Build.props'
+      - 'Dockerfile.dotnet10'
+      - 'src/Sirk.Central/**'
+      - 'tests/Sirk.Central.ProtocolTests/**'
+      - 'tests/Sirk.Central.SecurityTests/**'
+      - '.github/scripts/test-dotnet10-portal-endpoints.py'
+      - '.github/scripts/test-dotnet10-breakglass-auth.py'
+      - 'public/**'
+      - 'website/**'
+      - 'deploy/dotnet10/**'
+      - 'deploy/install-dotnet10.sh'
+      - 'deploy/reinstall-dotnet10.sh'
+      - 'deploy/upgrade-dotnet10-vps.sh'
+      - '.github/workflows/dotnet10-rewrite.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: SDK contract
+        run: |
+          dotnet --info
+          grep -R --line-number --include='*.csproj' --include='*.props' --include='global.json' -E 'net8\.0|net9\.0' src/Sirk.Central tests/Sirk.Central.ProtocolTests tests/Sirk.Central.SecurityTests Directory.Build.props global.json && exit 1 || true
+
+      - name: Deployment syntax and three-host edge contract
+        run: |
+          bash -n deploy/install-dotnet10.sh
+          bash -n deploy/reinstall-dotnet10.sh
+          bash -n deploy/upgrade-dotnet10-vps.sh
+          test -s website/index.html
+          grep --fixed-strings 'root * /srv/website' deploy/dotnet10/Caddyfile
+          grep --fixed-strings 'root * /srv/sir-k' deploy/dotnet10/Caddyfile
+          grep --fixed-strings 'reverse_proxy central:8080' deploy/dotnet10/Caddyfile
+          if grep -E 'redir https://\{\$SIRK_CENTRAL_DOMAIN\}.*' deploy/dotnet10/Caddyfile | grep -E 'WEBSITE|BUSINESS'; then
+            echo 'Public websites must not redirect to SIRK Central.' >&2
+            exit 1
+          fi
+          docker run --rm \
+            -e SIRK_ACME_EMAIL=ci@example.invalid \
+            -e SIRK_WEBSITE_DOMAIN=sirkportal.example.invalid \
+            -e SIRK_BUSINESS_DOMAIN=sir-k.example.invalid \
+            -e SIRK_CENTRAL_DOMAIN=central.example.invalid \
+            -e SIRK_AUTH_DOMAIN=auth.example.invalid \
+            -v "$PWD/deploy/dotnet10/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2.10.0-alpine \
+            caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+
+      - name: Restore protocol tests
+        run: dotnet restore tests/Sirk.Central.ProtocolTests/Sirk.Central.ProtocolTests.csproj
+
+      - name: Restore security tests
+        run: dotnet restore tests/Sirk.Central.SecurityTests/Sirk.Central.SecurityTests.csproj
+
+      - name: Build protocol tests
+        run: dotnet build tests/Sirk.Central.ProtocolTests/Sirk.Central.ProtocolTests.csproj --configuration Release --no-restore
+
+      - name: Build security tests
+        run: dotnet build tests/Sirk.Central.SecurityTests/Sirk.Central.SecurityTests.csproj --configuration Release --no-restore
+
+      - name: Portal protocol contracts
+        run: dotnet run --project tests/Sirk.Central.ProtocolTests/Sirk.Central.ProtocolTests.csproj --configuration Release --no-build
+
+      - name: Security contracts
+        run: dotnet run --project tests/Sirk.Central.SecurityTests/Sirk.Central.SecurityTests.csproj --configuration Release --no-build
+
+      - name: Publish
+        run: dotnet publish src/Sirk.Central/Sirk.Central.csproj --configuration Release --no-build --output artifacts/central
+
+      - name: Portal HTTP endpoint smoke
+        env:
+          ASPNETCORE_ENVIRONMENT: Development
+          ASPNETCORE_URLS: http://127.0.0.1:18080
+          Sirk__PortalProtocol__DataRoot: ${{ runner.temp }}/sirk-central-endpoint-smoke
+          Sirk__PortalProtocol__BootstrapPortalId: portal-test
+          Sirk__PortalProtocol__BootstrapPortalName: Portal Test
+          Sirk__PortalProtocol__BootstrapPortalToken: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          SIRK_TEST_BASE_URL: http://127.0.0.1:18080
+          SIRK_TEST_PORTAL_ID: portal-test
+          SIRK_TEST_PORTAL_TOKEN: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          SIRK_TEST_REGISTRY_PATH: ${{ runner.temp }}/sirk-central-endpoint-smoke/portals.net10.json
+        run: |
+          rm -rf "$Sirk__PortalProtocol__DataRoot"
+          mkdir -p "$Sirk__PortalProtocol__DataRoot"
+          dotnet artifacts/central/Sirk.Central.dll > "$RUNNER_TEMP/sirk-central-endpoint-smoke.log" 2>&1 &
+          central_pid=$!
+          cleanup() {
+            kill "$central_pid" 2>/dev/null || true
+            wait "$central_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          if ! python3 .github/scripts/test-dotnet10-portal-endpoints.py; then
+            cat "$RUNNER_TEMP/sirk-central-endpoint-smoke.log"
+            exit 1
+          fi
+          cleanup
+          trap - EXIT
+
+      - name: Break Glass HTTP auth smoke
+        env:
+          SIRK_TEST_CENTRAL_DLL: ${{ github.workspace }}/artifacts/central/Sirk.Central.dll
+          SIRK_TEST_ROOT: ${{ runner.temp }}/sirk-central-breakglass-smoke
+        run: python3 .github/scripts/test-dotnet10-breakglass-auth.py
+
+      - name: Container build
+        run: docker build --file Dockerfile.dotnet10 --tag sirk-central:dotnet10 .
+
+      - name: Production container fails closed without secrets
+        run: |
+          set +e
+          output=$(timeout 15s docker run --rm --name sirk-central-missing-secrets sirk-central:dotnet10 2>&1)
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          if [ "$status" -eq 0 ] || [ "$status" -eq 124 ]; then
+            echo 'Production container did not fail closed when required secrets were absent.' >&2
+            exit 1
+          fi
+          printf '%s' "$output" | grep -E 'Production startup refused|Data Protection certificate|ReleaseSigningPublicKeyFile'
+
+      - name: Container runtime health smoke
+        run: |
+          docker run --detach \
+            --name sirk-central-dotnet10-smoke \
+            --env Sirk__Security__Enabled=false \
+            --health-interval 1s \
+            --health-timeout 5s \
+            --health-start-period 1s \
+            --health-retries 20 \
+            sirk-central:dotnet10
+          cleanup() {
+            docker logs sirk-central-dotnet10-smoke || true
+            docker rm --force --volumes sirk-central-dotnet10-smoke >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          for attempt in $(seq 1 45); do
+            status=$(docker inspect --format '{{.State.Health.Status}}' sirk-central-dotnet10-smoke)
+            if [ "$status" = healthy ]; then
+              echo 'SIRK Central container runtime health: OK'
+              cleanup
+              trap - EXIT
+              exit 0
+            fi
+            if [ "$status" = unhealthy ]; then
+              echo 'SIRK Central container became unhealthy.' >&2
+              exit 1
+            fi
+            sleep 1
+          done
+          echo 'SIRK Central container did not become healthy.' >&2
+          exit 1

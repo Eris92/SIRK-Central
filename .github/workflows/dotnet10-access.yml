@@ -1,0 +1,31 @@
+name: SIRK Central .NET 10 Access
+
+on:
+  push:
+    branches: [rewrite/dotnet10]
+  pull_request:
+    paths:
+      - 'src/Sirk.Central/Access/**'
+      - 'src/Sirk.Central/Security/SecurityOptions.cs'
+      - 'tests/Sirk.Central.AccessTests/**'
+      - 'src/Sirk.Central/Program.cs'
+      - 'src/Sirk.Central/Sirk.Central.csproj'
+      - '.github/workflows/dotnet10-access.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  access:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Restore
+        run: dotnet restore tests/Sirk.Central.AccessTests/Sirk.Central.AccessTests.csproj
+      - name: Build
+        run: dotnet build tests/Sirk.Central.AccessTests/Sirk.Central.AccessTests.csproj --configuration Release --no-restore
+      - name: Identity and access lifecycle
+        run: dotnet run --project tests/Sirk.Central.AccessTests/Sirk.Central.AccessTests.csproj --configuration Release --no-build

@@ -1,0 +1,42 @@
+name: SIRK Central .NET 10 Backup Archive
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ rewrite/dotnet10 ]
+    paths:
+      - 'src/Sirk.Central/Backup/**'
+      - 'src/Sirk.Central/Security/BackupKeyStore.cs'
+      - 'src/Sirk.Central/Sirk.Central.csproj'
+      - 'tests/Sirk.Central.BackupArchiveTests/**'
+      - '.github/workflows/dotnet10-backup-archive.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'src/Sirk.Central/Backup/**'
+      - 'src/Sirk.Central/Security/BackupKeyStore.cs'
+      - 'src/Sirk.Central/Sirk.Central.csproj'
+      - 'tests/Sirk.Central.BackupArchiveTests/**'
+      - '.github/workflows/dotnet10-backup-archive.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  archive-restore:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Install age
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes age
+      - name: Restore
+        run: dotnet restore tests/Sirk.Central.BackupArchiveTests/Sirk.Central.BackupArchiveTests.csproj
+      - name: Build
+        run: dotnet build tests/Sirk.Central.BackupArchiveTests/Sirk.Central.BackupArchiveTests.csproj --configuration Release --no-restore
+      - name: Encrypted archive create and restore
+        run: dotnet run --project tests/Sirk.Central.BackupArchiveTests/Sirk.Central.BackupArchiveTests.csproj --configuration Release --no-build

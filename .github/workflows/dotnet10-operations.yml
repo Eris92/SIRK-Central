@@ -1,0 +1,30 @@
+name: SIRK Central .NET 10 Operations
+
+on:
+  pull_request:
+    paths:
+      - 'src/Sirk.Central/Operations/**'
+      - 'src/Sirk.Central/Portals/PortalTunnelModule.cs'
+      - 'src/Sirk.Central/Security/WebAuthnUiStartupFilter.cs'
+      - 'tests/Sirk.Central.OperationsTests/**'
+      - '.github/workflows/dotnet10-operations.yml'
+      - 'src/Sirk.Central/Sirk.Central.csproj'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  operations:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Restore
+        run: dotnet restore tests/Sirk.Central.OperationsTests/Sirk.Central.OperationsTests.csproj
+      - name: Build
+        run: dotnet build tests/Sirk.Central.OperationsTests/Sirk.Central.OperationsTests.csproj --configuration Release --no-restore
+      - name: Operations and tunnel lifecycle
+        run: dotnet run --project tests/Sirk.Central.OperationsTests/Sirk.Central.OperationsTests.csproj --configuration Release --no-build

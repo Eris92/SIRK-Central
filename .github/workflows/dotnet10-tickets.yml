@@ -1,0 +1,33 @@
+name: SIRK Central .NET 10 Tickets
+
+on:
+  pull_request:
+    paths:
+      - 'src/Sirk.Central/**'
+      - 'tests/Sirk.Central.TicketTests/**'
+      - '.github/workflows/dotnet10-tickets.yml'
+  push:
+    branches:
+      - rewrite/dotnet10
+    paths:
+      - 'src/Sirk.Central/**'
+      - 'tests/Sirk.Central.TicketTests/**'
+      - '.github/workflows/dotnet10-tickets.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  tickets:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Restore
+        run: dotnet restore tests/Sirk.Central.TicketTests/Sirk.Central.TicketTests.csproj
+      - name: Build
+        run: dotnet build tests/Sirk.Central.TicketTests/Sirk.Central.TicketTests.csproj --configuration Release --no-restore
+      - name: Ticket projection lifecycle
+        run: dotnet run --project tests/Sirk.Central.TicketTests/Sirk.Central.TicketTests.csproj --configuration Release --no-build

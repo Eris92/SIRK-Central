@@ -1,0 +1,33 @@
+name: SIRK Central .NET 10 Approvals
+
+on:
+  pull_request:
+    paths:
+      - 'src/Sirk.Central/**'
+      - 'tests/Sirk.Central.ApprovalTests/**'
+      - '.github/workflows/dotnet10-approvals.yml'
+  push:
+    branches:
+      - rewrite/dotnet10
+    paths:
+      - 'src/Sirk.Central/**'
+      - 'tests/Sirk.Central.ApprovalTests/**'
+      - '.github/workflows/dotnet10-approvals.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  approvals:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Restore
+        run: dotnet restore tests/Sirk.Central.ApprovalTests/Sirk.Central.ApprovalTests.csproj
+      - name: Build
+        run: dotnet build tests/Sirk.Central.ApprovalTests/Sirk.Central.ApprovalTests.csproj --configuration Release --no-restore
+      - name: Approval workflow lifecycle
+        run: dotnet run --project tests/Sirk.Central.ApprovalTests/Sirk.Central.ApprovalTests.csproj --configuration Release --no-build

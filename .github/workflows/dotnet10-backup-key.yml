@@ -1,0 +1,44 @@
+name: SIRK Central .NET 10 Backup Key
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ rewrite/dotnet10 ]
+    paths:
+      - 'global.json'
+      - 'Directory.Build.props'
+      - 'src/Sirk.Central/Security/BackupKeyStore.cs'
+      - 'src/Sirk.Central/Security/BackupKeyEndpoints.cs'
+      - 'src/Sirk.Central/Security/LocalIdentityStore.cs'
+      - 'src/Sirk.Central/Sirk.Central.csproj'
+      - 'tests/Sirk.Central.BackupKeyTests/**'
+      - '.github/workflows/dotnet10-backup-key.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'global.json'
+      - 'Directory.Build.props'
+      - 'src/Sirk.Central/Security/BackupKeyStore.cs'
+      - 'src/Sirk.Central/Security/BackupKeyEndpoints.cs'
+      - 'src/Sirk.Central/Security/LocalIdentityStore.cs'
+      - 'src/Sirk.Central/Sirk.Central.csproj'
+      - 'tests/Sirk.Central.BackupKeyTests/**'
+      - '.github/workflows/dotnet10-backup-key.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  lifecycle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Restore
+        run: dotnet restore tests/Sirk.Central.BackupKeyTests/Sirk.Central.BackupKeyTests.csproj
+      - name: Build
+        run: dotnet build tests/Sirk.Central.BackupKeyTests/Sirk.Central.BackupKeyTests.csproj --configuration Release --no-restore
+      - name: Encrypted backup key lifecycle
+        run: dotnet run --project tests/Sirk.Central.BackupKeyTests/Sirk.Central.BackupKeyTests.csproj --configuration Release --no-build

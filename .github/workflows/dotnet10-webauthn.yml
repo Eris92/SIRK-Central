@@ -1,0 +1,72 @@
+name: SIRK Central .NET 10 WebAuthn
+
+on:
+  push:
+    branches: [rewrite/dotnet10]
+  pull_request:
+    paths:
+      - 'src/Sirk.Central/Security/WebAuthn*.cs'
+      - 'src/Sirk.Central/Security/BreakGlassAuthenticationState.cs'
+      - 'src/Sirk.Central/Security/BreakGlassMfaEndpoints.cs'
+      - 'src/Sirk.Central/Security/AuthenticationEndpoints.cs'
+      - 'src/Sirk.Central/Security/Fido2Compatibility.cs'
+      - 'tests/Sirk.Central.WebAuthnTests/**'
+      - 'public/passkey-ui.js'
+      - 'public/break-glass-mfa.js'
+      - 'src/Sirk.Central/Program.cs'
+      - 'src/Sirk.Central/Sirk.Central.csproj'
+      - '.github/workflows/dotnet10-webauthn.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  webauthn:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Restore
+        run: dotnet restore tests/Sirk.Central.WebAuthnTests/Sirk.Central.WebAuthnTests.csproj
+      - name: Build
+        run: dotnet build tests/Sirk.Central.WebAuthnTests/Sirk.Central.WebAuthnTests.csproj --configuration Release --no-restore
+      - name: WebAuthn credential and ceremony lifecycle
+        run: dotnet run --project tests/Sirk.Central.WebAuthnTests/Sirk.Central.WebAuthnTests.csproj --configuration Release --no-build
+      - name: Validate browser modules
+        run: |
+          node --check public/passkey-ui.js
+          node --check public/break-glass-mfa.js
+          grep --fixed-strings '"/api/login/mfa/passkey/begin"' public/passkey-ui.js
+          grep --fixed-strings '"/api/login/mfa/passkey/finish"' public/passkey-ui.js
+          grep --fixed-strings 'response.status === 202 && result.mfaRequired' public/passkey-ui.js
+          if grep --fixed-strings 'Zaloguj kluczem YubiKey / Passkey' public/passkey-ui.js; then
+            echo 'Passwordless Break-Glass UI is forbidden.' >&2
+            exit 1
+          fi
+      - name: Publish runtime
+        run: dotnet publish src/Sirk.Central/Sirk.Central.csproj --configuration Release --no-build --output artifacts/central
+      - name: Live password-first WebAuthn UI smoke
+        env:
+          ASPNETCORE_ENVIRONMENT: Development
+          ASPNETCORE_URLS: http://127.0.0.1:18084
+          Sirk__Security__Enabled: 'false'
+          Sirk__PortalProtocol__DataRoot: ${{ runner.temp }}/sirk-webauthn-ui/portal
+        run: |
+          dotnet artifacts/central/Sirk.Central.dll > "${RUNNER_TEMP}/sirk-webauthn-ui.log" 2>&1 &
+          pid=$!
+          cleanup() { kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; }
+          trap cleanup EXIT
+          for attempt in $(seq 1 60); do
+            curl --fail --silent http://127.0.0.1:18084/readyz >/dev/null && break
+            sleep 0.25
+          done
+          curl --fail --silent http://127.0.0.1:18084/passkey-ui.js | grep --fixed-strings '/api/login/mfa/passkey/begin'
+          curl --fail --silent http://127.0.0.1:18084/passkey-ui.js | grep --fixed-strings 'response.status === 202 && result.mfaRequired'
+          if curl --fail --silent http://127.0.0.1:18084/passkey-ui.js | grep --fixed-strings 'Zaloguj kluczem YubiKey / Passkey'; then
+            echo 'Passwordless Break-Glass UI is exposed.' >&2
+            exit 1
+          fi
+          cleanup
+          trap - EXIT
