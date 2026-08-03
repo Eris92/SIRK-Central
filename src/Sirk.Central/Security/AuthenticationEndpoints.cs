@@ -44,10 +44,11 @@ internal static class AuthenticationEndpoints
         endpoints.MapPost("/api/v1/auth/logout", LogoutAsync)
             .RequireAuthorization();
 
+        endpoints.MapLegacyAuthentication();
         return endpoints;
     }
 
-    private static async Task<IResult> LoginAsync(
+    internal static async Task<IResult> LoginAsync(
         string accessCode,
         BreakGlassLoginRequest request,
         HttpContext context,
@@ -181,6 +182,8 @@ internal static class AuthenticationEndpoints
         {
             ok = true,
             authenticated = true,
+            role = SirkRoles.BreakGlass,
+            name = identity.UserName,
             mfaRequired = false,
             mfaEnrollmentRecommended = true,
             user = new
@@ -236,7 +239,7 @@ internal static class AuthenticationEndpoints
         });
     }
 
-    private static async Task<IResult> LogoutAsync(
+    internal static async Task<IResult> LogoutAsync(
         HttpContext context,
         IAntiforgery antiforgery,
         SecurityAuditLog auditLog)
