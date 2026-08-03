@@ -5,10 +5,6 @@
     if (typeof window.fetch !== "function") return;
 
     const originalFetch = window.fetch.bind(window);
-    const fragment = new URLSearchParams(
-        String(window.location.hash || "").replace(/^#/, "")
-    );
-    const hasAccess = Boolean(fragment.get("access"));
     let csrfPromise = null;
 
     function requestMethod(input, init) {
@@ -64,24 +60,6 @@
         }
 
         const method = requestMethod(input, init);
-
-        if (
-            hasAccess &&
-            method === "GET" &&
-            url.origin === window.location.origin &&
-            url.pathname === "/api/access"
-        ) {
-            return new Response(
-                JSON.stringify({ ok: true, localLoginEnabled: true }),
-                {
-                    status: 200,
-                    headers: {
-                        "Content-Type": "application/json; charset=utf-8",
-                        "Cache-Control": "no-store"
-                    }
-                }
-            );
-        }
 
         if (
             url.origin === window.location.origin &&
