@@ -23,8 +23,11 @@
         return !["GET", "HEAD", "OPTIONS", "TRACE"].includes(method);
     }
 
-    function isAnonymousWrite(url) {
+    function isPreSessionAuthenticationWrite(url) {
+        if (url.origin !== window.location.origin) return false;
+
         return url.pathname === "/api/login" ||
+            /^\/api\/login\/mfa\/(?:passkey\/(?:begin|finish)|recovery)$/.test(url.pathname) ||
             /^\/api\/v1\/break-glass\/[^/]+\/login$/.test(url.pathname) ||
             url.pathname === "/auth/entra/frontchannel-logout";
     }
@@ -84,7 +87,7 @@
         if (
             url.origin === window.location.origin &&
             isUnsafe(method) &&
-            !isAnonymousWrite(url)
+            !isPreSessionAuthenticationWrite(url)
         ) {
             const token = await csrfToken();
             const options = Object.assign({}, init || {});
