@@ -32,9 +32,19 @@ try
 
     var relay = new PortalTunnelRelay();
     using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-    var pending = relay.RequestAsync("portal-one", "GET", "/healthz", [], [], timeout.Token);
+    var actor = new DelegatedTunnelIdentity("user-one", "User One", "Admin");
+    var pending = relay.RequestAsync(
+        "portal-one",
+        "GET",
+        "/healthz",
+        actor,
+        new Dictionary<string, string>(),
+        Array.Empty<byte>(),
+        timeout.Token);
     var request = relay.Poll("portal-one").Single();
     Assert(request.Path == "/healthz", "tunnel poll");
+    Assert(request.Headers["x-sirk-actor-id"] == actor.ActorId, "delegated actor id");
+    Assert(request.Headers["x-sirk-actor-role"] == actor.ActorRole, "delegated actor role");
     Assert(!relay.Complete("portal-two", request.Id, new TunnelResponseInput(200, "application/json", null, Convert.ToBase64String("{}"u8.ToArray()))), "cross-portal response blocked");
     Assert(relay.Complete("portal-one", request.Id, new TunnelResponseInput(200, "application/json", null, Convert.ToBase64String("{}"u8.ToArray()))), "tunnel completion");
     var response = await pending;
