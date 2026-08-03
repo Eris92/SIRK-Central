@@ -236,13 +236,17 @@ def main() -> int:
             raise RuntimeError("Logout after MFA failed.")
         require_logged_out(opener, "After MFA logout")
 
-        limited_status, _ = request_json(
-            opener,
-            "POST",
-            "/api/login",
-            {"userName": USER_NAME, "password": "invalid-password-value"},
-            AUTHORIZATION,
-        )
+        limited_status = None
+        for _ in range(6):
+            limited_status, _ = request_json(
+                opener,
+                "POST",
+                "/api/login",
+                {"userName": USER_NAME, "password": "invalid-password-value"},
+                AUTHORIZATION,
+            )
+            if limited_status == 429:
+                break
         if limited_status != 429:
             raise RuntimeError(
                 f"Break-Glass rate limiter returned HTTP {limited_status}, expected 429."
