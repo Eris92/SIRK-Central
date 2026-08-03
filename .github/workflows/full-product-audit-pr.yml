@@ -1,0 +1,32 @@
+name: Full Product Audit PR
+
+on:
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: audit/full-product-2026-08-03
+      - name: Run canonical audit scanner
+        shell: bash
+        run: |
+          curl -fsSL 'https://raw.githubusercontent.com/Eris92/SIRK-Central/669c2197b7a6e5de67d492f87c98c88234182b1d/.github/workflows/full-product-audit.yml' -o /tmp/canonical.yml
+          sed -n "/python3 - <<'PY'/,/^          PY$/p" /tmp/canonical.yml | sed '1d;$d;s/^          //' > /tmp/full-product-audit.py
+          python3 /tmp/full-product-audit.py
+      - name: Commit report
+        shell: bash
+        run: |
+          rm -f .github/workflows/full-product-audit.yml .github/workflows/full-product-audit-pr.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          git commit -m 'Add full product audit report'
+          git push origin HEAD:audit/full-product-2026-08-03
