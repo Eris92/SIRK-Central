@@ -302,6 +302,7 @@ if (securityOptions.Enabled)
     app.MapSirkBackup();
     app.MapEntraSettings();
     app.MapPortalManagement();
+    app.MapPortalConnectionFiles();
     app.MapApprovals();
     app.MapTickets();
     app.MapTicketCommands();
