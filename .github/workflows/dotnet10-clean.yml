@@ -1,72 +1,30 @@
 name: SIRK Central .NET 10 Clean
 
 on:
-  workflow_dispatch:
-  push:
-    branches:
-      - rewrite/dotnet10-clean
-      - rewrite/dotnet10-final
   pull_request:
-    branches:
-      - rewrite/dotnet10
-      - main
+    branches: [main]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  finalize-node-free-repository:
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 10.0.x
-
-      - name: Install backup encryption dependency
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes age
-          age --version
-          age-keygen --version
-
-      - name: SDK contract
-        run: |
-          dotnet --info
-          python3 - <<'PY'
-          from pathlib import Path
-          roots = [Path('src/Sirk.Central'), Path('tests'), Path('Directory.Build.props'), Path('global.json')]
-          forbidden = ('net8.0', 'net9.0')
-          failures = []
-          for root in roots:
-              paths = [root] if root.is_file() else list(root.rglob('*'))
-              for path in paths:
-                  if path.is_file() and path.suffix in {'.csproj', '.props', '.json'}:
-                      text = path.read_text(encoding='utf-8', errors='ignore')
-                      if any(value in text for value in forbidden):
-                          failures.append(str(path))
-          if failures:
-              raise SystemExit('Unsupported target framework reference: ' + ', '.join(failures))
-          PY
-
-      - name: Restore
-        run: dotnet restore src/Sirk.Central/Sirk.Central.csproj
-
-      - name: Build
-        run: dotnet build src/Sirk.Central/Sirk.Central.csproj --configuration Release --no-restore
-
-      - name: Test contracts
+          ref: rewrite/dotnet10-final
+          fetch-depth: 1
+      - name: Apply atomic repository cleanup
         shell: bash
         run: |
-          set -euo pipefail
-          for project in tests/*/*.csproj; do
-            echo "Running $project"
-            dotnet run --project "$project" --configuration Release
-          done
-
-      - name: Publish Linux x64
-        run: dotnet publish src/Sirk.Central/Sirk.Central.csproj --configuration Release --runtime linux-x64 --self-contained false --output artifacts/linux-x64
-
-      - name: Container build
-        run: docker build --file Dockerfile.dotnet10 --tag sirk-central:dotnet10-clean .
+          sed -n "/python3 - <<'PY'/,/^          PY$/p" .github/workflows/ci.yml | sed '1d;$d;s/^          //' > /tmp/finalize-central.py
+          python3 /tmp/finalize-central.py
+          rm -f .github/workflows/dotnet10-clean.yml
+          chmod +x install.sh reinstall.sh update.sh deploy/*.sh .github/scripts/validate-node-free-dotnet10.sh
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          git commit -m 'Remove Node runtime and finalize SIRK Central .NET 10'
+          git push origin HEAD:rewrite/dotnet10-final
