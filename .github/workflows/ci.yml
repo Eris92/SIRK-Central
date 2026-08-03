@@ -1,8 +1,274 @@
 name: CI
 
 on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  finalize-node-free-repository:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: rewrite/dotnet10-final
+          fetch-depth: 1
+
+      - name: Remove Node runtime and write canonical .NET 10 deployment
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import shutil
+          import re
+
+          root = Path('.')
+
+          for directory in ('auth', 'updater', 'test', 'scripts'):
+              shutil.rmtree(root / directory, ignore_errors=True)
+
+          source_root = root / 'src'
+          if source_root.exists():
+              for child in source_root.iterdir():
+                  if child.name != 'Sirk.Central':
+                      if child.is_dir(): shutil.rmtree(child)
+                      else: child.unlink()
+
+          for file_name in (
+              'package.json', 'package-lock.json', 'npm-shrinkwrap.json',
+              'yarn.lock', 'pnpm-lock.yaml', '.nvmrc',
+              'docker-compose.release.yml', 'Dockerfile.portal-runtime',
+              'docker-compose.portal-runtime.yml'
+          ):
+              (root / file_name).unlink(missing_ok=True)
+
+          workflow_root = root / '.github' / 'workflows'
+          node_markers = re.compile(
+              r'actions/setup-node|\bnpm\s+(?:ci|test|run)|\bnode\s+(?:--test|src/)|'
+              r'auth/server\.js|updater-gateway|Dockerfile\.gateway|Dockerfile\.manager',
+              re.I)
+          for workflow in workflow_root.glob('*.*ml'):
+              if workflow.name == 'ci.yml':
+                  continue
+              if node_markers.search(workflow.read_text(encoding='utf-8', errors='ignore')):
+                  workflow.unlink()
+
+          for documentation in list((root / 'docs').glob('*.md')) if (root / 'docs').exists() else []:
+              text = documentation.read_text(encoding='utf-8', errors='ignore')
+              if re.search(r'node src/server\.js|npm ci|updater-gateway|auth/server\.js', text, re.I):
+                  documentation.unlink()
+
+          dockerfile = (root / 'Dockerfile.dotnet10').read_text(encoding='utf-8')
+          (root / 'Dockerfile').write_text(dockerfile, encoding='utf-8', newline='\n')
+
+          caddy = (root / 'deploy' / 'dotnet10' / 'Caddyfile').read_text(encoding='utf-8')
+          (root / 'Caddyfile').write_text(caddy, encoding='utf-8', newline='\n')
+
+          compose = '''services:
+  central:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ${SIRK_CENTRAL_IMAGE:-sirk-central:dotnet10}
+    container_name: ${SIRK_CENTRAL_CONTAINER:-sirk-central}
+    restart: unless-stopped
+    expose:
+      - "8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:8080
+      AllowedHosts: "${SIRK_CENTRAL_DOMAIN:-central.sirkportal.com};localhost;127.0.0.1"
+      Sirk__ReverseProxy__TrustAll: "true"
+      Sirk__PortalProtocol__DataRoot: /var/lib/sirk-central
+      Sirk__Security__Enabled: "true"
+      Sirk__Security__DataRoot: /var/lib/sirk-central/security
+      Sirk__Security__BootstrapSecretFile: /var/lib/sirk-central/security/break-glass-bootstrap.json
+      Sirk__Security__DataProtectionCertificatePath: /run/secrets/sirk-central-dataprotection.pfx
+      Sirk__Security__DataProtectionCertificatePasswordFile: /run/secrets/sirk-central-dataprotection-password
+      Sirk__Security__ReleaseSigningPublicKeyFile: /run/secrets/sirk-release-signing-public-key
+      Sirk__Security__RequireProtectedDataProtectionKeys: "true"
+      Sirk__Security__RequireSignedReleases: "true"
+      Sirk__Security__RequireSingleWriterLease: "true"
+      Sirk__Security__SessionMinutes: "30"
+      Sirk__Security__LoginAttemptsPerFiveMinutes: "5"
+      Sirk__Security__PasswordHashIterations: "600000"
+      Sirk__WebAuthn__ServerDomain: "${SIRK_CENTRAL_DOMAIN:-central.sirkportal.com}"
+      Sirk__WebAuthn__ServerName: "SIRK Central"
+      Sirk__WebAuthn__Origins__0: "https://${SIRK_CENTRAL_DOMAIN:-central.sirkportal.com}"
+    volumes:
+      - sirk-central-data:/var/lib/sirk-central
+      - ${SIRK_CENTRAL_SECRETS_PATH:-./secrets}:/run/secrets:ro
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=256m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    healthcheck:
+      test: ["CMD", "dotnet", "Sirk.Central.dll", "--health-check", "http://127.0.0.1:8080/readyz"]
+      interval: 20s
+      timeout: 7s
+      start_period: 10s
+      retries: 3
+    networks:
+      - sirk-edge
+
+  caddy:
+    image: caddy:2.10.0-alpine
+    container_name: ${SIRK_CADDY_CONTAINER:-sirk-caddy}
+    restart: unless-stopped
+    depends_on:
+      central:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      SIRK_ACME_EMAIL: "${SIRK_ACME_EMAIL:-admin@example.com}"
+      SIRK_WEBSITE_DOMAIN: "${SIRK_WEBSITE_DOMAIN:-sirkportal.com}"
+      SIRK_BUSINESS_DOMAIN: "${SIRK_BUSINESS_DOMAIN:-sir-k.pl}"
+      SIRK_CENTRAL_DOMAIN: "${SIRK_CENTRAL_DOMAIN:-central.sirkportal.com}"
+      SIRK_AUTH_DOMAIN: "${SIRK_AUTH_DOMAIN:-auth.sirkportal.com}"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./website:/srv/website:ro
+      - ${SIRK_BUSINESS_SITE_PATH:-./website}:/srv/sir-k:ro
+      - sirk-caddy-data:/data
+      - sirk-caddy-config:/config
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    networks:
+      - sirk-edge
+
+networks:
+  sirk-edge:
+    driver: bridge
+
+volumes:
+  sirk-central-data:
+  sirk-caddy-data:
+  sirk-caddy-config:
+'''
+          (root / 'docker-compose.yml').write_text(compose, encoding='utf-8', newline='\n')
+          (root / 'deploy' / 'dotnet10' / 'docker-compose.yml').write_text(
+              compose,
+              encoding='utf-8',
+              newline='\n')
+
+          for script in (root / 'deploy').glob('*.sh'):
+              value = script.read_text(encoding='utf-8', errors='ignore')
+              value = value.replace('rewrite/dotnet10-clean', 'main')
+              value = value.replace('rewrite/dotnet10', 'main')
+              value = value.replace('sirk-central:2.0.0-test.4', 'sirk-central:dotnet10')
+              value = value.replace('sirk-central-dotnet10', 'sirk-central')
+              script.write_text(value, encoding='utf-8', newline='\n')
+
+          (root / 'install.sh').write_text(
+              '#!/usr/bin/env bash\nset -euo pipefail\nexec bash "$(dirname "$0")/deploy/install-dotnet10.sh" "$@"\n',
+              encoding='utf-8', newline='\n')
+          (root / 'reinstall.sh').write_text(
+              '#!/usr/bin/env bash\nset -euo pipefail\nexec bash "$(dirname "$0")/deploy/reinstall-dotnet10.sh" "$@"\n',
+              encoding='utf-8', newline='\n')
+          (root / 'update.sh').write_text(
+              '#!/usr/bin/env bash\nset -euo pipefail\nexec bash "$(dirname "$0")/deploy/upgrade-dotnet10-vps.sh" "$@"\n',
+              encoding='utf-8', newline='\n')
+
+          readme = '''# SIRK Central
+
+SIRK Central is the public multi-tenant control plane for SIRK Portals.
+
+## Runtime
+
+- ASP.NET Core on .NET 10 LTS
+- one Central process behind Caddy
+- no Node.js runtime, npm dependencies, separate auth service or Node updater services
+- browser JavaScript is stored only under `public/` and `website/`
+- encrypted backups use `age`
+- updates are delegated to the shared SIRK Updater product
+
+## Main integrations
+
+- Microsoft Entra ID / OIDC
+- local Break-Glass with Access URL, recovery codes and WebAuthn/YubiKey
+- central RBAC, organizations, teams and Portal assignments
+- Portal enrollment, signed heartbeat, command channel and reverse tunnel
+- Approval Center
+- ticket lifecycle and provider contracts
+- encrypted backup, restore and key rotation
+- signed release metadata and maintenance operations
+
+## Installation
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Eris92/SIRK-Central/main/install.sh | sudo bash
+```
+
+The installer creates protected secrets and deploys the .NET 10 Central container with Caddy. Existing data is preserved by the upgrade and reinstall workflows unless an explicit destructive reset is requested.
+
+## Portal connection
+
+Create a Portal in Central and use **Pobierz plik połączenia**. Downloading the file rotates the Portal token and returns the only plaintext copy. Import that JSON file in Portal settings. The document configures HTTPS heartbeat and the WSS reverse tunnel without manually copying individual values.
+'''
+          (root / 'README.md').write_text(readme, encoding='utf-8', newline='\n')
+
+          validator = '''#!/usr/bin/env bash
+set -euo pipefail
+
+fail() { echo "NODE_FREE_CONTRACT_FAILED: $*" >&2; exit 1; }
+
+for forbidden in package.json package-lock.json npm-shrinkwrap.json yarn.lock pnpm-lock.yaml .nvmrc auth updater test; do
+  [[ ! -e "$forbidden" ]] || fail "legacy Node artifact remains: $forbidden"
+done
+
+[[ -f src/Sirk.Central/Sirk.Central.csproj ]] || fail "Central .NET project is missing"
+[[ "$(find src -mindepth 1 -maxdepth 1 ! -name Sirk.Central -print -quit)" == "" ]] || fail "legacy source remains outside src/Sirk.Central"
+
+if grep -RIE --include='*.yml' --include='*.yaml' 'actions/setup-node|\bnpm (ci|test|run)|\bnode --test|auth/server\.js|updater-gateway' .github/workflows; then
+  fail "Node workflow remains"
+fi
+
+if grep -RIE --include='*.csproj' --include='*.props' 'net(8|9)\.0' src tests Directory.Build.props; then
+  fail "legacy .NET target remains"
+fi
+
+grep -q '<TargetFramework>net10.0</TargetFramework>' src/Sirk.Central/Sirk.Central.csproj || fail "Central does not target net10.0"
+grep -q 'ENTRYPOINT \["dotnet", "Sirk.Central.dll"\]' Dockerfile || fail "Dockerfile does not start ASP.NET Core"
+! grep -qE '(^|[[:space:]])node([[:space:]]|$)|npm|src/server\.js' Dockerfile docker-compose.yml || fail "Node runtime remains in deployment"
+grep -q 'central:8080' Caddyfile || fail "Caddy does not proxy to the .NET Central service"
+
+grep -q 'CENTRAL_REF=.*main' deploy/install-dotnet10.sh || fail "installer does not default to main"
+grep -q 'CENTRAL_REF=.*main' deploy/reinstall-dotnet10.sh || fail "reinstaller does not default to main"
+
+while IFS= read -r file; do
+  case "$file" in
+    public/*|website/*) ;;
+    *) fail "JavaScript outside browser assets: $file" ;;
+  esac
+done < <(find . -path './.git' -prune -o -type f \( -name '*.js' -o -name '*.mjs' -o -name '*.cjs' \) -print | sed 's#^./##')
+
+echo NODE_FREE_DOTNET10_CONTRACT_OK
+'''
+          validator_path = root / '.github' / 'scripts' / 'validate-node-free-dotnet10.sh'
+          validator_path.parent.mkdir(parents=True, exist_ok=True)
+          validator_path.write_text(validator, encoding='utf-8', newline='\n')
+
+          final_ci = '''name: SIRK Central .NET 10 CI
+
+on:
   push:
-    branches: [main, 'feat/**', 'fix/**', 'refactor/**']
+    branches: [main, rewrite/dotnet10-final]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -11,168 +277,63 @@ permissions:
   contents: read
 
 concurrency:
-  group: sirk-central-ci-${{ github.ref }}
+  group: sirk-central-dotnet10-ci
   cancel-in-progress: true
 
 jobs:
-  test:
+  build-test-container:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
         with:
-          fetch-depth: 0
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-
-      - run: npm ci
-
-      - name: Validate shell JavaScript and Python syntax
-        run: npm run check:syntax
-
-      - name: Run unit HTTP security and concurrency tests
-        env:
-          SIRK_CONCURRENCY_TEST_REQUESTS: '24'
-        run: npm test
-
-      - name: Validate source and runtime contracts
+          dotnet-version: 10.0.x
+          cache: true
+          cache-dependency-path: '**/*.csproj'
+      - name: Install encrypted backup dependency
         run: |
-          node - <<'NODE'
-          const fs = require('node:fs');
-          const pkg = require('./package.json');
-          const lock = require('./package-lock.json');
-          if (pkg.version !== lock.version || pkg.version !== lock.packages[''].version) throw new Error('Package versions differ.');
-          if (pkg.main !== 'src/server.js' || pkg.scripts.start !== 'node src/server.js') throw new Error('Canonical runtime entry is invalid.');
-
-          for (const file of [
-            'src/server.js','src/application.js','src/version.js','src/http/router.js','src/http/transport.js','src/modules/portal-tunnel.js','src/modules/tickets.js','src/runtime-lock.js','src/ticket-projection-store.js',
-            'src/portal-command-store.js','src/request-rate-limiter.js','src/approval-store.js',
-            'src/central-operation-guard.js','src/sso-replay-store.js','src/sso-callback-handler.js',
-            'auth/server.js','updater/Dockerfile.gateway','updater/Dockerfile.manager','updater/gateway-server.js','updater/server.js',
-            'updater/management-server.js','updater/backup-archive.js','updater/restore-transaction.js',
-            'test/runtime-lock.test.js','test/portal-command-cancellation.test.js',
-            'test/ticket-event-http-semantics.test.js','test/protocol-concurrency.test.js',
-            'test/updater-gateway.test.js','test/e2e/ui-buttons.spec.js',
-            'deploy/acceptance-test.sh','deploy/configure-and-start.sh',
-            'deploy/maintenance-up.sh','deploy/maintenance-down.sh','scripts/sync-main.sh'
-          ]) if (!fs.existsSync(file)) throw new Error('Missing required file: ' + file);
-
-          if (!fs.readFileSync('Dockerfile', 'utf8').includes('CMD ["node", "src/server.js"]')) throw new Error('Dockerfile does not start the canonical runtime.');
-          if (fs.existsSync('Dockerfile.portal-runtime') || fs.existsSync('docker-compose.portal-runtime.yml')) throw new Error('Legacy deployment overlay still exists.');
-          const gatewayDockerfile = fs.readFileSync('updater/Dockerfile.gateway', 'utf8');
-          if (!gatewayDockerfile.includes('USER node') || !gatewayDockerfile.includes('CMD ["node", "/app/gateway-server.js"]')) throw new Error('Gateway Dockerfile is not minimal/non-root.');
-          if (/docker-cli|\bgit\b|\btar\b/.test(gatewayDockerfile)) throw new Error('Gateway image contains maintenance tooling.');
-          const managerDockerfile = fs.readFileSync('updater/Dockerfile.manager', 'utf8');
-          if (!managerDockerfile.includes('CMD ["node", "/app/management-server.js"]')) throw new Error('Backup manager entrypoint is invalid.');
-          if (/docker-cli|\bgit\b/.test(managerDockerfile)) throw new Error('Backup manager image contains updater tooling.');
-
-          const runtime = fs.readFileSync('src/modules/tickets.js', 'utf8');
-          for (const expected of ['runtimeLockFactory.acquire','eventErrorResult','SIRK_RUNTIME_LOCK_DISABLED']) {
-            if (!runtime.includes(expected)) throw new Error('Ticket/runtime contract missing: ' + expected);
-          }
-          const commands = fs.readFileSync('src/portal-command-store.js', 'utf8');
-          for (const expected of ['cancel_requested','control = "cancel"','COMMAND_CANCEL_NOT_REQUESTED']) {
-            if (!commands.includes(expected)) throw new Error('Cancellation contract missing: ' + expected);
-          }
-          const gateway = fs.readFileSync('updater/gateway-server.js', 'utf8');
-          for (const expected of ['UPDATER_MAINTENANCE_REQUIRED','pathAllowed','workerOrigin','maxBodyBytes']) {
-            if (!gateway.includes(expected)) throw new Error('Gateway contract missing: ' + expected);
-          }
-          const compose = fs.readFileSync('docker-compose.yml', 'utf8');
-          for (const expected of [
-            'SIRK_UPDATER_ORIGIN: http://updater-gateway:8092',
-            'SIRK_UPDATER_ALLOWED_HOSTS: updater-gateway',
-            'dockerfile: updater/Dockerfile.gateway',
-            'dockerfile: updater/Dockerfile.manager',
-            'profiles: ["maintenance"]','restart: "no"',
-            'SIRK_CENTRAL_INTERNAL_ORIGIN: http://central:8080'
-          ]) if (!compose.includes(expected)) throw new Error('Compose contract missing: ' + expected);
-
-          const configure = fs.readFileSync('deploy/configure-and-start.sh', 'utf8');
-          if (!configure.includes('SERVICES=(central auth updater-gateway backup-manager caddy)')) throw new Error('Installer base service list is invalid.');
-          if (!configure.includes('ps -q updater')) throw new Error('Installer does not verify the privileged worker is absent.');
-          const acceptance = fs.readFileSync('deploy/acceptance-test.sh', 'utf8');
-          for (const expected of ['gateway_expect 409 UPDATER_MAINTENANCE_REQUIRED','gateway_expect 200','Runtime and source contracts']) {
-            if (!acceptance.includes(expected)) throw new Error('Acceptance contract missing: ' + expected);
-          }
-          NODE
-
-      - name: Create deterministic CI environment
+          sudo apt-get update
+          sudo apt-get install --yes age
+          age --version
+      - name: Validate Node-free .NET 10 repository
+        run: bash .github/scripts/validate-node-free-dotnet10.sh
+      - name: Restore and build
         run: |
-          cat > .env <<'EOF'
-          COMPOSE_PROJECT_NAME=sirk-central
-          NODE_ENV=production
-          SIRK_ADMIN_PASSWORD_HASH='scrypt$16384$8$1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
-          SIRK_ACCESS_KEY_HASH='sha256$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
-          SIRK_SSO_SHARED_SECRET=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-          SIRK_UPDATER_TOKEN=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-          SIRK_AUDIT_INTEGRITY_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-          SIRK_CENTRAL_DOMAIN=central.example.test
-          SIRK_PUBLIC_ORIGIN=https://central.example.test
-          SIRK_WEBSITE_DOMAIN=example.test
-          SIRK_AUTH_DOMAIN=auth.example.test
-          SIRK_AUTH_ORIGIN=https://auth.example.test
-          SIRK_ACME_EMAIL=admin@example.test
-          SIRK_BUSINESS_SITE_PATH=/tmp/sirk-business-site
-          EOF
-          mkdir -p /tmp/sirk-business-site
-
-      - name: Validate base Compose has gateway and excludes worker
+          dotnet restore src/Sirk.Central/Sirk.Central.csproj
+          dotnet build src/Sirk.Central/Sirk.Central.csproj --configuration Release --no-restore
+      - name: Run every Central contract project
+        shell: bash
         run: |
-          docker compose -f docker-compose.yml --profile auth config --services >/tmp/base-services.txt
-          for service in central auth updater-gateway backup-manager caddy; do grep -qx "$service" /tmp/base-services.txt; done
-          ! grep -qx updater /tmp/base-services.txt
-          docker compose -f docker-compose.yml --profile auth config >/tmp/compose.base.yml
-
-      - name: Validate maintenance Compose trust boundaries
+          set -euo pipefail
+          for project in tests/*/*.csproj; do
+            dotnet run --project "$project" --configuration Release
+          done
+      - name: Publish Linux x64
+        run: dotnet publish src/Sirk.Central/Sirk.Central.csproj --configuration Release --runtime linux-x64 --self-contained false --output artifacts/linux-x64
+      - name: Validate Compose and Caddy
         run: |
-          docker compose -f docker-compose.yml --profile auth --profile maintenance config --format json >/tmp/compose.maintenance.json
-          node - <<'NODE'
-          const fs = require('node:fs');
-          const compose = JSON.parse(fs.readFileSync('/tmp/compose.maintenance.json', 'utf8'));
-          for (const service of ['central','auth','updater-gateway','updater','backup-manager','caddy']) {
-            if (!compose.services?.[service]) throw new Error('Missing service: ' + service);
-          }
-          if (String(compose.services['updater-gateway'].user) !== 'node') throw new Error('Gateway must run as node.');
-          if (String(compose.services.updater.user) !== '0:0') throw new Error('Worker root boundary is not explicit.');
-          if (String(compose.services['backup-manager'].user) !== '0:0') throw new Error('Backup manager read boundary is not explicit.');
-          if (compose.services.updater.restart !== 'no') throw new Error('Worker restart policy must be no.');
-          for (const service of ['updater-gateway','updater','backup-manager']) {
-            if (compose.services[service].ports?.length) throw new Error(service + ' publishes host ports.');
-          }
-          if (compose.services['updater-gateway'].volumes?.length) throw new Error('Gateway must not mount host or persistent volumes.');
-          if (compose.services['updater-gateway'].environment.SIRK_ADMIN_PASSWORD_HASH) throw new Error('Gateway inherited unrelated .env secrets.');
-          if (compose.services.central.environment.SIRK_UPDATER_ORIGIN !== 'http://updater-gateway:8092') throw new Error('Central bypasses gateway.');
-          if (compose.services['updater-gateway'].environment.SIRK_UPDATER_WORKER_ORIGIN !== 'http://updater:8090') throw new Error('Gateway worker origin is invalid.');
-          const managerVolumes = compose.services['backup-manager'].volumes || [];
-          if (managerVolumes.some(volume => String(volume.source || volume).includes('docker.sock'))) throw new Error('Backup manager mounts the Docker socket.');
-          const centralData = managerVolumes.find(volume => String(volume.target || '').includes('/var/lib/sirk-central'));
-          if (!centralData || centralData.read_only !== true) throw new Error('Backup manager Central data mount must be read-only.');
-          NODE
+          mkdir -p secrets
+          touch secrets/sirk-central-dataprotection.pfx secrets/sirk-central-dataprotection-password secrets/sirk-release-signing-public-key
+          docker compose config >/tmp/sirk-central-compose.yml
+          docker run --rm \
+            -e SIRK_ACME_EMAIL=admin@example.test \
+            -e SIRK_WEBSITE_DOMAIN=example.test \
+            -e SIRK_BUSINESS_DOMAIN=business.example.test \
+            -e SIRK_CENTRAL_DOMAIN=central.example.test \
+            -e SIRK_AUTH_DOMAIN=auth.example.test \
+            -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2.10.0-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+      - name: Build canonical container
+        run: docker build --tag sirk-central:dotnet10 .
+'''
+          (workflow_root / 'ci.yml').write_text(final_ci, encoding='utf-8', newline='\n')
+          PY
 
-      - name: Build application images
-        run: docker compose -f docker-compose.yml --profile auth --profile maintenance build central auth updater-gateway updater backup-manager
-
-      - name: Inspect image runtimes
-        run: |
-          set -euxo pipefail
-          central_image=sirk-central-central
-          auth_image=sirk-central-auth
-          gateway_image=sirk-central-updater-gateway
-          updater_image=sirk-central-updater
-          manager_image=sirk-central-backup-manager
-          for image in "$central_image" "$auth_image" "$gateway_image" "$updater_image" "$manager_image"; do docker image inspect "$image" >/dev/null; done
-          test "$(docker image inspect "$central_image" --format '{{.Config.User}}')" = node
-          test "$(docker image inspect "$auth_image" --format '{{.Config.User}}')" = node
-          test "$(docker image inspect "$gateway_image" --format '{{.Config.User}}')" = node
-          test "$(docker image inspect "$updater_image" --format '{{.Config.User}}')" = root
-          test "$(docker image inspect "$manager_image" --format '{{.Config.User}}')" = root
-          docker run --rm --entrypoint node "$central_image" --check src/server.js
-          docker run --rm --entrypoint node "$auth_image" --check auth/server.js
-          docker run --rm --entrypoint node "$gateway_image" --check /app/gateway-server.js
-          docker run --rm --entrypoint node "$updater_image" --check /app/server.js
-          docker run --rm --entrypoint node "$updater_image" --check /app/management-server.js
-          docker run --rm --entrypoint node "$manager_image" --check /app/management-server.js
+          chmod +x install.sh reinstall.sh update.sh deploy/*.sh .github/scripts/validate-node-free-dotnet10.sh
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          git commit -m 'Remove Node runtime and finalize SIRK Central .NET 10'
+          git push origin HEAD:rewrite/dotnet10-final
