@@ -1,0 +1,187 @@
+name: Full Product Audit
+
+on:
+  push:
+    branches: [ audit/full-product-2026-08-03 ]
+    paths: [ '.github/workflows/full-product-audit.yml' ]
+
+permissions:
+  contents: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: audit/full-product-2026-08-03
+          fetch-depth: 1
+      - name: Scan repository
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os, re, hashlib
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          root = Path('.').resolve()
+          excluded = {'.git','bin','obj','node_modules','artifacts','.vs','.idea','TestResults','packages'}
+          text_ext = {'.cs','.csproj','.props','.targets','.json','.yml','.yaml','.xml','.ps1','.sh','.cmd','.bat','.js','.mjs','.cjs','.ts','.tsx','.html','.css','.md','.txt','.env','.config','.wxs','.sln','.cshtml'}
+          files=[]
+          for p in root.rglob('*'):
+              if not p.is_file() or any(part in excluded for part in p.parts):
+                  continue
+              rel=p.relative_to(root).as_posix()
+              if rel.startswith('audit/') or rel == '.github/workflows/full-product-audit.yml':
+                  continue
+              files.append((p,rel))
+
+          def read(p):
+              try: return p.read_text(encoding='utf-8')
+              except UnicodeDecodeError:
+                  try: return p.read_text(encoding='utf-8-sig')
+                  except: return ''
+              except: return ''
+
+          texts={rel:read(p) for p,rel in files if p.suffix.lower() in text_ext or p.name in {'Dockerfile','Caddyfile','global.json'}}
+          findings=[]
+          def add(sev,cat,path,line,snippet,rule):
+              findings.append({'severity':sev,'category':cat,'path':path,'line':line,'rule':rule,'snippet':snippet.strip()[:300]})
+
+          rules=[
+            ('critical','tls',r'DangerousAcceptAnyServerCertificateValidator','accept-any-server-certificate'),
+            ('critical','tls',r'ServerCertificateCustomValidationCallback\s*=.*=>\s*true','disabled-server-certificate-validation'),
+            ('critical','auth',r'ValidateIssuer\s*=\s*false','jwt-issuer-validation-disabled'),
+            ('critical','auth',r'ValidateAudience\s*=\s*false','jwt-audience-validation-disabled'),
+            ('high','auth',r'RequireHttpsMetadata\s*=\s*false','https-metadata-disabled'),
+            ('high','cors',r'AllowAnyOrigin\s*\(','cors-any-origin'),
+            ('high','crypto',r'\b(?:MD5|SHA1)\.(?:Create|HashData)\b','weak-hash'),
+            ('high','javascript',r'\beval\s*\(','javascript-eval'),
+            ('medium','javascript',r'\.innerHTML\s*=','dynamic-innerhtml'),
+            ('medium','browser-storage',r'\blocalStorage\b','local-storage'),
+            ('medium','cookies',r'CookieSecurePolicy\.None|Secure\s*=\s*false','insecure-cookie'),
+            ('medium','process',r'UseShellExecute\s*=\s*true','shell-execute-enabled'),
+            ('medium','incomplete',r'NotImplementedException|TODO|FIXME|\bplaceholder\b|\bstub\b','incomplete-implementation'),
+          ]
+          for path,text in texts.items():
+              lower_path=path.lower()
+              for i,line in enumerate(text.splitlines(),1):
+                  for sev,cat,pat,rule in rules:
+                      if re.search(pat,line,re.I):
+                          actual=sev
+                          if any(x in lower_path for x in ('test','docs','readme','audit')) and sev in ('critical','high','medium'):
+                              actual='info'
+                          add(actual,cat,path,i,line,rule)
+                  if re.search(r'https?://',line,re.I) and 'http://' in line.lower() and not re.search(r'http://(?:localhost|127\.0\.0\.1|0\.0\.0\.0|schemas\.)',line,re.I):
+                      add('medium','transport',path,i,line,'plaintext-http-url')
+                  secret=re.search(r'(?i)(password|clientsecret|sharedsecret|apikey|api_key|token)\s*[:=]\s*["\']([^"\']{8,})["\']',line)
+                  if secret and not any(x in lower_path for x in ('test','example','sample','readme','docs')) and not any(x in secret.group(2) for x in ('${','%','<','>','YOUR_','CHANGE_ME','example')):
+                      add('high','secret',path,i,line,'hardcoded-secret-like-value')
+
+          node_files=[rel for p,rel in files if p.name in {'package.json','package-lock.json','yarn.lock','pnpm-lock.yaml','.nvmrc'} or 'node_modules' in p.parts]
+          legacy=[rel for p,rel in files if re.search(r'(^|/)(server|node|legacy)(/|$)',rel,re.I)]
+
+          projects=[]
+          for p,rel in files:
+              if p.suffix.lower()=='.csproj':
+                  text=read(p)
+                  frameworks=re.findall(r'<TargetFrameworks?>([^<]+)</TargetFrameworks?>',text)
+                  packages=re.findall(r'<PackageReference\s+Include="([^"]+)"(?:\s+Version="([^"]+)")?',text)
+                  projects.append({'path':rel,'frameworks':frameworks,'packages':[{'name':a,'version':b} for a,b in packages]})
+
+          json_configs={}
+          def flatten(obj,prefix=''):
+              out=[]
+              if isinstance(obj,dict):
+                  for k,v in obj.items(): out += flatten(v, f'{prefix}:{k}' if prefix else k)
+              elif isinstance(obj,list): out.append(prefix+'[]')
+              else: out.append(prefix)
+              return out
+          for path,text in texts.items():
+              if Path(path).name.lower().startswith(('appsettings','config')) and path.endswith('.json'):
+                  try: json_configs[path]=sorted(set(flatten(json.loads(text))))
+                  except Exception as e: add('high','configuration',path,1,str(e),'invalid-json-configuration')
+
+          config_types=[]
+          type_re=re.compile(r'\b(?:class|record(?:\s+class)?)\s+([A-Za-z0-9_]*(?:Options|Settings|Configuration))\b')
+          prop_re=re.compile(r'public\s+[A-Za-z0-9_<>,?\.\[\]]+\s+([A-Za-z0-9_]+)\s*\{\s*get;')
+          for path,text in texts.items():
+              if not path.endswith('.cs'): continue
+              for m in type_re.finditer(text):
+                  chunk=text[m.end():m.end()+8000]
+                  props=[]
+                  depth=0; started=False; end=len(chunk)
+                  for idx,ch in enumerate(chunk):
+                      if ch=='{': depth+=1; started=True
+                      elif ch=='}':
+                          depth-=1
+                          if started and depth<=0: end=idx; break
+                  props=prop_re.findall(chunk[:end])
+                  config_types.append({'path':path,'type':m.group(1),'properties':sorted(set(props))})
+
+          endpoint_patterns=[
+              re.compile(r'\bMap(?:Get|Post|Put|Patch|Delete|Methods|Group)\s*\(\s*["\']([^"\']+)'),
+              re.compile(r'\b(?:fetch|api)\s*\(\s*["\']([^"\']+)'),
+              re.compile(r'Invoke-RestMethod\s+[^\n]*["\']([^"\']+/api/[^"\']*)',re.I)
+          ]
+          endpoints=[]
+          for path,text in texts.items():
+              for pat in endpoint_patterns:
+                  for m in pat.finditer(text):
+                      value=m.group(1)
+                      if value not in [e['value'] for e in endpoints]: endpoints.append({'path':path,'value':value})
+          endpoints=endpoints[:1000]
+
+          integration_terms=['central','portal','agent','updater','entra','openid','oidc','saml','ldap','active directory','jira','servicedesk','service desk','zabbix','wazuh','ticket','smtp','email','webhook','remote desktop','rdp','backup','restore','yubikey','webauthn','fido','mfa']
+          integrations={}
+          for term in integration_terms:
+              hits=[]
+              pattern=re.compile(re.escape(term),re.I)
+              for path,text in texts.items():
+                  count=len(pattern.findall(text))
+                  if count: hits.append({'path':path,'count':count})
+              integrations[term]=sorted(hits,key=lambda x:-x['count'])[:20]
+
+          workflows=[]
+          for p,rel in files:
+              if rel.startswith('.github/workflows/') and p.suffix.lower() in {'.yml','.yaml'}:
+                  text=read(p)
+                  name=re.search(r'^name:\s*(.+)$',text,re.M)
+                  workflows.append({'path':rel,'name':name.group(1).strip() if name else rel,'has_pull_request':'pull_request:' in text,'has_push':'push:' in text,'permissions_write':'contents: write' in text})
+
+          ext_counts={}
+          total_lines=0
+          for p,rel in files:
+              ext=p.suffix.lower() or '<none>'; ext_counts[ext]=ext_counts.get(ext,0)+1
+              if rel in texts: total_lines += len(texts[rel].splitlines())
+
+          severity_order={'critical':0,'high':1,'medium':2,'low':3,'info':4}
+          findings.sort(key=lambda x:(severity_order.get(x['severity'],9),x['path'],x['line']))
+          report={
+            'repository':os.environ.get('GITHUB_REPOSITORY'),
+            'commit':os.environ.get('GITHUB_SHA'),
+            'summary':{
+              'files':len(files),'textFiles':len(texts),'lines':total_lines,'extensions':dict(sorted(ext_counts.items())),
+              'projects':len(projects),'nodeArtifacts':len(node_files),'legacyPaths':len(legacy),
+              'findingsBySeverity':{s:sum(1 for f in findings if f['severity']==s) for s in severity_order}
+            },
+            'projects':projects,'nodeArtifacts':node_files,'legacyPaths':legacy,'jsonConfigurationKeys':json_configs,
+            'configurationTypes':config_types,'endpoints':endpoints,'integrations':integrations,
+            'workflows':workflows,'findings':findings[:2000]
+          }
+          Path('audit').mkdir(exist_ok=True)
+          Path('audit/full-audit.json').write_text(json.dumps(report,indent=2,ensure_ascii=False),encoding='utf-8')
+          md=['# Full product audit','',f"Repository: `{report['repository']}`",f"Commit: `{report['commit']}`",'', '## Summary','', '```json',json.dumps(report['summary'],indent=2,ensure_ascii=False),'```','', '## Highest severity findings','']
+          for f in findings[:200]: md.append(f"- **{f['severity'].upper()}** `{f['rule']}` — `{f['path']}:{f['line']}` — {f['snippet']}")
+          Path('audit/full-audit.md').write_text('\n'.join(md)+'\n',encoding='utf-8')
+          PY
+      - name: Commit report
+        shell: bash
+        run: |
+          rm -f .github/workflows/full-product-audit.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          git commit -m 'Add full product audit report'
+          git push origin HEAD:audit/full-product-2026-08-03
