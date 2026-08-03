@@ -58,6 +58,7 @@ builder.Services.AddSingleton<OrganizationStore>();
 builder.Services.AddSingleton<PortalAssignmentStore>();
 builder.Services.AddSingleton<OperationsMiddleware>();
 builder.Services.AddSingleton<PortalTunnelMiddleware>();
+builder.Services.AddCurrentUiCompatibility();
 builder.Services.AddSirkWebAuthn(builder.Configuration);
 
 ProductionSecurityGuards.ConfigureDataProtection(
