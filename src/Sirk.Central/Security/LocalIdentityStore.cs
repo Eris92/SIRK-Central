@@ -123,6 +123,27 @@ internal sealed class LocalIdentityStore
         }
     }
 
+    public string RotateAccessCode()
+    {
+        lock (_sync)
+        {
+            if (!_options.Enabled || _document is null || !_document.BreakGlass.Enabled)
+                throw new InvalidOperationException("Break-Glass identity is not available.");
+
+            var accessCode = Base64Url(RandomNumberGenerator.GetBytes(32));
+            ValidateAccessCode(accessCode);
+            var account = _document.BreakGlass with
+            {
+                AccessCodeHash = HashCredential(accessCode),
+                UpdatedAtUtc = DateTimeOffset.UtcNow
+            };
+            var updated = new LocalIdentityDocument(CurrentSchemaVersion, account);
+            WriteIdentityDocument(updated, overwrite: true);
+            _document = updated;
+            return accessCode;
+        }
+    }
+
     public LocalIdentity? GetBreakGlassIdentity()
     {
         lock (_sync)
@@ -345,4 +366,10 @@ internal sealed class LocalIdentityStore
         if (!OperatingSystem.IsWindows())
             File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
     }
+
+    private static string Base64Url(byte[] value) =>
+        Convert.ToBase64String(value)
+            .TrimEnd('=')
+            .Replace('+', '-')
+            .Replace('/', '_');
 }
