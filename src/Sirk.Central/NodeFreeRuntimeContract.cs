@@ -7,6 +7,7 @@ namespace Sirk.Central;
 internal static class NodeFreeRuntimeContract
 {
     public const string Runtime = ".NET 10";
-    public const string Architecture = "ASP.NET Core single service";
+    public const string Architecture = "ASP.NET Core single service behind Caddy";
+    public const string UpdateCoordinator = "SIRK Updater";
     public const bool NodeRuntimeAllowed = false;
 }
