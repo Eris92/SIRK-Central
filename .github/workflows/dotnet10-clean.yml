@@ -1,11 +1,17 @@
 name: SIRK Central .NET 10 Clean
 
 on:
+  push:
+    branches: [rewrite/dotnet10-final]
   pull_request:
     branches: [main]
 
 permissions:
   contents: write
+
+concurrency:
+  group: sirk-central-finalize-node-free
+  cancel-in-progress: true
 
 jobs:
   finalize-node-free-repository:
