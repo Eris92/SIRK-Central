@@ -82,4 +82,22 @@
 
         return originalFetch(input, init);
     };
+
+    function loadProductUi() {
+        if (document.querySelector('script[data-sirk-product-ui]')) return;
+        const script = document.createElement("script");
+        script.src = "/product-ui.js";
+        script.defer = true;
+        script.dataset.sirkProductUi = "1";
+        script.addEventListener("error", function () {
+            console.error("SIRK product UI module could not be loaded.");
+        });
+        document.head.append(script);
+    }
+
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", loadProductUi, { once: true });
+    } else {
+        loadProductUi();
+    }
 }());
