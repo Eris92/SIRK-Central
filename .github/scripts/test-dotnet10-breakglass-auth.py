@@ -17,6 +17,7 @@ USER_NAME = "breakglass"
 PASSWORD = "Correct-Horse-Battery-Staple-2026"
 ACCESS_CODE = "0123456789abcdef0123456789ABCDEF"
 AUTHORIZATION = {"Authorization": f"Bearer {ACCESS_CODE}"}
+LOGIN_ATTEMPTS = 5
 
 
 def request_json(opener, method: str, path: str, body=None, headers=None):
@@ -113,7 +114,7 @@ def main() -> int:
             "Sirk__Security__BootstrapSecretFile": str(bootstrap_path),
             "Sirk__Security__PasswordHashIterations": "100000",
             "Sirk__Security__SessionMinutes": "30",
-            "Sirk__Security__LoginAttemptsPerFiveMinutes": "5",
+            "Sirk__Security__LoginAttemptsPerFiveMinutes": str(LOGIN_ATTEMPTS),
         }
     )
 
@@ -236,17 +237,21 @@ def main() -> int:
             raise RuntimeError("Logout after MFA failed.")
         require_logged_out(opener, "After MFA logout")
 
-        limited_status, _ = request_json(
-            opener,
-            "POST",
-            "/api/login",
-            {"userName": USER_NAME, "password": "invalid-password-value"},
-            AUTHORIZATION,
-        )
-        if limited_status != 429:
-            raise RuntimeError(
-                f"Break-Glass rate limiter returned HTTP {limited_status}, expected 429."
+        for attempt in range(1, LOGIN_ATTEMPTS + 1):
+            limited_status, limited = request_json(
+                opener,
+                "POST",
+                "/api/login",
+                {"userName": USER_NAME, "password": f"invalid-password-value-{attempt}"},
+                AUTHORIZATION,
             )
+            expected = 429 if attempt == LOGIN_ATTEMPTS else 401
+            if limited_status != expected:
+                raise RuntimeError(
+                    f"Break-Glass throttle attempt {attempt} returned HTTP {limited_status}, expected {expected}."
+                )
+            if expected == 429 and limited.get("code") != "LOGIN_RATE_LIMITED":
+                raise RuntimeError("Break-Glass throttle did not return LOGIN_RATE_LIMITED.")
 
         identity_path = security_root / "identity.net10.json"
         audit_path = security_root / "security-audit.net10.jsonl"
