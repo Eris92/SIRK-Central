@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - rewrite/dotnet10-clean
+      - rewrite/dotnet10-final
   pull_request:
     branches:
       - rewrite/dotnet10
@@ -22,6 +23,13 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
+
+      - name: Install backup encryption dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes age
+          age --version
+          age-keygen --version
 
       - name: SDK contract
         run: |
