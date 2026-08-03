@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.Extensions.Options;
 using Sirk.Central.Portals;
@@ -6,6 +7,7 @@ using Sirk.Central.Security;
 namespace Sirk.Central.Ui;
 
 internal sealed record UiPortalCreateRequest(string Id, string Name);
+internal sealed record UiBreakGlassPasswordRequest(string CurrentPassword, string NewPassword);
 
 internal sealed record UiEntraSettingsUpdate(
     bool Enabled,
@@ -30,7 +32,130 @@ internal static class CurrentUiEndpoints
         entra.MapPut("/", UpdateEntraAsync);
         entra.MapPost("/test", TestEntra);
 
+        var breakGlass = endpoints.MapGroup("/api/break-glass")
+            .RequireAuthorization(policy => policy.RequireRole(SirkRoles.BreakGlass));
+        breakGlass.MapPost("/password", ChangeBreakGlassPasswordAsync);
+        breakGlass.MapPost("/access", RotateBreakGlassAccessAsync);
+
         return endpoints;
+    }
+
+    private static async Task<IResult> ChangeBreakGlassPasswordAsync(
+        UiBreakGlassPasswordRequest request,
+        HttpContext context,
+        IAntiforgery antiforgery,
+        LocalIdentityStore identityStore,
+        SecurityAuditLog auditLog)
+    {
+        NoStore(context);
+        var csrf = await ValidateCsrfAsync(context, antiforgery);
+        if (csrf is not null) return csrf;
+
+        var actorId = context.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? "unknown";
+        var actorName = context.User.Identity?.Name ?? "unknown";
+        try
+        {
+            var identity = identityStore.ChangePassword(
+                request.CurrentPassword ?? string.Empty,
+                request.NewPassword ?? string.Empty);
+            auditLog.Write(new SecurityAuditEvent(
+                actorId,
+                actorName,
+                "break-glass.password.change",
+                "identity",
+                identity.Id,
+                true,
+                AuthenticationEndpoints.RemoteAddress(context),
+                context.TraceIdentifier));
+            return Results.Ok(new
+            {
+                ok = true,
+                user = new
+                {
+                    id = identity.Id,
+                    userName = identity.UserName,
+                    roles = identity.Roles
+                }
+            });
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            auditLog.Write(new SecurityAuditEvent(
+                actorId,
+                actorName,
+                "break-glass.password.change",
+                "identity",
+                actorId,
+                false,
+                AuthenticationEndpoints.RemoteAddress(context),
+                context.TraceIdentifier,
+                new Dictionary<string, string> { ["reason"] = "current-password-invalid" }));
+            return Results.Json(
+                new
+                {
+                    ok = false,
+                    code = "CURRENT_PASSWORD_INVALID",
+                    error = exception.Message
+                },
+                statusCode: StatusCodes.Status401Unauthorized);
+        }
+        catch (InvalidDataException exception)
+        {
+            return Results.Json(
+                new
+                {
+                    ok = false,
+                    code = "PASSWORD_VALIDATION_FAILED",
+                    error = exception.Message
+                },
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+    }
+
+    private static async Task<IResult> RotateBreakGlassAccessAsync(
+        HttpContext context,
+        IAntiforgery antiforgery,
+        LocalIdentityStore identityStore,
+        SecurityAuditLog auditLog)
+    {
+        NoStore(context);
+        var csrf = await ValidateCsrfAsync(context, antiforgery);
+        if (csrf is not null) return csrf;
+
+        var actorId = context.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? "unknown";
+        var actorName = context.User.Identity?.Name ?? "unknown";
+        try
+        {
+            var accessCode = identityStore.RotateAccessCode();
+            var origin = $"{context.Request.Scheme}://{context.Request.Host}";
+            var accessUrl = $"{origin}/#access={Uri.EscapeDataString(accessCode)}";
+            auditLog.Write(new SecurityAuditEvent(
+                actorId,
+                actorName,
+                "break-glass.access.rotate",
+                "identity",
+                actorId,
+                true,
+                AuthenticationEndpoints.RemoteAddress(context),
+                context.TraceIdentifier));
+            return Results.Ok(new
+            {
+                ok = true,
+                accessUrl,
+                shownOnce = true
+            });
+        }
+        catch (InvalidOperationException exception)
+        {
+            return Results.Json(
+                new
+                {
+                    ok = false,
+                    code = "BREAK_GLASS_UNAVAILABLE",
+                    error = exception.Message
+                },
+                statusCode: StatusCodes.Status409Conflict);
+        }
     }
 
     private static IResult ListPortals(
