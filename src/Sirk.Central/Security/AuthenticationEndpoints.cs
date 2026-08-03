@@ -2,17 +2,13 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.Extensions.Options;
 
 namespace Sirk.Central.Security;
 
 internal static class SirkAuthenticationSchemes
 {
     public const string Session = "Sirk.Session";
-}
-
-internal static class SecurityEndpointNames
-{
-    public const string BreakGlassLoginRateLimit = "Sirk.BreakGlass.Login";
 }
 
 internal sealed record BreakGlassLoginRequest(string UserName, string Password);
@@ -31,7 +27,6 @@ internal static class AuthenticationEndpoints
     {
         endpoints.MapPost("/api/v1/break-glass/{accessCode}/login", LoginAsync)
             .AllowAnonymous()
-            .RequireRateLimiting(SecurityEndpointNames.BreakGlassLoginRateLimit)
             .DisableAntiforgery();
 
         endpoints.MapGet("/api/v1/auth/session", Session)
@@ -43,15 +38,11 @@ internal static class AuthenticationEndpoints
         endpoints.MapPost("/api/v1/auth/logout", LogoutAsync)
             .RequireAuthorization();
 
-        // Compatibility routes consumed by the current Central UI. They use
-        // the same password-first and MFA-gated implementation as the v1 API.
         endpoints.MapGet("/api/access", ValidateAccess)
-            .AllowAnonymous()
-            .RequireRateLimiting(SecurityEndpointNames.BreakGlassLoginRateLimit);
+            .AllowAnonymous();
 
         endpoints.MapPost("/api/login", CompatibilityLoginAsync)
             .AllowAnonymous()
-            .RequireRateLimiting(SecurityEndpointNames.BreakGlassLoginRateLimit)
             .DisableAntiforgery();
 
         endpoints.MapGet("/api/session", CompatibilitySession)
@@ -80,7 +71,8 @@ internal static class AuthenticationEndpoints
         BreakGlassRecoveryCodeStore recoveryCodes,
         BreakGlassLoginTransactionStore transactions,
         BreakGlassSessionService sessions,
-        SecurityAuditLog auditLog) =>
+        SecurityAuditLog auditLog,
+        IOptions<SecurityOptions> securityOptions) =>
         LoginCoreAsync(
             ReadBearerToken(context),
             request,
@@ -91,6 +83,7 @@ internal static class AuthenticationEndpoints
             transactions,
             sessions,
             auditLog,
+            securityOptions.Value,
             compatibilityResponse: true);
 
     private static Task<IResult> LoginAsync(
@@ -102,7 +95,8 @@ internal static class AuthenticationEndpoints
         BreakGlassRecoveryCodeStore recoveryCodes,
         BreakGlassLoginTransactionStore transactions,
         BreakGlassSessionService sessions,
-        SecurityAuditLog auditLog) =>
+        SecurityAuditLog auditLog,
+        IOptions<SecurityOptions> securityOptions) =>
         LoginCoreAsync(
             accessCode,
             request,
@@ -113,6 +107,7 @@ internal static class AuthenticationEndpoints
             transactions,
             sessions,
             auditLog,
+            securityOptions.Value,
             compatibilityResponse: false);
 
     private static async Task<IResult> LoginCoreAsync(
@@ -125,11 +120,18 @@ internal static class AuthenticationEndpoints
         BreakGlassLoginTransactionStore transactions,
         BreakGlassSessionService sessions,
         SecurityAuditLog auditLog,
+        SecurityOptions securityOptions,
         bool compatibilityResponse)
     {
         context.Response.Headers.CacheControl = "no-store";
         var remoteAddress = RemoteAddress(context);
         var suppliedUserName = NormalizeAuditUserName(request.UserName);
+        var throttle = FailedLoginThrottle.Check(
+            remoteAddress,
+            suppliedUserName,
+            securityOptions.LoginAttemptsPerFiveMinutes);
+        if (throttle.Blocked)
+            return TooManyAttempts(context, throttle);
 
         LocalIdentity? identity;
         try
@@ -156,6 +158,10 @@ internal static class AuthenticationEndpoints
 
         if (identity is null)
         {
+            var failure = FailedLoginThrottle.RecordFailure(
+                remoteAddress,
+                suppliedUserName,
+                securityOptions.LoginAttemptsPerFiveMinutes);
             auditLog.Write(new SecurityAuditEvent(
                 "anonymous",
                 suppliedUserName,
@@ -165,12 +171,26 @@ internal static class AuthenticationEndpoints
                 false,
                 remoteAddress,
                 context.TraceIdentifier,
-                new Dictionary<string, string> { ["reason"] = "invalid-credentials" }));
+                new Dictionary<string, string>
+                {
+                    ["reason"] = "invalid-credentials",
+                    ["remainingAttempts"] = failure.RemainingAttempts.ToString()
+                }));
             await ApplyFailureDelayAsync(context.RequestAborted);
+            if (failure.Blocked)
+                return TooManyAttempts(context, failure);
             return Results.Json(
-                new { ok = false, code = "AUTHENTICATION_FAILED", error = "Authentication failed." },
+                new
+                {
+                    ok = false,
+                    code = "AUTHENTICATION_FAILED",
+                    error = "Authentication failed.",
+                    remainingAttempts = failure.RemainingAttempts
+                },
                 statusCode: 401);
         }
+
+        FailedLoginThrottle.Reset(remoteAddress, suppliedUserName);
 
         var methods = new List<string>(2);
         if (webAuthnCredentials.ListByUser(identity.Id).Count > 0) methods.Add("passkey");
@@ -236,6 +256,23 @@ internal static class AuthenticationEndpoints
             user = new { id = identity.Id, name = identity.UserName, roles = identity.Roles },
             expiresAtUtc = expiresAt
         });
+    }
+
+    private static IResult TooManyAttempts(
+        HttpContext context,
+        FailedLoginThrottleResult throttle)
+    {
+        var retryAfterSeconds = Math.Max(1, (int)Math.Ceiling(throttle.RetryAfter.TotalSeconds));
+        context.Response.Headers.RetryAfter = retryAfterSeconds.ToString();
+        return Results.Json(
+            new
+            {
+                ok = false,
+                code = "LOGIN_RATE_LIMITED",
+                error = "Too many failed login attempts.",
+                retryAfterSeconds
+            },
+            statusCode: StatusCodes.Status429TooManyRequests);
     }
 
     private static IResult CompatibilitySession(HttpContext context)
