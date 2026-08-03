@@ -1,0 +1,99 @@
+"use strict";
+
+(() => {
+  async function csrf() {
+    const response = await fetch("/api/v1/auth/csrf", {
+      credentials: "same-origin",
+      cache: "no-store",
+      headers: { Accept: "application/json" }
+    });
+    if (!response.ok) throw new Error("Nie można pobrać tokenu CSRF.");
+    const value = await response.json();
+    if (!value.requestToken) throw new Error("Central nie zwrócił tokenu CSRF.");
+    return value;
+  }
+
+  function selectedPortalId() {
+    const select = document.getElementById("portalSelect");
+    const value = String(select && select.value || "").trim();
+    if (!value) throw new Error("Wybierz Portal.");
+    return value;
+  }
+
+  function nameFromDisposition(response, fallback) {
+    const disposition = response.headers.get("Content-Disposition") || "";
+    const match = /filename\*?=(?:UTF-8''|\")?([^\";]+)/i.exec(disposition);
+    return match ? decodeURIComponent(match[1].replace(/^\"|\"$/g, "")) : fallback;
+  }
+
+  async function downloadConnection() {
+    const portalId = selectedPortalId();
+    if (!window.confirm(
+      "Pobranie pliku połączenia zrotuje token Portalu i natychmiast unieważni poprzedni. Kontynuować?")) {
+      return;
+    }
+
+    const button = document.getElementById("portalConnectionFile");
+    const output = document.getElementById("portalCredential");
+    button.disabled = true;
+    output.textContent = "Generowanie chronionego pliku połączenia…";
+    try {
+      const token = await csrf();
+      const response = await fetch(
+        `/api/v1/admin/portals/${encodeURIComponent(portalId)}/connection-file`,
+        {
+          method: "POST",
+          credentials: "same-origin",
+          cache: "no-store",
+          headers: {
+            Accept: "application/json",
+            [token.headerName || "X-SIRK-CSRF"]: token.requestToken
+          }
+        });
+      if (!response.ok) {
+        const text = await response.text();
+        let payload = {};
+        try { payload = text ? JSON.parse(text) : {}; } catch (_) {}
+        throw new Error(payload.error || payload.title || `HTTP ${response.status}`);
+      }
+      const blob = await response.blob();
+      if (blob.size < 128) throw new Error("Plik połączenia jest niekompletny.");
+      const fileName = nameFromDisposition(
+        response,
+        `SIRK-Portal-${portalId}-connection.json`);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = fileName;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      output.textContent =
+        `Pobrano ${fileName}. Token został zrotowany i jest zapisany wyłącznie w tym pliku. ` +
+        "Zaimportuj plik w Ustawieniach Portalu; nie przesyłaj jego zawartości w wiadomości tekstowej.";
+      document.getElementById("portalsRefresh")?.click();
+    } catch (error) {
+      output.textContent = JSON.stringify({ error: error.message }, null, 2);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  function mount() {
+    const rotate = document.getElementById("portalRotate");
+    if (!rotate || document.getElementById("portalConnectionFile")) return;
+    const button = document.createElement("button");
+    button.id = "portalConnectionFile";
+    button.type = "button";
+    button.textContent = "Pobierz plik połączenia";
+    button.addEventListener("click", downloadConnection);
+    rotate.insertAdjacentElement("afterend", button);
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", mount, { once: true });
+  } else {
+    mount();
+  }
+})();
