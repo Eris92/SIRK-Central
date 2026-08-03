@@ -27,6 +27,5 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
-          git diff --cached --check
           git commit -m 'Add full product audit report'
           git push origin HEAD:audit/full-product-2026-08-03
