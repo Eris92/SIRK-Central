@@ -37,6 +37,7 @@ internal static class CurrentUiEndpoints
         breakGlass.MapPost("/password", ChangeBreakGlassPasswordAsync);
         breakGlass.MapPost("/access", RotateBreakGlassAccessAsync);
 
+        endpoints.MapCurrentUiCompatibility();
         return endpoints;
     }
 
@@ -316,9 +317,9 @@ internal static class CurrentUiEndpoints
             var origin = $"{context.Request.Scheme}://{context.Request.Host}";
             var result = store.Update(new EntraSettingsUpdate(
                 request.Enabled,
-                request.Tenant,
-                request.ClientId,
-                request.ClientSecret,
+                request.Tenant?.Trim() ?? string.Empty,
+                request.ClientId?.Trim() ?? string.Empty,
+                string.IsNullOrWhiteSpace(request.ClientSecret) ? null : request.ClientSecret,
                 allowed,
                 origin));
             return Results.Ok(new { ok = true, provider = result });
