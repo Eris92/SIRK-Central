@@ -23,23 +23,60 @@
         return !["GET", "HEAD", "OPTIONS", "TRACE"].includes(method);
     }
 
-    function isPreSessionAuthenticationWrite(url) {
-        if (url.origin !== window.location.origin) return false;
-
+    function isAnonymousWrite(url) {
         return url.pathname === "/api/login" ||
-            /^\/api\/login\/mfa\/(?:passkey\/(?:begin|finish)|recovery)$/.test(url.pathname) ||
             /^\/api\/v1\/break-glass\/[^/]+\/login$/.test(url.pathname) ||
             url.pathname === "/auth/entra/frontchannel-logout";
     }
 
-    async function csrfToken() {
-        if (!csrfPromise) {
-            csrfPromise = originalFetch("/api/v1/auth/csrf", {
+    function csrfCookie() {
+        const match = document.cookie.match(/(?:^|;\s*)sirk_central_csrf=([^;]+)/);
+        if (!match) return "";
+        try {
+            return decodeURIComponent(match[1]);
+        } catch (_) {
+            return match[1];
+        }
+    }
+
+    async function issuePreSessionCsrfCookie() {
+        const response = await originalFetch(
+            "/csrf-bootstrap.js?csrf=" + Date.now(),
+            {
                 method: "GET",
                 credentials: "same-origin",
                 cache: "no-store",
-                headers: { Accept: "application/json" }
-            }).then(async response => {
+                headers: { Accept: "application/javascript" }
+            }
+        );
+        if (!response.ok) return "";
+        return csrfCookie();
+    }
+
+    async function csrfToken() {
+        const existingCookie = csrfCookie();
+        if (existingCookie) {
+            return {
+                headerName: "X-SIRK-CSRF",
+                requestToken: existingCookie
+            };
+        }
+
+        if (!csrfPromise) {
+            csrfPromise = issuePreSessionCsrfCookie().then(async preSessionToken => {
+                if (preSessionToken) {
+                    return {
+                        headerName: "X-SIRK-CSRF",
+                        requestToken: preSessionToken
+                    };
+                }
+
+                const response = await originalFetch("/api/v1/auth/csrf", {
+                    method: "GET",
+                    credentials: "same-origin",
+                    cache: "no-store",
+                    headers: { Accept: "application/json" }
+                });
                 const body = await response.json().catch(() => ({}));
                 if (!response.ok || !body.headerName || !body.requestToken) {
                     throw new Error(body.error || "CSRF token could not be issued.");
@@ -87,7 +124,7 @@
         if (
             url.origin === window.location.origin &&
             isUnsafe(method) &&
-            !isPreSessionAuthenticationWrite(url)
+            !isAnonymousWrite(url)
         ) {
             const token = await csrfToken();
             const options = Object.assign({}, init || {});
