@@ -5,6 +5,7 @@ umask 077
 RAW_BASE="${RAW_BASE:-https://raw.githubusercontent.com/Eris92/SIRK-Central/main}"
 BOOTSTRAP_URL="${BOOTSTRAP_URL:-${RAW_BASE}/deploy/bootstrap-ubuntu.sh}"
 INSTALLER_URL="${INSTALLER_URL:-${RAW_BASE}/deploy/install-dotnet10.sh}"
+CENTRAL_HOST="${CENTRAL_HOST:-central.sirkportal.com}"
 
 fail() {
     echo "ERROR: $*" >&2
@@ -35,7 +36,7 @@ env \
 env \
     CENTRAL_REF="${CENTRAL_REF:-main}" \
     FORCE="${FORCE:-1}" \
-    CENTRAL_HOST="${CENTRAL_HOST:-central.sirkportal.com}" \
+    CENTRAL_HOST="$CENTRAL_HOST" \
     WEBSITE_HOST="${WEBSITE_HOST:-sirkportal.com}" \
     BUSINESS_HOST="${BUSINESS_HOST:-sir-k.pl}" \
     AUTH_HOST="${AUTH_HOST:-auth.sirkportal.com}" \
@@ -45,3 +46,19 @@ env \
     BG_ACCESS_CODE="${BG_ACCESS_CODE:-}" \
     KEEP_RELEASE_PRIVATE_KEY="${KEEP_RELEASE_PRIVATE_KEY:-0}" \
     bash "$TMP_DIR/install-dotnet10.sh"
+
+ACCESS_CODE_FILE="/root/sirk-central-breakglass-access-code.txt"
+ACCESS_URL_FILE="/root/sirk-central-breakglass-access-url.txt"
+[[ -s "$ACCESS_CODE_FILE" ]] || fail "Brak wygenerowanego Access Code: $ACCESS_CODE_FILE"
+ACCESS_CODE="$(tr -d '\r\n' < "$ACCESS_CODE_FILE")"
+[[ "$ACCESS_CODE" =~ ^[A-Za-z0-9_-]{24,128}$ ]] || fail "Nieprawidlowy wygenerowany Access Code."
+printf 'https://%s/#access=%s\n' "$CENTRAL_HOST" "$ACCESS_CODE" > "$ACCESS_URL_FILE"
+chmod 0600 "$ACCESS_URL_FILE"
+
+echo
+echo "============================================================"
+echo "BREAK GLASS ACCESS URL:"
+cat "$ACCESS_URL_FILE"
+echo "Zapisano rowniez w: $ACCESS_URL_FILE"
+echo "============================================================"
+unset ACCESS_CODE
