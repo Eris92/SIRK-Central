@@ -120,7 +120,7 @@
   }
 
   function connectedInstallerCommand() {
-    return "$f=Get-ChildItem \"$env:USERPROFILE\\Downloads\\SIRK-Portal-*-connection.json\" -File|Sort-Object LastWriteTimeUtc -Descending|Select-Object -First 1;if(!$f){throw 'Najpierw skopiuj plik polaczenia do Downloads'};$p=\"$env:TEMP\\install-connected-dotnet10.ps1\";iwr -UseBasicParsing https://raw.githubusercontent.com/Eris92/SIRK-Portal/main/install-connected-dotnet10.ps1 -OutFile $p;Start-Process powershell.exe -Verb RunAs -Wait -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',$p,'-ConnectionFile',$f.FullName)";
+    return "$f=Get-ChildItem \"$env:USERPROFILE\\Downloads\\SIRK-Portal-*-connection.json\" -File|Sort-Object LastWriteTimeUtc -Descending|Select-Object -First 1;if(!$f){throw 'Najpierw skopiuj plik polaczenia do Downloads'};$p=\"$env:TEMP\\install-connected.ps1\";iwr -UseBasicParsing https://raw.githubusercontent.com/Eris92/SIRK-Portal/main/install-connected.ps1 -OutFile $p;Start-Process powershell.exe -Verb RunAs -Wait -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',$p,'-ConnectionFile',$f.FullName)";
   }
 
   async function downloadConnection() {
