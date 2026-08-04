@@ -26,6 +26,10 @@
     return match ? decodeURIComponent(match[1].replace(/^\"|\"$/g, "")) : fallback;
   }
 
+  function connectedInstallerCommand() {
+    return "$f=Get-ChildItem \"$env:USERPROFILE\\Downloads\\SIRK-Portal-*-connection.json\" -File|Sort-Object LastWriteTimeUtc -Descending|Select-Object -First 1;if(!$f){throw 'Najpierw skopiuj plik polaczenia do Downloads'};$p=\"$env:TEMP\\install-connected-dotnet10.ps1\";iwr -UseBasicParsing https://raw.githubusercontent.com/Eris92/SIRK-Portal/main/install-connected-dotnet10.ps1 -OutFile $p;Start-Process powershell.exe -Verb RunAs -Wait -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',$p,'-ConnectionFile',$f.FullName)";
+  }
+
   async function downloadConnection() {
     const portalId = selectedPortalId();
     if (!window.confirm(
@@ -71,7 +75,8 @@
       setTimeout(() => URL.revokeObjectURL(url), 1000);
       output.textContent =
         `Pobrano ${fileName}. Token został zrotowany i jest zapisany wyłącznie w tym pliku. ` +
-        "Zaimportuj plik w Ustawieniach Portalu; nie przesyłaj jego zawartości w wiadomości tekstowej.";
+        "Skopiuj plik do katalogu Downloads na docelowym Windows Server, a następnie uruchom:\n\n" +
+        connectedInstallerCommand();
       document.getElementById("portalsRefresh")?.click();
     } catch (error) {
       output.textContent = JSON.stringify({ error: error.message }, null, 2);
