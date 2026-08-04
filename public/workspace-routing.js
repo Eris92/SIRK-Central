@@ -29,11 +29,21 @@
         backup: "settingsTabBackup"
     });
 
+    const roleOrder = Object.freeze([
+        "Auditor",
+        "OperatorL1",
+        "SupportL2",
+        "EngineerL3",
+        "Admin",
+        "SecAdmin"
+    ]);
+
     const bootstrap = window.__SIRK_WORKSPACE_BOOTSTRAP || { workspaces: ["portals"] };
     let allowed = new Set(Array.isArray(bootstrap.workspaces) ? bootstrap.workspaces : ["portals"]);
     const currentPath = window.location.pathname.toLowerCase();
     const currentWorkspace = Object.keys(routes).find(key => routes[key] === currentPath) || "portals";
     let identityRefresh = null;
+    let roleRefresh = null;
     let openTimer = null;
 
     function isAuthenticatedIdentity(identity) {
@@ -49,14 +59,31 @@
         return Array.isArray(identity && identity.permissions) ? identity.permissions : [];
     }
 
+    function rolesOf(identity) {
+        const result = new Set();
+        if (Array.isArray(identity && identity.roles)) {
+            for (const role of identity.roles) if (role) result.add(String(role));
+        }
+        if (identity && identity.role) result.add(String(identity.role));
+        return result;
+    }
+
+    function assignableRolesFromIdentity(identity) {
+        const roles = rolesOf(identity);
+        if (roles.has("BreakGlass")) return [...roleOrder];
+        if (roles.has("SecAdmin")) return ["SecAdmin"];
+        if (roles.has("Admin")) return roleOrder.filter(role => role !== "SecAdmin");
+        return [];
+    }
+
     function workspacesFromIdentity(identity) {
         if (!isAuthenticatedIdentity(identity)) return ["portals"];
 
         const permissions = permissionsOf(identity);
         const unrestricted = permissions.includes("*");
         const role = String(identity.role || "");
-        const isBreakGlass = identity.builtIn === true &&
-            identity.source === "local" &&
+        const isBreakGlass =
+            (identity.builtIn === true || identity.authenticationMethod === "local-break-glass") &&
             role === "BreakGlass";
 
         if (isBreakGlass || unrestricted) {
@@ -69,6 +96,93 @@
         if (permissions.includes("access.manage")) result.push("permissions");
         if (permissions.includes("security.manage")) result.push("security");
         return Array.from(new Set(result));
+    }
+
+    function populateRoleSelect(roles) {
+        const select = document.getElementById("newRole");
+        if (!select) return;
+
+        const validRoles = roleOrder.filter(role => roles.includes(role));
+        const previous = String(select.value || "");
+        const placeholder = document.createElement("option");
+        placeholder.value = "";
+        placeholder.textContent = document.documentElement.lang === "en"
+            ? "Choose role"
+            : "Wybierz rolę";
+        placeholder.disabled = true;
+        placeholder.selected = !validRoles.includes(previous);
+
+        const options = validRoles.map(role => {
+            const option = document.createElement("option");
+            option.value = role;
+            option.textContent = role;
+            option.selected = role === previous;
+            return option;
+        });
+
+        select.replaceChildren(placeholder, ...options);
+        select.disabled = validRoles.length === 0;
+        select.dataset.roleCatalogLoaded = validRoles.length ? "true" : "false";
+
+        const error = document.getElementById("userError");
+        if (error && validRoles.length > 0 && error.dataset.roleCatalogError === "true") {
+            error.textContent = "";
+            delete error.dataset.roleCatalogError;
+        }
+    }
+
+    async function refreshRoleCatalog(identity) {
+        const select = document.getElementById("newRole");
+        if (!select) return;
+        if (roleRefresh) return roleRefresh;
+
+        roleRefresh = (async function () {
+            let roles = [];
+            try {
+                const response = await fetch("/api/settings/roles", {
+                    credentials: "same-origin",
+                    cache: "no-store",
+                    headers: { Accept: "application/json" }
+                });
+                const payload = await response.json().catch(() => ({}));
+                if (response.ok && Array.isArray(payload.roles)) {
+                    roles = payload.roles.filter(role => roleOrder.includes(role));
+                }
+            } catch (_) {
+                // Fallback below uses the authenticated session role.
+            }
+
+            let resolvedIdentity = identity;
+            if (!roles.length && !resolvedIdentity) {
+                try {
+                    const response = await fetch("/api/session", {
+                        credentials: "same-origin",
+                        cache: "no-store",
+                        headers: { Accept: "application/json" }
+                    });
+                    if (response.ok) resolvedIdentity = await response.json();
+                } catch (_) {
+                    // A missing session is handled by the base login UI.
+                }
+            }
+
+            if (!roles.length) roles = assignableRolesFromIdentity(resolvedIdentity);
+            populateRoleSelect(roles);
+
+            if (!roles.length) {
+                const error = document.getElementById("userError");
+                if (error) {
+                    error.textContent = document.documentElement.lang === "en"
+                        ? "No roles can be assigned by the current account."
+                        : "Brak ról możliwych do przypisania przez bieżące konto.";
+                    error.dataset.roleCatalogError = "true";
+                }
+            }
+        }()).finally(function () {
+            roleRefresh = null;
+        });
+
+        return roleRefresh;
     }
 
     function isWorkspaceOpen(workspace) {
@@ -196,6 +310,7 @@
                 synchronizeMenu();
                 synchronizeSettingsNavigation();
                 enforceCurrentWorkspace();
+                await refreshRoleCatalog(identity);
             } catch (_) {
                 // The base UI owns authentication errors and login rendering.
             }
@@ -221,6 +336,17 @@
     document.addEventListener("click", function (event) {
         const button = event.target && event.target.closest ? event.target.closest("button") : null;
         if (!button) return;
+
+        if (
+            button.dataset.permissionsTab === "add" ||
+            button.dataset.settingsTab === "add-user" ||
+            button.id === "addUserTabButton"
+        ) {
+            window.setTimeout(function () {
+                const identity = window.__SIRK_WORKSPACE_BOOTSTRAP?.identity;
+                refreshRoleCatalog(identity);
+            }, 0);
+        }
 
         const settingsTab = button.dataset.settingsTab;
         if (settingsTab && Object.hasOwn(settingsPanels, settingsTab)) {
@@ -284,6 +410,19 @@
             });
         }
 
+        const permissionsView = document.getElementById("accessView");
+        if (permissionsView) {
+            new MutationObserver(function () {
+                if (!permissionsView.hidden) {
+                    const identity = window.__SIRK_WORKSPACE_BOOTSTRAP?.identity;
+                    refreshRoleCatalog(identity);
+                }
+            }).observe(permissionsView, {
+                attributes: true,
+                attributeFilter: ["hidden"]
+            });
+        }
+
         for (const id of ["portalsView", ...Object.values(viewIds)]) {
             const view = document.getElementById(id);
             if (!view) continue;
@@ -299,6 +438,8 @@
                 synchronizeMenu();
                 synchronizeSettingsNavigation();
                 dashboardBecameVisible();
+                const identity = window.__SIRK_WORKSPACE_BOOTSTRAP?.identity;
+                refreshRoleCatalog(identity);
             }, delay);
         }
     }
