@@ -49,6 +49,8 @@ internal sealed class PortalTunnelRelay
         new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, PendingTunnelRequest> _pending =
         new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _signals =
+        new(StringComparer.Ordinal);
 
     public async Task<TunnelResponse> RequestAsync(
         string portalId,
@@ -96,6 +98,7 @@ internal sealed class PortalTunnelRelay
             throw new InvalidOperationException("Tunnel request collision.");
 
         queue.Enqueue(request);
+        SignalPortal(portalId);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(30));
         using var registration = timeout.Token.Register(
@@ -147,6 +150,46 @@ internal sealed class PortalTunnelRelay
         return result;
     }
 
+    public async Task<IReadOnlyList<TunnelRequest>> PollAsync(
+        string portalId,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        var signal = _signals.GetOrAdd(
+            portalId,
+            static _ => new SemaphoreSlim(0, 1));
+        var requests = Poll(portalId, limit);
+        if (requests.Count > 0)
+        {
+            DrainSignal(signal);
+            return requests;
+        }
+
+        await signal.WaitAsync(TimeSpan.FromSeconds(4), cancellationToken);
+        return Poll(portalId, limit);
+    }
+
+    private void SignalPortal(string portalId)
+    {
+        var signal = _signals.GetOrAdd(
+            portalId,
+            static _ => new SemaphoreSlim(0, 1));
+        try
+        {
+            signal.Release();
+        }
+        catch (SemaphoreFullException)
+        {
+            // One wake-up is sufficient because a poll drains a full batch.
+        }
+    }
+
+    private static void DrainSignal(SemaphoreSlim signal)
+    {
+        while (signal.Wait(0))
+        {
+        }
+    }
     public bool Complete(
         string portalId,
         string requestId,
@@ -341,7 +384,13 @@ internal sealed class PortalTunnelMiddleware
         {
             context.Response.Headers.CacheControl = "no-store";
             await context.Response.WriteAsJsonAsync(
-                new { requests = _relay.Poll(identity.PortalId) },
+                new
+                {
+                    requests = await _relay.PollAsync(
+                        identity.PortalId,
+                        64,
+                        context.RequestAborted)
+                },
                 context.RequestAborted);
             return true;
         }
@@ -491,14 +540,27 @@ internal sealed class PortalTunnelMiddleware
                 context.RequestAborted);
             context.Response.StatusCode = response.StatusCode;
             context.Response.ContentType = response.ContentType;
-            context.Response.Headers.CacheControl = "no-store";
+            context.Response.Headers.CacheControl = IsVersionedStaticAsset(
+                context.Request.Method,
+                portalPath,
+                response.StatusCode)
+                ? "public, max-age=31536000, immutable"
+                : "no-store";
             foreach (var item in response.Headers)
             {
-                if (!item.Key.Equals("location", StringComparison.OrdinalIgnoreCase))
+                if (item.Key.Equals("location", StringComparison.OrdinalIgnoreCase))
+                {
+                    var rewritten = RewriteLocation(item.Value.FirstOrDefault(), portalId);
+                    if (!string.IsNullOrWhiteSpace(rewritten))
+                        context.Response.Headers.Location = rewritten;
                     continue;
-                var rewritten = RewriteLocation(item.Value.FirstOrDefault(), portalId);
-                if (!string.IsNullOrWhiteSpace(rewritten))
-                    context.Response.Headers.Location = rewritten;
+                }
+
+                if (item.Key.Equals("etag", StringComparison.OrdinalIgnoreCase) ||
+                    item.Key.Equals("last-modified", StringComparison.OrdinalIgnoreCase))
+                {
+                    context.Response.Headers[item.Key] = item.Value;
+                }
             }
 
             if (!HttpMethods.IsHead(context.Request.Method))
@@ -640,6 +702,25 @@ internal sealed class PortalTunnelMiddleware
         return output.ToArray();
     }
 
+    private static bool IsVersionedStaticAsset(
+        string method,
+        string portalPath,
+        int statusCode)
+    {
+        if (statusCode != StatusCodes.Status200OK ||
+            (!HttpMethods.IsGet(method) && !HttpMethods.IsHead(method)))
+        {
+            return false;
+        }
+
+        var queryIndex = portalPath.IndexOf('?');
+        if (queryIndex <= 0) return false;
+        var path = portalPath[..queryIndex];
+        if (!path.StartsWith("/assets/", StringComparison.Ordinal)) return false;
+        return portalPath[(queryIndex + 1)..]
+            .Split('&', StringSplitOptions.RemoveEmptyEntries)
+            .Any(part => part.StartsWith("v=", StringComparison.Ordinal) && part.Length > 2);
+    }
     private static string RewriteLocation(string? value, string portalId)
     {
         if (string.IsNullOrWhiteSpace(value)) return string.Empty;
