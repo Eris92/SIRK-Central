@@ -323,6 +323,11 @@ def main() -> int:
                 raise RuntimeError("Portal did not import the Central connection document.")
             if saved.get("value", {}).get("restartRequired") is not True:
                 raise RuntimeError("Portal did not require restart after Central import.")
+
+            redacted = portal_client.json("GET", "/api/v1/admin/central")
+            if connection["portalToken"] in json.dumps(redacted, separators=(",", ":")):
+                raise RuntimeError("Portal administration API exposed the Central token.")
+
             stop_process(portal_process, portal_log)
             portal_process = None
 
@@ -330,11 +335,6 @@ def main() -> int:
                 raise RuntimeError("Portal protected Central connection file was not created.")
             if connection_path.stat().st_mode & 0o077:
                 raise RuntimeError("Portal Central connection file has weak permissions.")
-            if connection["portalToken"] in json.dumps(
-                portal_client.json("GET", "/api/v1/admin/central"),
-                separators=(",", ":"),
-            ):
-                raise RuntimeError("Portal administration API exposed the Central token.")
 
             portal_process = start_process(portal_dll, portal_env, portal_log)
             wait_ready(portal_client, "Portal after Central import")
