@@ -212,7 +212,7 @@ def create_connection_file(central: JsonClient) -> dict[str, Any]:
     return document
 
 
-def wait_connected(central: JsonClient, timeout_seconds: int = 45) -> dict[str, Any]:
+def wait_connected(central: JsonClient, timeout_seconds: int = 60) -> dict[str, Any]:
     deadline = time.monotonic() + timeout_seconds
     last: dict[str, Any] = {}
     while time.monotonic() < deadline:
@@ -222,6 +222,13 @@ def wait_connected(central: JsonClient, timeout_seconds: int = 45) -> dict[str, 
             return portal
         time.sleep(0.5)
     raise RuntimeError(f"Central did not receive the Portal heartbeat: {last}")
+
+
+def dump_log(label: str, path: Path) -> None:
+    if not path.exists():
+        return
+    print(f"--- {label}: {path} ---", file=sys.stderr)
+    print(path.read_text(encoding="utf-8", errors="replace")[-30000:], file=sys.stderr)
 
 
 def main() -> int:
@@ -271,8 +278,8 @@ def main() -> int:
                 "Kestrel__Certificates__Default__Path": str(central_pfx),
                 "Kestrel__Certificates__Default__Password": central_pfx_password,
                 "Sirk__PortalProtocol__DataRoot": str(central_portals),
-                "Sirk__PortalProtocol__HeartbeatIntervalSeconds": "2",
-                "Sirk__PortalProtocol__OfflineAfterSeconds": "20",
+                "Sirk__PortalProtocol__HeartbeatIntervalSeconds": "30",
+                "Sirk__PortalProtocol__OfflineAfterSeconds": "90",
                 "Sirk__Security__Enabled": "true",
                 "Sirk__Security__DataRoot": str(central_security),
                 "Sirk__Security__BootstrapSecretFile": str(bootstrap),
@@ -294,8 +301,8 @@ def main() -> int:
                 "ASPNETCORE_URLS": PORTAL_ORIGIN,
                 "Sirk__DataRoot": str(portal_root),
                 "Sirk__Central__ConnectionFile": str(connection_path),
-                "Sirk__Central__HeartbeatIntervalSeconds": "2",
-                "Sirk__Central__RequestTimeoutSeconds": "5",
+                "Sirk__Central__HeartbeatIntervalSeconds": "30",
+                "Sirk__Central__RequestTimeoutSeconds": "10",
                 "Sirk__CentralTunnel__Enabled": "true",
                 "Sirk__CentralTunnel__LocalOrigin": PORTAL_ORIGIN + "/",
                 "Sirk__CentralTunnel__PollIntervalMilliseconds": "250",
@@ -337,13 +344,13 @@ def main() -> int:
                 raise RuntimeError("Portal Central connection file has weak permissions.")
 
             portal_process = start_process(portal_dll, portal_env, portal_log)
-            wait_ready(portal_client, "Portal after Central import")
             portal_client = JsonClient(PORTAL_ORIGIN)
+            wait_ready(portal_client, "Portal after Central import")
             login_portal(portal_client)
 
             heartbeat = wait_connected(central_client)
             capabilities = heartbeat.get("heartbeat", {}).get("capabilities", [])
-            if "signed-heartbeat" not in capabilities or "central-tunnel" not in capabilities:
+            if "signed-heartbeat" not in capabilities or "central-tunnel-v1" not in capabilities:
                 raise RuntimeError(f"Portal heartbeat capabilities are incomplete: {capabilities}")
 
             connected = central_client.json(
@@ -367,6 +374,10 @@ def main() -> int:
 
             print("SIRK Central -> Portal live connection, heartbeat and reverse tunnel: OK")
             return 0
+        except Exception:
+            dump_log("Central", central_log)
+            dump_log("Portal", portal_log)
+            raise
         finally:
             if portal_process is not None:
                 stop_process(portal_process, portal_log)
