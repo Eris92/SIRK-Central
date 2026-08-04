@@ -63,9 +63,9 @@ www.{$SIRK_BUSINESS_DOMAIN} {
     encode zstd gzip
 
     # Only browser UI routes fall back to index.html. API, authentication,
-    # health endpoints and static assets always keep their original paths.
+    # reverse-tunnel, health endpoints and static assets keep their paths.
     @spaRoutes {
-        not path /api/* /auth/* /healthz /readyz
+        not path /api/* /auth/* /connect /connect/* /healthz /readyz
         not path_regexp staticAsset \.[A-Za-z0-9]{1,10}$
     }
     rewrite @spaRoutes /index.html
