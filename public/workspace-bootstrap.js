@@ -163,6 +163,15 @@
         settingsButton.insertAdjacentElement("afterend", button);
     }
 
+    function mountPortalTunnelUi() {
+        if (document.querySelector('script[data-sirk-portal-tunnel-ui="true"]')) return;
+        const script = document.createElement("script");
+        script.src = "/portal-tunnel-ui.js";
+        script.async = true;
+        script.dataset.sirkPortalTunnelUi = "true";
+        document.head.append(script);
+    }
+
     async function initialize() {
         mountLocalLoginGate();
         accessCodeValid = await validateAccessCode();
@@ -177,6 +186,7 @@
         if (panel && accessCodeValid) panel.hidden = false;
         if (loginView && !dashboardVisible) loginView.hidden = false;
         mountAdvancedWorkspaceButton();
+        mountPortalTunnelUi();
     }
 
     if (document.readyState === "loading") {
