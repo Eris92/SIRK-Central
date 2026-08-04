@@ -544,7 +544,7 @@ internal sealed class PortalTunnelMiddleware
                 context.Request.Method,
                 portalPath,
                 response.StatusCode)
-                ? "public, max-age=31536000, immutable"
+                ? "private, max-age=300"
                 : "no-store";
             foreach (var item in response.Headers)
             {
