@@ -253,18 +253,132 @@ internal static class EntraAuthentication
                 }));
             return Task.CompletedTask;
         },
-        OnRemoteFailure = context =>
-        {
-            context.HandleResponse();
-            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-            return context.Response.WriteAsJsonAsync(new
-            {
-                ok = false,
-                code = "ENTRA_AUTHENTICATION_FAILED",
-                error = context.Failure?.Message ?? "Entra authentication failed."
-            });
-        }
+        OnRemoteFailure = RenderRemoteFailureAsync
     };
+
+    private static Task RenderRemoteFailureAsync(RemoteFailureContext context)
+    {
+        context.HandleResponse();
+
+        var english = context.Request.Cookies.TryGetValue("sirk_lang", out var language) &&
+                      string.Equals(language, "en", StringComparison.OrdinalIgnoreCase);
+        var failure = ClassifyFailure(context.Failure?.Message, english);
+
+        context.Response.StatusCode = failure.StatusCode;
+        context.Response.ContentType = "text/html; charset=utf-8";
+        context.Response.Headers.CacheControl = "no-store, no-cache, must-revalidate, max-age=0";
+        context.Response.Headers.Pragma = "no-cache";
+        context.Response.Headers.Expires = "0";
+
+        var html = $"""
+            <!doctype html>
+            <html lang="{(english ? "en" : "pl")}">
+            <head>
+              <meta charset="utf-8">
+              <meta name="viewport" content="width=device-width,initial-scale=1">
+              <meta name="robots" content="noindex,nofollow">
+              <title>SIRK Central — {failure.Title}</title>
+              <link rel="stylesheet" href="/styles.css">
+              <style>
+                .auth-failure-card {{ max-width: 460px; }}
+                .auth-failure-message {{ margin: 22px 0; padding: 16px 18px; border: 1px solid #a94755; border-radius: 12px; background: rgba(115,27,45,.24); color: #ffd5dc; line-height: 1.55; }}
+                .auth-failure-help {{ margin: 0 0 22px; color: #9eb1cf; line-height: 1.55; }}
+                .auth-failure-card .button {{ display: block; width: 100%; text-align: center; box-sizing: border-box; }}
+              </style>
+            </head>
+            <body>
+              <main class="shell">
+                <section class="login-card auth-failure-card">
+                  <div class="mark">S</div>
+                  <p class="eyebrow">SIRK Management Platform</p>
+                  <h1>{failure.Title}</h1>
+                  <div class="auth-failure-message" role="alert">{failure.Message}</div>
+                  <p class="auth-failure-help">{failure.Help}</p>
+                  <a class="button login-provider" href="/">{(english ? "Back to sign-in" : "Wróć do logowania")}</a>
+                </section>
+              </main>
+            </body>
+            </html>
+            """;
+
+        return context.Response.WriteAsync(html);
+    }
+
+    private static EntraFailurePage ClassifyFailure(string? message, bool english)
+    {
+        var value = message ?? string.Empty;
+        if (value.Contains("pending approval", StringComparison.OrdinalIgnoreCase))
+        {
+            return english
+                ? new EntraFailurePage(
+                    "Account awaiting approval",
+                    "Microsoft Entra sign-in succeeded, but the privileged SIRK role has not yet been approved.",
+                    "Sign in with the Break-Glass account or ask a SecAdmin to approve the account in SIRK Central.",
+                    StatusCodes.Status403Forbidden)
+                : new EntraFailurePage(
+                    "Konto oczekuje na zatwierdzenie",
+                    "Logowanie Microsoft Entra zakończyło się poprawnie, ale uprzywilejowana rola SIRK nie została jeszcze zatwierdzona.",
+                    "Zaloguj się kontem Break-Glass albo poproś SecAdmina o zatwierdzenie konta w SIRK Central.",
+                    StatusCodes.Status403Forbidden);
+        }
+
+        if (value.Contains("no supported SIRK application role", StringComparison.OrdinalIgnoreCase))
+        {
+            return english
+                ? new EntraFailurePage(
+                    "No SIRK role assigned",
+                    "The Microsoft Entra account does not have a supported SIRK application role.",
+                    "Assign an appropriate application role in Entra and try again.",
+                    StatusCodes.Status403Forbidden)
+                : new EntraFailurePage(
+                    "Brak przypisanej roli SIRK",
+                    "Konto Microsoft Entra nie ma obsługiwanej roli aplikacyjnej SIRK.",
+                    "Przypisz odpowiednią rolę aplikacyjną w Entra i ponów logowanie.",
+                    StatusCodes.Status403Forbidden);
+        }
+
+        if (value.Contains("conflicting SIRK application roles", StringComparison.OrdinalIgnoreCase))
+        {
+            return english
+                ? new EntraFailurePage(
+                    "Conflicting SIRK roles",
+                    "The account has mutually exclusive privileged SIRK roles.",
+                    "Correct the application-role assignments in Entra before signing in again.",
+                    StatusCodes.Status403Forbidden)
+                : new EntraFailurePage(
+                    "Konflikt ról SIRK",
+                    "Konto ma wzajemnie wykluczające się uprzywilejowane role SIRK.",
+                    "Popraw przypisania ról aplikacyjnych w Entra przed ponownym logowaniem.",
+                    StatusCodes.Status403Forbidden);
+        }
+
+        if (value.Contains("identity is not allowed", StringComparison.OrdinalIgnoreCase))
+        {
+            return english
+                ? new EntraFailurePage(
+                    "Account is not allowed",
+                    "This Microsoft Entra account is not on the SIRK Central allowlist.",
+                    "Ask a SecAdmin to add the account or use another authorised identity.",
+                    StatusCodes.Status403Forbidden)
+                : new EntraFailurePage(
+                    "Konto nie jest dozwolone",
+                    "To konto Microsoft Entra nie znajduje się na liście dozwolonych kont SIRK Central.",
+                    "Poproś SecAdmina o dodanie konta albo użyj innej uprawnionej tożsamości.",
+                    StatusCodes.Status403Forbidden);
+        }
+
+        return english
+            ? new EntraFailurePage(
+                "Microsoft Entra sign-in failed",
+                "SIRK Central could not complete Microsoft Entra authentication.",
+                "Return to sign-in and try again. If the problem persists, contact a SIRK Central administrator.",
+                StatusCodes.Status401Unauthorized)
+            : new EntraFailurePage(
+                "Logowanie Microsoft Entra nie powiodło się",
+                "SIRK Central nie mógł zakończyć uwierzytelniania Microsoft Entra.",
+                "Wróć do logowania i spróbuj ponownie. Jeśli problem nadal występuje, skontaktuj się z administratorem SIRK Central.",
+                StatusCodes.Status401Unauthorized);
+    }
 
     private static string NormalizeReturnUrl(string? returnUrl)
     {
@@ -276,4 +390,10 @@ internal static class EntraAuthentication
             return "/";
         return returnUrl;
     }
+
+    private sealed record EntraFailurePage(
+        string Title,
+        string Message,
+        string Help,
+        int StatusCode);
 }
