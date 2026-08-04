@@ -3,10 +3,10 @@ set -Eeuo pipefail
 umask 077
 
 CENTRAL_REPO_URL="${CENTRAL_REPO_URL:-https://github.com/Eris92/SIRK-Central.git}"
-CENTRAL_REF="${CENTRAL_REF:-rewrite/dotnet10}"
+CENTRAL_REF="${CENTRAL_REF:-main}"
 RAW_BASE="${RAW_BASE:-https://raw.githubusercontent.com/Eris92/SIRK-Central/${CENTRAL_REF}}"
 INSTALLER_URL="${INSTALLER_URL:-${RAW_BASE}/deploy/reinstall-dotnet10.sh}"
-IMAGE_NAME="${IMAGE_NAME:-sirk-central:2.0.0-test.4}"
+IMAGE_NAME="${IMAGE_NAME:-sirk-central:dotnet10}"
 
 TMP_INSTALLER="$(mktemp /tmp/sirk-central-install.XXXXXX.sh)"
 cleanup() {

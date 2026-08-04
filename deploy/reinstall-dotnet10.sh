@@ -9,9 +9,9 @@ SECRETS_DIR="${SECRETS_DIR:-${INSTALL_ROOT}/secrets}"
 COMPOSE_FILE="${COMPOSE_FILE:-${INSTALL_ROOT}/compose.yml}"
 
 REPO_URL="${REPO_URL:-https://github.com/Eris92/SIRK-Central.git}"
-CENTRAL_REF="${CENTRAL_REF:-rewrite/dotnet10}"
+CENTRAL_REF="${CENTRAL_REF:-main}"
 APP_COMMIT="${APP_COMMIT:-}"
-IMAGE_NAME="${IMAGE_NAME:-sirk-central:2.0.0-test.4}"
+IMAGE_NAME="${IMAGE_NAME:-sirk-central:dotnet10}"
 CENTRAL_CONTAINER="${CENTRAL_CONTAINER:-sirk-central-test}"
 CADDY_CONTAINER="${CADDY_CONTAINER:-sirk-central-caddy}"
 

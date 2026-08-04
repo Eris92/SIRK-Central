@@ -16,11 +16,11 @@ CADDY_CONFIG_DIR="${CADDY_CONFIG_DIR:-${INSTALL_ROOT}/caddy-config}"
 BUSINESS_DIR="${BUSINESS_DIR:-/opt/sir-k.pl}"
 
 CENTRAL_REPO_URL="${CENTRAL_REPO_URL:-https://github.com/Eris92/SIRK-Central.git}"
-CENTRAL_REF="${CENTRAL_REF:-rewrite/dotnet10}"
+CENTRAL_REF="${CENTRAL_REF:-main}"
 BUSINESS_REPO_URL="${BUSINESS_REPO_URL:-https://github.com/Eris92/sir-k.pl.git}"
 BUSINESS_REF="${BUSINESS_REF:-main}"
 
-IMAGE_NAME="${IMAGE_NAME:-sirk-central:2.0.0-test.4}"
+IMAGE_NAME="${IMAGE_NAME:-sirk-central:dotnet10}"
 CENTRAL_CONTAINER="${CENTRAL_CONTAINER:-sirk-central-test}"
 CADDY_CONTAINER="${CADDY_CONTAINER:-sirk-central-caddy}"
 

@@ -1,25 +1,42 @@
-FROM node:22.18.0-alpine3.22
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+WORKDIR /src
 
-RUN apk add --no-cache age
+COPY global.json Directory.Build.props ./
+COPY src/Sirk.Central/Sirk.Central.csproj src/Sirk.Central/
+RUN dotnet restore src/Sirk.Central/Sirk.Central.csproj
 
+COPY public public
+COPY src/Sirk.Central src/Sirk.Central
+RUN rm -rf src/Sirk.Central/bin src/Sirk.Central/obj \
+    && dotnet publish src/Sirk.Central/Sirk.Central.csproj \
+        --configuration Release \
+        --output /app/publish
+
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
-
-COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
-
-COPY src ./src
-COPY auth ./auth
-COPY public ./public
-COPY scripts ./scripts
-
-RUN mkdir -p /var/lib/sirk-central \
-    && chown -R node:node /app /var/lib/sirk-central \
-    && chmod -R u=rwX,g=rX,o=rX /app \
-    && chmod 0700 /var/lib/sirk-central
-
-USER node
-ENV NODE_ENV=production
-EXPOSE 8080 8081
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:8080/readyz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
-CMD ["node", "src/server.js"]
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends age ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+ENV ASPNETCORE_URLS=http://+:8080 \
+    DOTNET_EnableDiagnostics=0 \
+    Sirk__PortalProtocol__DataRoot=/var/lib/sirk-central \
+    Sirk__Security__Enabled=true \
+    Sirk__Security__DataRoot=/var/lib/sirk-central/security \
+    Sirk__Security__DataProtectionCertificatePath=/run/secrets/sirk-central-dataprotection.pfx \
+    Sirk__Security__DataProtectionCertificatePasswordFile=/run/secrets/sirk-central-dataprotection-password \
+    Sirk__Security__ReleaseSigningPublicKeyFile=/run/secrets/sirk-release-signing-public-key \
+    Sirk__Security__RequireProtectedDataProtectionKeys=true \
+    Sirk__Security__RequireSignedReleases=true \
+    Sirk__Security__RequireSingleWriterLease=true
+EXPOSE 8080
+COPY --from=build /app/publish ./
+RUN chown -R "$APP_UID:$APP_UID" /app \
+    && find /app -type d -exec chmod 0755 {} + \
+    && find /app -type f -exec chmod 0644 {} + \
+    && mkdir -p /var/lib/sirk-central/security \
+    && chown -R "$APP_UID:$APP_UID" /var/lib/sirk-central
+VOLUME ["/var/lib/sirk-central"]
+HEALTHCHECK --interval=20s --timeout=7s --start-period=10s --retries=3 \
+    CMD ["dotnet", "Sirk.Central.dll", "--health-check", "http://127.0.0.1:8080/readyz"]
+USER $APP_UID
+ENTRYPOINT ["dotnet", "Sirk.Central.dll"]
