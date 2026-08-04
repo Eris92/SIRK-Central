@@ -4,6 +4,9 @@
     const fragment = new URLSearchParams(String(window.location.hash || "").replace(/^#/, ""));
     const accessCode = fragment.get("access") || "";
     const originalFetch = window.fetch.bind(window);
+    let accessValidationComplete = false;
+    let accessCodeValid = false;
+    let gateObserver = null;
 
     window.__SIRK_WORKSPACE_BOOTSTRAP = window.__SIRK_WORKSPACE_BOOTSTRAP || {
         authenticated: false,
@@ -102,13 +105,31 @@
         return response;
     };
 
-    function hideLocalLogin() {
+    function enforceLocalLoginGate() {
         const panel = document.getElementById("breakGlassPanel");
-        if (panel) panel.hidden = true;
+        if (!panel) return;
+
+        const allowed = accessValidationComplete && accessCodeValid;
+        if (!allowed && !panel.hidden) panel.hidden = true;
+        panel.setAttribute("aria-hidden", String(!allowed));
+        panel.dataset.accessValidated = allowed ? "true" : "false";
+    }
+
+    function mountLocalLoginGate() {
+        const panel = document.getElementById("breakGlassPanel");
+        if (!panel) return;
+
+        panel.hidden = true;
+        enforceLocalLoginGate();
+        if (gateObserver) gateObserver.disconnect();
+        gateObserver = new MutationObserver(enforceLocalLoginGate);
+        gateObserver.observe(panel, {
+            attributes: true,
+            attributeFilter: ["hidden", "style", "class"]
+        });
     }
 
     async function validateAccessCode() {
-        hideLocalLogin();
         if (!accessCode) return false;
 
         try {
@@ -143,13 +164,17 @@
     }
 
     async function initialize() {
-        const valid = await validateAccessCode();
+        mountLocalLoginGate();
+        accessCodeValid = await validateAccessCode();
+        accessValidationComplete = true;
+        enforceLocalLoginGate();
+
         const panel = document.getElementById("breakGlassPanel");
         const loginView = document.getElementById("loginView");
         const dashboardView = document.getElementById("dashboardView");
         const dashboardVisible = Boolean(dashboardView && !dashboardView.hidden);
 
-        if (panel) panel.hidden = !valid;
+        if (panel && accessCodeValid) panel.hidden = false;
         if (loginView && !dashboardVisible) loginView.hidden = false;
         mountAdvancedWorkspaceButton();
     }
