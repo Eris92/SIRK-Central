@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.Extensions.Options;
+using Sirk.Central.Access;
 using Sirk.Central.Portals;
 using Sirk.Central.Security;
 
@@ -14,6 +15,14 @@ internal sealed record UiEntraSettingsUpdate(
     string? ClientSecret,
     string? AllowedIdentities);
 
+internal sealed record UiLocalUserCreateRequest(
+    string UserName,
+    string DisplayName,
+    string Password,
+    string Role);
+
+internal sealed record UiRoleChangeRequest(string Role);
+
 internal static class CurrentUiEndpoints
 {
     public static IEndpointRouteBuilder MapCurrentUiApi(this IEndpointRouteBuilder endpoints)
@@ -23,6 +32,15 @@ internal static class CurrentUiEndpoints
         portals.MapGet("/", ListPortals);
         portals.MapPost("/", CreatePortalAsync);
         portals.MapPost("/{portalId}/connect", ConnectPortal);
+
+        var users = endpoints.MapGroup("/api/settings/users")
+            .RequireAuthorization(SirkPolicies.PortalManagement);
+        users.MapGet("/", ListUsers);
+        users.MapPost("/", CreateLocalUserAsync);
+        users.MapPatch("/{source}/{*key}/role", ChangeUserRoleAsync);
+
+        endpoints.MapGet("/api/settings/roles", ListRoles)
+            .RequireAuthorization(SirkPolicies.PortalManagement);
 
         var entra = endpoints.MapGroup("/api/settings/identity-provider")
             .RequireAuthorization(SirkPolicies.SecurityAdministration);
@@ -151,6 +169,134 @@ internal static class CurrentUiEndpoints
         return Results.Ok(new { ok = true, url = target.AbsoluteUri });
     }
 
+    private static IResult ListRoles(HttpContext context)
+    {
+        NoStore(context);
+        var roles = AssignableRolesFor(context.User);
+        return Results.Ok(new { ok = true, roles });
+    }
+
+    private static IResult ListUsers(
+        HttpContext context,
+        IdentityAccessStore store)
+    {
+        NoStore(context);
+        var users = store.ListIdentities()
+            .Select(identity => new
+            {
+                username = identity.UserName,
+                identity.DisplayName,
+                identity.Role,
+                identity.Source,
+                identityKey = identity.Key,
+                identity.Status,
+                identity.Enabled,
+                identity.RequestedRole,
+                identity.ClaimedRoles,
+                identity.CreatedAtUtc,
+                identity.UpdatedAtUtc,
+                identity.ApprovedBy
+            })
+            .OrderBy(identity => identity.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        return Results.Ok(new { ok = true, users });
+    }
+
+    private static async Task<IResult> CreateLocalUserAsync(
+        UiLocalUserCreateRequest request,
+        HttpContext context,
+        IAntiforgery antiforgery,
+        IdentityAccessStore store)
+    {
+        NoStore(context);
+        return await MutateAsync(
+            context,
+            antiforgery,
+            () => Results.Ok(new
+            {
+                ok = true,
+                user = store.CreateLocal(
+                    new CreateLocalIdentityRequest(
+                        request.UserName,
+                        request.DisplayName,
+                        request.Password,
+                        request.Role),
+                    context.User)
+            }));
+    }
+
+    private static async Task<IResult> ChangeUserRoleAsync(
+        string source,
+        string key,
+        UiRoleChangeRequest request,
+        HttpContext context,
+        IAntiforgery antiforgery,
+        IdentityAccessStore store)
+    {
+        NoStore(context);
+        return await MutateAsync(
+            context,
+            antiforgery,
+            () =>
+            {
+                if (!source.Equals("local", StringComparison.OrdinalIgnoreCase))
+                {
+                    return Results.Json(
+                        new
+                        {
+                            ok = false,
+                            code = "ENTRA_ROLE_CLAIM_MANAGED",
+                            error = "Microsoft Entra roles are managed through application-role claims and privileged-role approval."
+                        },
+                        statusCode: StatusCodes.Status409Conflict);
+                }
+
+                var decoded = Uri.UnescapeDataString(key);
+                var identityKey = decoded.StartsWith("local:", StringComparison.OrdinalIgnoreCase)
+                    ? decoded
+                    : "local:" + decoded;
+                var user = store.UpdateRole(
+                    identityKey,
+                    new ChangeRoleRequest(request.Role),
+                    context.User);
+                return Results.Ok(new { ok = true, user });
+            });
+    }
+
+    private static string[] AssignableRolesFor(System.Security.Claims.ClaimsPrincipal user)
+    {
+        if (user.IsInRole(SirkRoles.BreakGlass))
+        {
+            return
+            [
+                SirkRoles.Auditor,
+                SirkRoles.OperatorL1,
+                SirkRoles.SupportL2,
+                SirkRoles.EngineerL3,
+                SirkRoles.Admin,
+                SirkRoles.SecAdmin
+            ];
+        }
+
+        if (user.IsInRole(SirkRoles.SecAdmin))
+            return [SirkRoles.SecAdmin];
+
+        if (user.IsInRole(SirkRoles.Admin))
+        {
+            return
+            [
+                SirkRoles.Auditor,
+                SirkRoles.OperatorL1,
+                SirkRoles.SupportL2,
+                SirkRoles.EngineerL3,
+                SirkRoles.Admin
+            ];
+        }
+
+        return [];
+    }
+
     private static IResult GetEntra(HttpContext context, EntraSettingsStore store)
     {
         NoStore(context);
@@ -219,6 +365,40 @@ internal static class CurrentUiEndpoints
 
         var issuer = $"https://login.microsoftonline.com/{value.Tenant}/v2.0";
         return Results.Ok(new { ok = true, issuer, configured = value.ClientSecretConfigured });
+    }
+
+    private static async Task<IResult> MutateAsync(
+        HttpContext context,
+        IAntiforgery antiforgery,
+        Func<IResult> action)
+    {
+        var csrf = await ValidateCsrfAsync(context, antiforgery);
+        if (csrf is not null) return csrf;
+
+        try
+        {
+            return action();
+        }
+        catch (KeyNotFoundException exception)
+        {
+            return Results.Json(
+                new { ok = false, code = "USER_NOT_FOUND", error = exception.Message },
+                statusCode: StatusCodes.Status404NotFound);
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            return Results.Json(
+                new { ok = false, code = "ROLE_ASSIGNMENT_FORBIDDEN", error = exception.Message },
+                statusCode: StatusCodes.Status403Forbidden);
+        }
+        catch (Exception exception) when (
+            exception is InvalidDataException or
+            InvalidOperationException)
+        {
+            return Results.Json(
+                new { ok = false, code = "USER_VALIDATION_FAILED", error = exception.Message },
+                statusCode: StatusCodes.Status409Conflict);
+        }
     }
 
     private static async Task<IResult?> ValidateCsrfAsync(
