@@ -26,7 +26,20 @@ esac
 export DEBIAN_FRONTEND=noninteractive
 log "Installing operating-system prerequisites"
 apt-get update
-apt-get install -y ca-certificates curl git gnupg ufw unattended-upgrades openssh-server
+apt-get install -y \
+  ca-certificates \
+  coreutils \
+  curl \
+  findutils \
+  gawk \
+  git \
+  gnupg \
+  grep \
+  jq \
+  openssl \
+  openssh-server \
+  ufw \
+  unattended-upgrades
 
 if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>&1; then
   log "Installing Docker Engine and Compose plugin"
