@@ -2,9 +2,9 @@ name: SIRK Central .NET 10 CI
 
 on:
   push:
-    branches: [main, rewrite/dotnet10-final]
+    branches: [main]
   pull_request:
-    branches: [main, rewrite/dotnet10-final]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -145,3 +145,136 @@ jobs:
             sleep 1
           done
           exit 1
+
+  central-portal-live:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Install E2E dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes unzip openssl ca-certificates
+
+      - name: Publish current Central
+        run: |
+          dotnet publish src/Sirk.Central/Sirk.Central.csproj \
+            --configuration Release \
+            --runtime linux-x64 \
+            --self-contained false \
+            --output artifacts/e2e-central \
+            /p:DebugType=None \
+            /p:DebugSymbols=false
+
+      - name: Download and publish current Portal main
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/sirk-portal-e2e
+          mkdir -p /tmp/sirk-portal-e2e
+          curl --fail --location --silent --show-error \
+            https://codeload.github.com/Eris92/SIRK-Portal/zip/refs/heads/main \
+            --output /tmp/sirk-portal-e2e/portal.zip
+          unzip -q /tmp/sirk-portal-e2e/portal.zip -d /tmp/sirk-portal-e2e/source
+          portal_root="$(find /tmp/sirk-portal-e2e/source -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+          test -f "$portal_root/src/Sirk.Portal/Sirk.Portal.csproj"
+          dotnet publish "$portal_root/src/Sirk.Portal/Sirk.Portal.csproj" \
+            --configuration Release \
+            --runtime linux-x64 \
+            --self-contained false \
+            --output artifacts/e2e-portal \
+            /p:DebugType=None \
+            /p:DebugSymbols=false
+
+      - name: Create trusted Central HTTPS certificate
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/e2e-tls
+          cd artifacts/e2e-tls
+          openssl req -x509 -newkey rsa:3072 -nodes \
+            -keyout ca.key -out ca.crt -days 2 \
+            -subj '/CN=SIRK Product E2E Root CA'
+          openssl req -newkey rsa:3072 -nodes \
+            -keyout central.key -out central.csr \
+            -subj '/CN=central-e2e.local'
+          cat > central.ext <<'EOF'
+          subjectAltName=DNS:central-e2e.local,DNS:localhost,IP:127.0.0.1
+          extendedKeyUsage=serverAuth
+          keyUsage=digitalSignature,keyEncipherment
+          EOF
+          openssl x509 -req -in central.csr \
+            -CA ca.crt -CAkey ca.key -CAcreateserial \
+            -out central.crt -days 2 -sha256 -extfile central.ext
+          openssl pkcs12 -export \
+            -out central.pfx \
+            -inkey central.key \
+            -in central.crt \
+            -certfile ca.crt \
+            -passout pass:SIRK-E2E-PFX-2026!
+          sudo cp ca.crt /usr/local/share/ca-certificates/sirk-product-e2e.crt
+          sudo update-ca-certificates
+          echo '127.0.0.1 central-e2e.local' | sudo tee -a /etc/hosts
+
+      - name: Central to Portal connection heartbeat and reverse tunnel
+        env:
+          SIRK_E2E_CENTRAL_DLL: ${{ github.workspace }}/artifacts/e2e-central/Sirk.Central.dll
+          SIRK_E2E_PORTAL_DLL: ${{ github.workspace }}/artifacts/e2e-portal/Sirk.Portal.dll
+          SIRK_E2E_CENTRAL_PFX: ${{ github.workspace }}/artifacts/e2e-tls/central.pfx
+          SIRK_E2E_CENTRAL_PFX_PASSWORD: SIRK-E2E-PFX-2026!
+          SIRK_E2E_CA_FILE: ${{ github.workspace }}/artifacts/e2e-tls/ca.crt
+          NO_PROXY: central-e2e.local,localhost,127.0.0.1
+          no_proxy: central-e2e.local,localhost,127.0.0.1
+        run: python3 .github/scripts/test-central-portal-live.py
+
+  group-agent-exe-live:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      NO_PROXY: portal-e2e.local,localhost,127.0.0.1
+      no_proxy: portal-e2e.local,localhost,127.0.0.1
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Download and publish current Portal main
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sourceRoot = Join-Path $env:RUNNER_TEMP 'sirk-portal-e2e-source'
+          $zipPath = Join-Path $env:RUNNER_TEMP 'sirk-portal-main.zip'
+          Remove-Item -LiteralPath $sourceRoot -Recurse -Force -ErrorAction SilentlyContinue
+          Invoke-WebRequest `
+            -UseBasicParsing `
+            -Uri 'https://codeload.github.com/Eris92/SIRK-Portal/zip/refs/heads/main' `
+            -OutFile $zipPath
+          Expand-Archive -LiteralPath $zipPath -DestinationPath $sourceRoot -Force
+          $portalRoot = Get-ChildItem -LiteralPath $sourceRoot -Directory | Select-Object -First 1
+          if (-not $portalRoot) { throw 'Downloaded Portal source is empty.' }
+          $project = Join-Path $portalRoot.FullName 'src\Sirk.Portal\Sirk.Portal.csproj'
+          $publishRoot = Join-Path $env:RUNNER_TEMP 'sirk-portal-e2e-publish'
+          dotnet publish $project `
+            --configuration Release `
+            --runtime win-x64 `
+            --self-contained false `
+            --output $publishRoot `
+            /p:DebugType=None `
+            /p:DebugSymbols=false
+          if ($LASTEXITCODE -ne 0) { throw "Portal publish failed. ExitCode=$LASTEXITCODE" }
+          if (-not (Test-Path (Join-Path $publishRoot 'Sirk.Portal.dll'))) {
+            throw 'Published Sirk.Portal.dll is missing.'
+          }
+
+      - name: Generate run and verify group-bound Agent EXE
+        shell: pwsh
+        run: |
+          .\.github\scripts\Test-GroupAgentInstallerE2E.ps1 `
+            -PortalDll "$env:RUNNER_TEMP\sirk-portal-e2e-publish\Sirk.Portal.dll"
