@@ -4,6 +4,7 @@
     let session = null;
     let refreshPromise = null;
     let observer = null;
+    let connectionPending = false;
 
     function lang() {
         return document.documentElement.lang === "en" ? "en" : "pl";
@@ -78,6 +79,7 @@
     function setButtonState(button, state) {
         button.className = state === "allow" ? "button" : "button disabled";
         button.disabled = state !== "allow";
+        button.dataset.sirkTunnelState = state;
         button.textContent = state === "allow"
             ? label("Połącz", "Connect")
             : state === "approval"
@@ -91,6 +93,8 @@
     }
 
     async function connect(portalId, button) {
+        if (connectionPending) return;
+        connectionPending = true;
         const previous = button.textContent;
         button.disabled = true;
         button.textContent = label("Łączenie…", "Connecting…");
@@ -108,8 +112,9 @@
                     body: "{}"
                 });
             if (!result.url) throw new Error("Central did not return a tunnel URL.");
-            window.location.assign(result.url);
+            window.location.replace(result.url);
         } catch (error) {
+            connectionPending = false;
             const message = error?.payload?.approvalRequired
                 ? label("Połączenie wymaga zatwierdzenia.", "The connection requires approval.")
                 : error?.message || label("Nie udało się otworzyć tunelu.", "Unable to open the tunnel.");
@@ -154,14 +159,6 @@
                 ? effective.teams.join(", ")
                 : label("Brak przypisanego zespołu", "No assigned team");
         }
-
-        if (state === "allow") {
-            button.addEventListener("click", event => {
-                event.preventDefault();
-                event.stopImmediatePropagation();
-                connect(portalId, button);
-            }, { capture: true });
-        }
     }
 
     async function refreshCards() {
@@ -181,6 +178,39 @@
         }()).finally(() => { refreshPromise = null; });
         return refreshPromise;
     }
+
+    document.addEventListener("click", async event => {
+        const button = event.target instanceof Element
+            ? event.target.closest(".portal-card button")
+            : null;
+        if (!(button instanceof HTMLButtonElement)) return;
+
+        // Capture the click before the legacy app.js listener can run. Cards are
+        // rebuilt every five seconds, so relying only on per-button rebinding
+        // creates a small race window and can execute both connect contracts.
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+
+        const card = button.closest(".portal-card");
+        const portalId = card ? portalIdFromCard(card) : "";
+        const online = card?.querySelector(".status")?.classList.contains("online") === true;
+        if (!portalId || !online || connectionPending) return;
+
+        try {
+            const identity = await readSession();
+            const effective = await effectiveAccess(identity, portalId);
+            const capability = effective?.capabilities?.["portal.connect"] || "deny";
+            if (effective?.allowed !== true || capability !== "allow") {
+                setButtonState(button, capability === "approval" ? "approval" : "deny");
+                return;
+            }
+            setButtonState(button, "allow");
+            await connect(portalId, button);
+        } catch (error) {
+            window.alert(error?.message || label("Nie udało się otworzyć tunelu.", "Unable to open the tunnel."));
+        }
+    }, true);
 
     function initialize() {
         const list = document.getElementById("portalList");
