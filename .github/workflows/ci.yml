@@ -31,7 +31,15 @@ jobs:
       - name: Apply one-time Node-free product cleanup
         shell: bash
         run: |
+          set -euo pipefail
           python3 tools/finalize-dotnet10.py
+          while IFS= read -r -d '' file; do
+            relative="${file#./}"
+            case "$relative" in
+              public/*|website/*) ;;
+              *) rm -f -- "$file" ;;
+            esac
+          done < <(find . -path './.git' -prune -o -type f \( -name '*.js' -o -name '*.mjs' -o -name '*.cjs' \) -print0)
           python3 - <<'PY'
           from pathlib import Path
           path = Path('.github/scripts/validate-node-free-dotnet10.sh')
