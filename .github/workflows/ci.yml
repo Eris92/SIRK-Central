@@ -1,28 +1,25 @@
-name: CI
+name: SIRK Central .NET 10 CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, rewrite/dotnet10-final]
   pull_request:
     branches: [main]
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: trusted-finalize-sirk-central-dotnet10
-  cancel-in-progress: false
+  group: sirk-central-dotnet10-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  finalize-product-tree:
+  build-test-container:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: rewrite/dotnet10-final
-          fetch-depth: 1
 
       - uses: actions/setup-dotnet@v4
         with:
@@ -34,50 +31,117 @@ jobs:
           sudo apt-get install --yes age
           age --version
 
-      - name: Apply one-time Node-free product cleanup
+      - name: Validate Node-free .NET 10 repository
+        run: bash .github/scripts/validate-node-free-dotnet10.sh
+
+      - name: Restore and build
+        run: |
+          dotnet restore src/Sirk.Central/Sirk.Central.csproj
+          dotnet build src/Sirk.Central/Sirk.Central.csproj \
+            --configuration Release \
+            --no-restore
+
+      - name: Audit NuGet dependencies
         shell: bash
         run: |
           set -euo pipefail
-          python3 tools/finalize-dotnet10.py
-          while IFS= read -r -d '' file; do
-            relative="${file#./}"
-            case "$relative" in
-              public/*|website/*) ;;
-              *) rm -f -- "$file" ;;
-            esac
-          done < <(find . -path './.git' -prune -o -type f \( -name '*.js' -o -name '*.mjs' -o -name '*.cjs' \) -print0)
+          dotnet list src/Sirk.Central/Sirk.Central.csproj package \
+            --vulnerable \
+            --include-transitive \
+            --format json > /tmp/sirk-central-vulnerabilities.json
           python3 - <<'PY'
+          import json
           from pathlib import Path
-          path = Path('.github/scripts/validate-node-free-dotnet10.sh')
-          value = path.read_text(encoding='utf-8')
-          old = "grep -q '<TargetFramework>net10.0</TargetFramework>' src/Sirk.Central/Sirk.Central.csproj"
-          new = "grep -q '<TargetFramework>net10.0</TargetFramework>' Directory.Build.props"
-          if old not in value:
-              raise SystemExit('Expected TargetFramework validator was not generated.')
-          path.write_text(value.replace(old, new), encoding='utf-8', newline='\n')
+
+          report = json.loads(Path('/tmp/sirk-central-vulnerabilities.json').read_text(encoding='utf-8'))
+          findings = []
+
+          def inspect(value, location='root'):
+              if isinstance(value, dict):
+                  for key, child in value.items():
+                      child_location = f'{location}.{key}'
+                      if key.lower() == 'vulnerabilities' and child:
+                          findings.append((child_location, child))
+                      inspect(child, child_location)
+              elif isinstance(value, list):
+                  for index, child in enumerate(value):
+                      inspect(child, f'{location}[{index}]')
+
+          inspect(report)
+          if findings:
+              raise SystemExit('Vulnerable NuGet dependencies detected: ' + repr(findings))
+          print('NUGET_VULNERABILITY_AUDIT_OK')
           PY
 
-      - name: Validate cleaned product tree
+      - name: Run every Central contract project
         shell: bash
         run: |
           set -euo pipefail
-          chmod +x install.sh reinstall.sh update.sh deploy/*.sh .github/scripts/validate-node-free-dotnet10.sh
-          bash .github/scripts/validate-node-free-dotnet10.sh
-          dotnet restore src/Sirk.Central/Sirk.Central.csproj
-          dotnet build src/Sirk.Central/Sirk.Central.csproj --configuration Release --no-restore
           for project in tests/*/*.csproj; do
+            echo "Running $project"
             dotnet run --project "$project" --configuration Release
           done
 
-      - name: Commit product cleanup to migration branch
+      - name: Publish Linux x64
+        run: |
+          dotnet publish src/Sirk.Central/Sirk.Central.csproj \
+            --configuration Release \
+            --runtime linux-x64 \
+            --self-contained false \
+            --output artifacts/linux-x64 \
+            /p:DebugType=None \
+            /p:DebugSymbols=false
+          test -f artifacts/linux-x64/Sirk.Central.dll
+          test -f artifacts/linux-x64/public/index.html
+
+      - name: Validate Compose and Caddy
         shell: bash
         run: |
           set -euo pipefail
-          find src tests -type d \( -name bin -o -name obj \) -prune -exec rm -rf {} +
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
-          git reset -- .github/workflows
-          git diff --cached --check
-          git commit -m 'Remove Node runtime and finalize SIRK Central .NET 10 product tree'
-          git push origin HEAD:rewrite/dotnet10-final
+          mkdir -p secrets
+          touch \
+            secrets/sirk-central-dataprotection.pfx \
+            secrets/sirk-central-dataprotection-password \
+            secrets/sirk-release-signing-public-key
+          docker compose config > /tmp/sirk-central-compose.yml
+          test "$(docker compose config --services | sort | tr '\n' ' ')" = "caddy central "
+          docker run --rm \
+            -e SIRK_ACME_EMAIL=admin@example.test \
+            -e SIRK_WEBSITE_DOMAIN=example.test \
+            -e SIRK_BUSINESS_DOMAIN=business.example.test \
+            -e SIRK_CENTRAL_DOMAIN=central.example.test \
+            -e SIRK_AUTH_DOMAIN=auth.example.test \
+            -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2.10.0-alpine \
+            caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+
+      - name: Build canonical ASP.NET Core container
+        run: docker build --tag sirk-central:dotnet10 .
+
+      - name: Runtime smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --detach --name sirk-central-smoke \
+            -e Sirk__Security__Enabled=false \
+            -e Sirk__Security__RequireProtectedDataProtectionKeys=false \
+            -e Sirk__Security__RequireSignedReleases=false \
+            -e Sirk__Security__RequireSingleWriterLease=false \
+            -p 18080:8080 \
+            sirk-central:dotnet10
+          cleanup() {
+            docker logs sirk-central-smoke || true
+            docker rm --force --volumes sirk-central-smoke >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent --show-error http://127.0.0.1:18080/healthz >/tmp/health.json; then
+              grep -q 'healthy' /tmp/health.json
+              cleanup
+              trap - EXIT
+              echo SIRK_CENTRAL_DOTNET10_RUNTIME_OK
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1
