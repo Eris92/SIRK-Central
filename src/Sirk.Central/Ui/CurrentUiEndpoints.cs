@@ -37,7 +37,7 @@ internal static class CurrentUiEndpoints
             .RequireAuthorization(SirkPolicies.PortalManagement);
         users.MapGet("/", ListUsers);
         users.MapPost("/", CreateLocalUserAsync);
-        users.MapPatch("/{source}/{*key}/role", ChangeUserRoleAsync);
+        users.MapPatch("/{source}/{key}/role", ChangeUserRoleAsync);
 
         endpoints.MapGet("/api/settings/roles", ListRoles)
             .RequireAuthorization(SirkPolicies.PortalManagement);
