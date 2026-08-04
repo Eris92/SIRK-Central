@@ -270,20 +270,20 @@ internal static class EntraAuthentication
         context.Response.Headers.Pragma = "no-cache";
         context.Response.Headers.Expires = "0";
 
-        var html = $"""
+        var html = $$"""
             <!doctype html>
-            <html lang="{(english ? "en" : "pl")}">
+            <html lang="{{(english ? "en" : "pl")}}">
             <head>
               <meta charset="utf-8">
               <meta name="viewport" content="width=device-width,initial-scale=1">
               <meta name="robots" content="noindex,nofollow">
-              <title>SIRK Central — {failure.Title}</title>
+              <title>SIRK Central — {{failure.Title}}</title>
               <link rel="stylesheet" href="/styles.css">
               <style>
-                .auth-failure-card {{ max-width: 460px; }}
-                .auth-failure-message {{ margin: 22px 0; padding: 16px 18px; border: 1px solid #a94755; border-radius: 12px; background: rgba(115,27,45,.24); color: #ffd5dc; line-height: 1.55; }}
-                .auth-failure-help {{ margin: 0 0 22px; color: #9eb1cf; line-height: 1.55; }}
-                .auth-failure-card .button {{ display: block; width: 100%; text-align: center; box-sizing: border-box; }}
+                .auth-failure-card { max-width: 460px; }
+                .auth-failure-message { margin: 22px 0; padding: 16px 18px; border: 1px solid #a94755; border-radius: 12px; background: rgba(115,27,45,.24); color: #ffd5dc; line-height: 1.55; }
+                .auth-failure-help { margin: 0 0 22px; color: #9eb1cf; line-height: 1.55; }
+                .auth-failure-card .button { display: block; width: 100%; text-align: center; box-sizing: border-box; }
               </style>
             </head>
             <body>
@@ -291,10 +291,10 @@ internal static class EntraAuthentication
                 <section class="login-card auth-failure-card">
                   <div class="mark">S</div>
                   <p class="eyebrow">SIRK Management Platform</p>
-                  <h1>{failure.Title}</h1>
-                  <div class="auth-failure-message" role="alert">{failure.Message}</div>
-                  <p class="auth-failure-help">{failure.Help}</p>
-                  <a class="button login-provider" href="/">{(english ? "Back to sign-in" : "Wróć do logowania")}</a>
+                  <h1>{{failure.Title}}</h1>
+                  <div class="auth-failure-message" role="alert">{{failure.Message}}</div>
+                  <p class="auth-failure-help">{{failure.Help}}</p>
+                  <a class="button login-provider" href="/">{{(english ? "Back to sign-in" : "Wróć do logowania")}}</a>
                 </section>
               </main>
             </body>
