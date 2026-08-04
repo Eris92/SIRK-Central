@@ -4,7 +4,7 @@ on:
   push:
     branches: [main, rewrite/dotnet10-final]
   pull_request:
-    branches: [main]
+    branches: [main, rewrite/dotnet10-final]
   workflow_dispatch:
 
 permissions:
