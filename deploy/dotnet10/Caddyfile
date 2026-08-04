@@ -64,8 +64,9 @@ www.{$SIRK_BUSINESS_DOMAIN} {
 
     # Classic Central UI is canonical. The technical workspace remains
     # available explicitly as /workspace.html from Settings > Advanced.
+    # Reverse tunnel routes must reach ASP.NET unchanged.
     @spaRoutes {
-        not path /api/* /auth/* /healthz /readyz /workspace.html
+        not path /api/* /auth/* /connect /connect/* /healthz /readyz /workspace.html
         not path_regexp staticAsset \.[A-Za-z0-9]{1,10}$
     }
     rewrite @spaRoutes /index.html
