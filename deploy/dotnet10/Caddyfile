@@ -89,6 +89,9 @@ www.{$SIRK_BUSINESS_DOMAIN} {
         Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
         Cross-Origin-Opener-Policy "same-origin"
         Cross-Origin-Resource-Policy "same-origin"
+        Cache-Control "no-store, no-cache, must-revalidate, max-age=0"
+        Pragma "no-cache"
+        Expires "0"
         X-Robots-Tag "noindex, nofollow"
         -Server
     }
