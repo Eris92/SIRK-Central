@@ -14,7 +14,16 @@ RUN rm -rf src/Sirk.Central/bin src/Sirk.Central/obj \
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
-RUN apt-get update \
+RUN printf '%s\n' \
+        'Acquire::Retries "5";' \
+        'Acquire::Queue-Mode "access";' \
+        'Acquire::http::Pipeline-Depth "0";' \
+        'Acquire::https::Pipeline-Depth "0";' \
+        'Acquire::http::Timeout "20";' \
+        'Acquire::https::Timeout "20";' \
+        'Acquire::Languages "none";' \
+        > /etc/apt/apt.conf.d/99-sirk-build-network \
+    && apt-get update \
     && apt-get install --yes --no-install-recommends age ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 ENV ASPNETCORE_URLS=http://+:8080 \
