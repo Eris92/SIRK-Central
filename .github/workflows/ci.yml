@@ -29,7 +29,19 @@ jobs:
           dotnet-version: 10.0.x
 
       - name: Apply one-time Node-free product cleanup
-        run: python3 tools/finalize-dotnet10.py
+        shell: bash
+        run: |
+          python3 tools/finalize-dotnet10.py
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('.github/scripts/validate-node-free-dotnet10.sh')
+          value = path.read_text(encoding='utf-8')
+          old = "grep -q '<TargetFramework>net10.0</TargetFramework>' src/Sirk.Central/Sirk.Central.csproj"
+          new = "grep -q '<TargetFramework>net10.0</TargetFramework>' Directory.Build.props"
+          if old not in value:
+              raise SystemExit('Expected TargetFramework validator was not generated.')
+          path.write_text(value.replace(old, new), encoding='utf-8', newline='\n')
+          PY
 
       - name: Validate cleaned product tree
         shell: bash
