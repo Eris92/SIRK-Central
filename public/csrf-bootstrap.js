@@ -5,10 +5,6 @@
     if (typeof window.fetch !== "function") return;
 
     const originalFetch = window.fetch.bind(window);
-    const fragment = new URLSearchParams(
-        String(window.location.hash || "").replace(/^#/, "")
-    );
-    const hasAccess = Boolean(fragment.get("access"));
     let csrfPromise = null;
 
     function requestMethod(input, init) {
@@ -26,6 +22,9 @@
     function isAnonymousWrite(url) {
         return url.pathname === "/api/login" ||
             /^\/api\/v1\/break-glass\/[^/]+\/login$/.test(url.pathname) ||
+            url.pathname === "/api/login/mfa/recovery" ||
+            url.pathname === "/api/login/mfa/passkey/begin" ||
+            url.pathname === "/api/login/mfa/passkey/finish" ||
             url.pathname === "/auth/entra/frontchannel-logout";
     }
 
@@ -62,24 +61,6 @@
         }
 
         const method = requestMethod(input, init);
-
-        if (
-            hasAccess &&
-            method === "GET" &&
-            url.origin === window.location.origin &&
-            url.pathname === "/api/access"
-        ) {
-            return new Response(
-                JSON.stringify({ ok: true, localLoginEnabled: true }),
-                {
-                    status: 200,
-                    headers: {
-                        "Content-Type": "application/json; charset=utf-8",
-                        "Cache-Control": "no-store"
-                    }
-                }
-            );
-        }
 
         if (
             url.origin === window.location.origin &&
