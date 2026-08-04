@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Antiforgery;
 using Sirk.Central.Security;
+using Sirk.Central.Ui;
 
 namespace Sirk.Central.Portals;
 
@@ -30,6 +31,13 @@ internal static class PortalConnectionFileEndpoints
                 "/api/v1/admin/portals/{portalId}/connection-file",
                 DownloadAsync)
             .RequireAuthorization(SirkPolicies.PortalManagement);
+
+        // The restored classic frontend uses the compatibility routes under
+        // /api/portals and /api/settings/identity-provider. Keep their
+        // registration next to the canonical portal management surface so
+        // both UIs share the same registry, authorization and data stores.
+        endpoints.MapCurrentUiApi();
+
         return endpoints;
     }
 
