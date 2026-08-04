@@ -20,7 +20,8 @@ $TlsRoot = Join-Path $Root 'tls'
 $PfxPath = Join-Path $TlsRoot 'portal-e2e.pfx'
 $CerPath = Join-Path $TlsRoot 'portal-e2e.cer'
 $InstallerPath = Join-Path $Root 'SIRK-Agent-e2e-Installer.exe'
-$PortalLog = Join-Path $Root 'portal.log'
+$PortalLog = Join-Path $Root 'portal.stdout.log'
+$PortalErrorLog = Join-Path $Root 'portal.stderr.log'
 $PfxPasswordText = 'SIRK-Portal-E2E-PFX-2026!'
 $PortalProcess = $null
 $Certificate = $null
@@ -64,7 +65,7 @@ function Start-Portal {
         -ArgumentList @($PortalDll) `
         -WorkingDirectory (Split-Path -Parent $PortalDll) `
         -RedirectStandardOutput $PortalLog `
-        -RedirectStandardError $PortalLog `
+        -RedirectStandardError $PortalErrorLog `
         -PassThru
     Wait-PortalReady
     return $process
@@ -223,6 +224,7 @@ try {
 catch {
     Write-Host "SIRK group Agent EXE E2E failed: $($_.Exception.Message)" -ForegroundColor Red
     Get-Content -LiteralPath $PortalLog -Tail 300 -ErrorAction SilentlyContinue | Out-Host
+    Get-Content -LiteralPath $PortalErrorLog -Tail 300 -ErrorAction SilentlyContinue | Out-Host
     Get-ChildItem 'C:\ProgramData\SIRK\Logs' -File -ErrorAction SilentlyContinue |
         ForEach-Object {
             Write-Host "--- $($_.FullName) ---"
