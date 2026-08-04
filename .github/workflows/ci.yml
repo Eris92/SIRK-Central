@@ -28,6 +28,12 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
+      - name: Install encrypted backup dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes age
+          age --version
+
       - name: Apply one-time Node-free product cleanup
         shell: bash
         run: |
