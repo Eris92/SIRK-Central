@@ -1,0 +1,105 @@
+name: Temporary resilient VPS Docker build fix
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Apply resilient Docker build changes
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          dockerfile_path = Path('Dockerfile.dotnet10')
+          dockerfile = dockerfile_path.read_text(encoding='utf-8')
+          old_apt = '''RUN apt-get update \\
+    && apt-get install --yes --no-install-recommends age ca-certificates \\
+    && rm -rf /var/lib/apt/lists/*'''
+          new_apt = '''RUN printf '%s\\n' \\
+        'Acquire::Retries "5";' \\
+        'Acquire::Queue-Mode "access";' \\
+        'Acquire::http::Pipeline-Depth "0";' \\
+        'Acquire::https::Pipeline-Depth "0";' \\
+        'Acquire::http::Timeout "20";' \\
+        'Acquire::https::Timeout "20";' \\
+        'Acquire::Languages "none";' \\
+        > /etc/apt/apt.conf.d/99-sirk-build-network \\
+    && apt-get update \\
+    && apt-get install --yes --no-install-recommends age ca-certificates \\
+    && rm -rf /var/lib/apt/lists/*'''
+          if dockerfile.count(old_apt) != 1:
+              raise SystemExit(f'Expected one Dockerfile apt block, found {dockerfile.count(old_apt)}.')
+          dockerfile_path.write_text(
+              dockerfile.replace(old_apt, new_apt, 1),
+              encoding='utf-8',
+              newline='\n')
+
+          script_path = Path('deploy/upgrade-dotnet10-vps.sh')
+          script = script_path.read_text(encoding='utf-8')
+          old_build = '''# Stop only the application containers. Persistent data and certificate directories remain untouched.
+docker rm -f "$CENTRAL_CONTAINER" "$CADDY_CONTAINER" 2>/dev/null || true
+
+echo "=== Budowanie obrazu ${IMAGE_NAME} ==="
+docker build \\
+    --pull \\
+    --no-cache \\
+    --file "$SOURCE_DIR/Dockerfile.dotnet10" \\
+    --tag "$IMAGE_NAME" \\
+    "$SOURCE_DIR"
+'''
+          new_build = '''echo "=== Budowanie obrazu ${IMAGE_NAME} ==="
+BUILD_ARGS=(
+    --pull
+    --network host
+    --file "$SOURCE_DIR/Dockerfile.dotnet10"
+    --tag "$IMAGE_NAME"
+)
+if [[ "${SIRK_DOCKER_NO_CACHE:-0}" == "1" ]]; then
+    BUILD_ARGS+=(--no-cache)
+fi
+docker build "${BUILD_ARGS[@]}" "$SOURCE_DIR"
+
+# Keep the currently running release online until the replacement image has
+# completed successfully. Persistent data and certificates remain untouched.
+docker rm -f "$CENTRAL_CONTAINER" "$CADDY_CONTAINER" 2>/dev/null || true
+'''
+          if script.count(old_build) != 1:
+              raise SystemExit(f'Expected one upgrade build block, found {script.count(old_build)}.')
+          script_path.write_text(
+              script.replace(old_build, new_build, 1),
+              encoding='utf-8',
+              newline='\n')
+          PY
+
+      - name: Validate scripts and build Central
+        run: |
+          bash -n deploy/upgrade-dotnet10-vps.sh
+          dotnet build src/Sirk.Central/Sirk.Central.csproj -c Release --nologo
+          grep -Fq -- '--network host' deploy/upgrade-dotnet10-vps.sh
+          grep -Fq 'SIRK_DOCKER_NO_CACHE' deploy/upgrade-dotnet10-vps.sh
+          grep -Fq 'Acquire::http::Pipeline-Depth' Dockerfile.dotnet10
+
+      - name: Commit final fix and remove temporary workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/temp-harden-vps-docker-build.yml
+          git add Dockerfile.dotnet10 deploy/upgrade-dotnet10-vps.sh
+          git commit -m "fix: make VPS Docker upgrades resilient to slow APT networking"
+          git push origin HEAD:main
