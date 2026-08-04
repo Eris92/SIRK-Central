@@ -278,7 +278,9 @@ internal sealed class PortalTunnelRelay
         {
             "location",
             "etag",
-            "last-modified"
+            "last-modified",
+            "x-sirk-sequence",
+            "x-sirk-metadata"
         };
         var result = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);
         foreach (var item in source ?? new Dictionary<string, string[]>())
