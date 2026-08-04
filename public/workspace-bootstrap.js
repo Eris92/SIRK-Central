@@ -128,6 +128,20 @@
         }
     }
 
+    function mountAdvancedWorkspaceButton() {
+        if (document.getElementById("advancedWorkspaceButton")) return;
+        const settingsButton = document.getElementById("settingsButton");
+        if (!settingsButton || !settingsButton.parentElement) return;
+
+        const button = document.createElement("button");
+        button.id = "advancedWorkspaceButton";
+        button.type = "button";
+        button.className = "secondary";
+        button.textContent = document.documentElement.lang === "en" ? "Advanced" : "Zaawansowane";
+        button.addEventListener("click", () => window.location.assign("/workspace.html"));
+        settingsButton.insertAdjacentElement("afterend", button);
+    }
+
     async function initialize() {
         const valid = await validateAccessCode();
         const panel = document.getElementById("breakGlassPanel");
@@ -137,6 +151,7 @@
 
         if (panel) panel.hidden = !valid;
         if (loginView && !dashboardVisible) loginView.hidden = false;
+        mountAdvancedWorkspaceButton();
     }
 
     if (document.readyState === "loading") {
