@@ -119,8 +119,33 @@
     }
   }
 
+  function updateReturnLabel(button) {
+    button.textContent = document.documentElement.lang === "en"
+      ? "Back to Portals"
+      : "Powrót do Portali";
+  }
+
+  function mountPortalReturn() {
+    const topbar = document.querySelector("#workspace .topbar");
+    const logout = document.getElementById("logout");
+    if (!topbar || !logout || document.getElementById("portalHomeButton")) return;
+
+    const button = document.createElement("button");
+    button.id = "portalHomeButton";
+    button.type = "button";
+    updateReturnLabel(button);
+    button.addEventListener("click", () => window.location.assign("/"));
+    topbar.insertBefore(button, logout);
+
+    new MutationObserver(() => updateReturnLabel(button)).observe(
+      document.documentElement,
+      { attributes: true, attributeFilter: ["lang"] });
+  }
+
   function mount() {
     validateWorkspaceAccess();
+    mountPortalReturn();
+
     const rotate = document.getElementById("portalRotate");
     if (!rotate || document.getElementById("portalConnectionFile")) return;
     const button = document.createElement("button");
