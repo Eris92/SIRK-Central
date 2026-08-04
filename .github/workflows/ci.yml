@@ -3,337 +3,52 @@ name: CI
 on:
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: trusted-finalize-sirk-central-dotnet10
+  cancel-in-progress: false
+
 jobs:
-  finalize-node-free-repository:
+  finalize-product-tree:
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
           ref: rewrite/dotnet10-final
           fetch-depth: 1
 
-      - name: Remove Node runtime and write canonical .NET 10 deployment
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          import shutil
-          import re
-
-          root = Path('.')
-
-          for directory in ('auth', 'updater', 'test', 'scripts'):
-              shutil.rmtree(root / directory, ignore_errors=True)
-
-          source_root = root / 'src'
-          if source_root.exists():
-              for child in source_root.iterdir():
-                  if child.name != 'Sirk.Central':
-                      if child.is_dir(): shutil.rmtree(child)
-                      else: child.unlink()
-
-          for file_name in (
-              'package.json', 'package-lock.json', 'npm-shrinkwrap.json',
-              'yarn.lock', 'pnpm-lock.yaml', '.nvmrc',
-              'docker-compose.release.yml', 'Dockerfile.portal-runtime',
-              'docker-compose.portal-runtime.yml'
-          ):
-              (root / file_name).unlink(missing_ok=True)
-
-          workflow_root = root / '.github' / 'workflows'
-          node_markers = re.compile(
-              r'actions/setup-node|\bnpm\s+(?:ci|test|run)|\bnode\s+(?:--test|src/)|'
-              r'auth/server\.js|updater-gateway|Dockerfile\.gateway|Dockerfile\.manager',
-              re.I)
-          for workflow in workflow_root.glob('*.*ml'):
-              if workflow.name == 'ci.yml':
-                  continue
-              if node_markers.search(workflow.read_text(encoding='utf-8', errors='ignore')):
-                  workflow.unlink()
-
-          for documentation in list((root / 'docs').glob('*.md')) if (root / 'docs').exists() else []:
-              text = documentation.read_text(encoding='utf-8', errors='ignore')
-              if re.search(r'node src/server\.js|npm ci|updater-gateway|auth/server\.js', text, re.I):
-                  documentation.unlink()
-
-          dockerfile = (root / 'Dockerfile.dotnet10').read_text(encoding='utf-8')
-          (root / 'Dockerfile').write_text(dockerfile, encoding='utf-8', newline='\n')
-
-          caddy = (root / 'deploy' / 'dotnet10' / 'Caddyfile').read_text(encoding='utf-8')
-          (root / 'Caddyfile').write_text(caddy, encoding='utf-8', newline='\n')
-
-          compose = '''services:
-  central:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: ${SIRK_CENTRAL_IMAGE:-sirk-central:dotnet10}
-    container_name: ${SIRK_CENTRAL_CONTAINER:-sirk-central}
-    restart: unless-stopped
-    expose:
-      - "8080"
-    environment:
-      ASPNETCORE_ENVIRONMENT: Production
-      ASPNETCORE_URLS: http://+:8080
-      AllowedHosts: "${SIRK_CENTRAL_DOMAIN:-central.sirkportal.com};localhost;127.0.0.1"
-      Sirk__ReverseProxy__TrustAll: "true"
-      Sirk__PortalProtocol__DataRoot: /var/lib/sirk-central
-      Sirk__Security__Enabled: "true"
-      Sirk__Security__DataRoot: /var/lib/sirk-central/security
-      Sirk__Security__BootstrapSecretFile: /var/lib/sirk-central/security/break-glass-bootstrap.json
-      Sirk__Security__DataProtectionCertificatePath: /run/secrets/sirk-central-dataprotection.pfx
-      Sirk__Security__DataProtectionCertificatePasswordFile: /run/secrets/sirk-central-dataprotection-password
-      Sirk__Security__ReleaseSigningPublicKeyFile: /run/secrets/sirk-release-signing-public-key
-      Sirk__Security__RequireProtectedDataProtectionKeys: "true"
-      Sirk__Security__RequireSignedReleases: "true"
-      Sirk__Security__RequireSingleWriterLease: "true"
-      Sirk__Security__SessionMinutes: "30"
-      Sirk__Security__LoginAttemptsPerFiveMinutes: "5"
-      Sirk__Security__PasswordHashIterations: "600000"
-      Sirk__WebAuthn__ServerDomain: "${SIRK_CENTRAL_DOMAIN:-central.sirkportal.com}"
-      Sirk__WebAuthn__ServerName: "SIRK Central"
-      Sirk__WebAuthn__Origins__0: "https://${SIRK_CENTRAL_DOMAIN:-central.sirkportal.com}"
-    volumes:
-      - sirk-central-data:/var/lib/sirk-central
-      - ${SIRK_CENTRAL_SECRETS_PATH:-./secrets}:/run/secrets:ro
-    read_only: true
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,nodev,size=256m
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    pids_limit: 256
-    healthcheck:
-      test: ["CMD", "dotnet", "Sirk.Central.dll", "--health-check", "http://127.0.0.1:8080/readyz"]
-      interval: 20s
-      timeout: 7s
-      start_period: 10s
-      retries: 3
-    networks:
-      - sirk-edge
-
-  caddy:
-    image: caddy:2.10.0-alpine
-    container_name: ${SIRK_CADDY_CONTAINER:-sirk-caddy}
-    restart: unless-stopped
-    depends_on:
-      central:
-        condition: service_healthy
-    ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
-    environment:
-      SIRK_ACME_EMAIL: "${SIRK_ACME_EMAIL:-admin@example.com}"
-      SIRK_WEBSITE_DOMAIN: "${SIRK_WEBSITE_DOMAIN:-sirkportal.com}"
-      SIRK_BUSINESS_DOMAIN: "${SIRK_BUSINESS_DOMAIN:-sir-k.pl}"
-      SIRK_CENTRAL_DOMAIN: "${SIRK_CENTRAL_DOMAIN:-central.sirkportal.com}"
-      SIRK_AUTH_DOMAIN: "${SIRK_AUTH_DOMAIN:-auth.sirkportal.com}"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./website:/srv/website:ro
-      - ${SIRK_BUSINESS_SITE_PATH:-./website}:/srv/sir-k:ro
-      - sirk-caddy-data:/data
-      - sirk-caddy-config:/config
-    read_only: true
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,nodev,size=64m
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    cap_add:
-      - NET_BIND_SERVICE
-    networks:
-      - sirk-edge
-
-networks:
-  sirk-edge:
-    driver: bridge
-
-volumes:
-  sirk-central-data:
-  sirk-caddy-data:
-  sirk-caddy-config:
-'''
-          (root / 'docker-compose.yml').write_text(compose, encoding='utf-8', newline='\n')
-          (root / 'deploy' / 'dotnet10' / 'docker-compose.yml').write_text(
-              compose,
-              encoding='utf-8',
-              newline='\n')
-
-          for script in (root / 'deploy').glob('*.sh'):
-              value = script.read_text(encoding='utf-8', errors='ignore')
-              value = value.replace('rewrite/dotnet10-clean', 'main')
-              value = value.replace('rewrite/dotnet10', 'main')
-              value = value.replace('sirk-central:2.0.0-test.4', 'sirk-central:dotnet10')
-              value = value.replace('sirk-central-dotnet10', 'sirk-central')
-              script.write_text(value, encoding='utf-8', newline='\n')
-
-          (root / 'install.sh').write_text(
-              '#!/usr/bin/env bash\nset -euo pipefail\nexec bash "$(dirname "$0")/deploy/install-dotnet10.sh" "$@"\n',
-              encoding='utf-8', newline='\n')
-          (root / 'reinstall.sh').write_text(
-              '#!/usr/bin/env bash\nset -euo pipefail\nexec bash "$(dirname "$0")/deploy/reinstall-dotnet10.sh" "$@"\n',
-              encoding='utf-8', newline='\n')
-          (root / 'update.sh').write_text(
-              '#!/usr/bin/env bash\nset -euo pipefail\nexec bash "$(dirname "$0")/deploy/upgrade-dotnet10-vps.sh" "$@"\n',
-              encoding='utf-8', newline='\n')
-
-          readme = '''# SIRK Central
-
-SIRK Central is the public multi-tenant control plane for SIRK Portals.
-
-## Runtime
-
-- ASP.NET Core on .NET 10 LTS
-- one Central process behind Caddy
-- no Node.js runtime, npm dependencies, separate auth service or Node updater services
-- browser JavaScript is stored only under `public/` and `website/`
-- encrypted backups use `age`
-- updates are delegated to the shared SIRK Updater product
-
-## Main integrations
-
-- Microsoft Entra ID / OIDC
-- local Break-Glass with Access URL, recovery codes and WebAuthn/YubiKey
-- central RBAC, organizations, teams and Portal assignments
-- Portal enrollment, signed heartbeat, command channel and reverse tunnel
-- Approval Center
-- ticket lifecycle and provider contracts
-- encrypted backup, restore and key rotation
-- signed release metadata and maintenance operations
-
-## Installation
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/Eris92/SIRK-Central/main/install.sh | sudo bash
-```
-
-The installer creates protected secrets and deploys the .NET 10 Central container with Caddy. Existing data is preserved by the upgrade and reinstall workflows unless an explicit destructive reset is requested.
-
-## Portal connection
-
-Create a Portal in Central and use **Pobierz plik połączenia**. Downloading the file rotates the Portal token and returns the only plaintext copy. Import that JSON file in Portal settings. The document configures HTTPS heartbeat and the WSS reverse tunnel without manually copying individual values.
-'''
-          (root / 'README.md').write_text(readme, encoding='utf-8', newline='\n')
-
-          validator = '''#!/usr/bin/env bash
-set -euo pipefail
-
-fail() { echo "NODE_FREE_CONTRACT_FAILED: $*" >&2; exit 1; }
-
-for forbidden in package.json package-lock.json npm-shrinkwrap.json yarn.lock pnpm-lock.yaml .nvmrc auth updater test; do
-  [[ ! -e "$forbidden" ]] || fail "legacy Node artifact remains: $forbidden"
-done
-
-[[ -f src/Sirk.Central/Sirk.Central.csproj ]] || fail "Central .NET project is missing"
-[[ "$(find src -mindepth 1 -maxdepth 1 ! -name Sirk.Central -print -quit)" == "" ]] || fail "legacy source remains outside src/Sirk.Central"
-
-if grep -RIE --include='*.yml' --include='*.yaml' 'actions/setup-node|\bnpm (ci|test|run)|\bnode --test|auth/server\.js|updater-gateway' .github/workflows; then
-  fail "Node workflow remains"
-fi
-
-if grep -RIE --include='*.csproj' --include='*.props' 'net(8|9)\.0' src tests Directory.Build.props; then
-  fail "legacy .NET target remains"
-fi
-
-grep -q '<TargetFramework>net10.0</TargetFramework>' src/Sirk.Central/Sirk.Central.csproj || fail "Central does not target net10.0"
-grep -q 'ENTRYPOINT \["dotnet", "Sirk.Central.dll"\]' Dockerfile || fail "Dockerfile does not start ASP.NET Core"
-! grep -qE '(^|[[:space:]])node([[:space:]]|$)|npm|src/server\.js' Dockerfile docker-compose.yml || fail "Node runtime remains in deployment"
-grep -q 'central:8080' Caddyfile || fail "Caddy does not proxy to the .NET Central service"
-
-grep -q 'CENTRAL_REF=.*main' deploy/install-dotnet10.sh || fail "installer does not default to main"
-grep -q 'CENTRAL_REF=.*main' deploy/reinstall-dotnet10.sh || fail "reinstaller does not default to main"
-
-while IFS= read -r file; do
-  case "$file" in
-    public/*|website/*) ;;
-    *) fail "JavaScript outside browser assets: $file" ;;
-  esac
-done < <(find . -path './.git' -prune -o -type f \( -name '*.js' -o -name '*.mjs' -o -name '*.cjs' \) -print | sed 's#^./##')
-
-echo NODE_FREE_DOTNET10_CONTRACT_OK
-'''
-          validator_path = root / '.github' / 'scripts' / 'validate-node-free-dotnet10.sh'
-          validator_path.parent.mkdir(parents=True, exist_ok=True)
-          validator_path.write_text(validator, encoding='utf-8', newline='\n')
-
-          final_ci = '''name: SIRK Central .NET 10 CI
-
-on:
-  push:
-    branches: [main, rewrite/dotnet10-final]
-  pull_request:
-    branches: [main]
-  workflow_dispatch:
-
-permissions:
-  contents: read
-
-concurrency:
-  group: sirk-central-dotnet10-ci
-  cancel-in-progress: true
-
-jobs:
-  build-test-container:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
-          cache: true
-          cache-dependency-path: '**/*.csproj'
-      - name: Install encrypted backup dependency
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes age
-          age --version
-      - name: Validate Node-free .NET 10 repository
-        run: bash .github/scripts/validate-node-free-dotnet10.sh
-      - name: Restore and build
-        run: |
-          dotnet restore src/Sirk.Central/Sirk.Central.csproj
-          dotnet build src/Sirk.Central/Sirk.Central.csproj --configuration Release --no-restore
-      - name: Run every Central contract project
+
+      - name: Apply one-time Node-free product cleanup
+        run: python3 tools/finalize-dotnet10.py
+
+      - name: Validate cleaned product tree
         shell: bash
         run: |
           set -euo pipefail
+          chmod +x install.sh reinstall.sh update.sh deploy/*.sh .github/scripts/validate-node-free-dotnet10.sh
+          bash .github/scripts/validate-node-free-dotnet10.sh
+          dotnet restore src/Sirk.Central/Sirk.Central.csproj
+          dotnet build src/Sirk.Central/Sirk.Central.csproj --configuration Release --no-restore
           for project in tests/*/*.csproj; do
             dotnet run --project "$project" --configuration Release
           done
-      - name: Publish Linux x64
-        run: dotnet publish src/Sirk.Central/Sirk.Central.csproj --configuration Release --runtime linux-x64 --self-contained false --output artifacts/linux-x64
-      - name: Validate Compose and Caddy
-        run: |
-          mkdir -p secrets
-          touch secrets/sirk-central-dataprotection.pfx secrets/sirk-central-dataprotection-password secrets/sirk-release-signing-public-key
-          docker compose config >/tmp/sirk-central-compose.yml
-          docker run --rm \
-            -e SIRK_ACME_EMAIL=admin@example.test \
-            -e SIRK_WEBSITE_DOMAIN=example.test \
-            -e SIRK_BUSINESS_DOMAIN=business.example.test \
-            -e SIRK_CENTRAL_DOMAIN=central.example.test \
-            -e SIRK_AUTH_DOMAIN=auth.example.test \
-            -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" \
-            caddy:2.10.0-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
-      - name: Build canonical container
-        run: docker build --tag sirk-central:dotnet10 .
-'''
-          (workflow_root / 'ci.yml').write_text(final_ci, encoding='utf-8', newline='\n')
-          PY
 
-          chmod +x install.sh reinstall.sh update.sh deploy/*.sh .github/scripts/validate-node-free-dotnet10.sh
+      - name: Commit product cleanup to migration branch
+        shell: bash
+        run: |
+          set -euo pipefail
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
+          git reset -- .github/workflows
           git diff --cached --check
-          git commit -m 'Remove Node runtime and finalize SIRK Central .NET 10'
+          git commit -m 'Remove Node runtime and finalize SIRK Central .NET 10 product tree'
           git push origin HEAD:rewrite/dotnet10-final
