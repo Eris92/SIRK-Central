@@ -20,12 +20,11 @@
     }
 
     function isAnonymousWrite(url) {
-        return url.pathname === "/api/login" ||
-            /^\/api\/v1\/break-glass\/[^/]+\/login$/.test(url.pathname) ||
-            url.pathname === "/api/login/mfa/recovery" ||
-            url.pathname === "/api/login/mfa/passkey/begin" ||
-            url.pathname === "/api/login/mfa/passkey/finish" ||
-            url.pathname === "/auth/entra/frontchannel-logout";
+        const path = url.pathname.replace(/\/+$/, "") || "/";
+        return path === "/api/login" ||
+            path.startsWith("/api/login/") ||
+            /^\/api\/v1\/break-glass\/[^/]+\/login$/.test(path) ||
+            path === "/auth/entra/frontchannel-logout";
     }
 
     async function csrfToken() {
@@ -38,7 +37,7 @@
             }).then(async response => {
                 const body = await response.json().catch(() => ({}));
                 if (!response.ok || !body.headerName || !body.requestToken) {
-                    throw new Error(body.error || "CSRF token could not be issued.");
+                    throw new Error(body.error || body.title || "CSRF token could not be issued.");
                 }
                 return body;
             }).catch(error => {
