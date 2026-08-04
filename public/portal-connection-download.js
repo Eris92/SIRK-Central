@@ -80,7 +80,47 @@
     }
   }
 
+  function setBreakGlassVisibility(visible) {
+    const form = document.getElementById("localLogin");
+    const separator = form?.previousElementSibling;
+    if (form) form.hidden = !visible;
+    if (separator && separator.classList.contains("login-separator")) separator.hidden = !visible;
+  }
+
+  async function validateWorkspaceAccess() {
+    setBreakGlassVisibility(false);
+    const fragment = new URLSearchParams(String(location.hash || "").replace(/^#/, ""));
+    const accessCode = fragment.get("access") || "";
+    if (!accessCode) return;
+
+    try {
+      const response = await fetch("/api/access", {
+        credentials: "same-origin",
+        cache: "no-store",
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bearer ${accessCode}`
+        }
+      });
+      if (!response.ok) return;
+      const value = await response.json();
+      if (value?.localLoginEnabled === true) {
+        setBreakGlassVisibility(true);
+        return;
+      }
+    } catch (_) {
+      // Fail closed.
+    }
+
+    const status = document.getElementById("loginStatus");
+    if (status) {
+      status.textContent = "Nieprawidłowy Access URL Break-Glass.";
+      status.className = "status error";
+    }
+  }
+
   function mount() {
+    validateWorkspaceAccess();
     const rotate = document.getElementById("portalRotate");
     if (!rotate || document.getElementById("portalConnectionFile")) return;
     const button = document.createElement("button");
