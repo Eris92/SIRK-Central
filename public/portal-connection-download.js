@@ -1,6 +1,16 @@
 "use strict";
 
 (() => {
+  const roleOrder = Object.freeze([
+    "Auditor",
+    "OperatorL1",
+    "SupportL2",
+    "EngineerL3",
+    "Admin",
+    "SecAdmin"
+  ]);
+  let roleCatalogLoading = false;
+
   async function csrf() {
     const response = await fetch("/api/v1/auth/csrf", {
       credentials: "same-origin",
@@ -11,6 +21,89 @@
     const value = await response.json();
     if (!value.requestToken) throw new Error("Central nie zwrócił tokenu CSRF.");
     return value;
+  }
+
+  async function readJson(path) {
+    const response = await fetch(path, {
+      credentials: "same-origin",
+      cache: "no-store",
+      headers: { Accept: "application/json" }
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(body.error || body.title || `HTTP ${response.status}`);
+    }
+    return body;
+  }
+
+  function rolesForSession(session) {
+    const claimed = new Set([
+      ...(Array.isArray(session?.roles) ? session.roles : []),
+      session?.role
+    ].filter(Boolean));
+
+    if (claimed.has("BreakGlass")) return [...roleOrder];
+    if (claimed.has("SecAdmin")) return ["SecAdmin"];
+    if (claimed.has("Admin")) return roleOrder.filter(role => role !== "SecAdmin");
+    return [];
+  }
+
+  function populateRoleSelect(select, roles) {
+    const current = String(select.value || "");
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = document.documentElement.lang === "en"
+      ? "Choose role"
+      : "Wybierz rolę";
+    placeholder.disabled = true;
+    placeholder.selected = !roles.includes(current);
+
+    const options = roles.map(role => {
+      const option = document.createElement("option");
+      option.value = role;
+      option.textContent = role;
+      option.selected = role === current;
+      return option;
+    });
+
+    select.replaceChildren(placeholder, ...options);
+    select.disabled = roles.length === 0;
+    select.dataset.roleCatalogLoaded = roles.length ? "true" : "false";
+  }
+
+  async function mountRoleCatalog(force = false) {
+    const select = document.getElementById("newRole");
+    if (!select || roleCatalogLoading) return;
+    if (!force && select.dataset.roleCatalogLoaded === "true" && select.options.length > 1) return;
+
+    roleCatalogLoading = true;
+    const error = document.getElementById("userError");
+    try {
+      let roles = [];
+      try {
+        const catalog = await readJson("/api/settings/roles");
+        roles = Array.isArray(catalog.roles)
+          ? catalog.roles.filter(role => roleOrder.includes(role))
+          : [];
+      } catch (_) {
+        const session = await readJson("/api/session");
+        roles = rolesForSession(session);
+      }
+
+      populateRoleSelect(select, roles);
+      if (error) {
+        error.textContent = roles.length
+          ? ""
+          : "Brak ról możliwych do przypisania dla bieżącego konta.";
+      }
+    } catch (exception) {
+      populateRoleSelect(select, []);
+      if (error) {
+        error.textContent = exception?.message || "Nie udało się pobrać katalogu ról.";
+      }
+    } finally {
+      roleCatalogLoading = false;
+    }
   }
 
   function selectedPortalId() {
@@ -150,6 +243,17 @@
   function mount() {
     validateWorkspaceAccess();
     mountPortalReturn();
+    mountRoleCatalog();
+
+    document.addEventListener("click", event => {
+      const target = event.target instanceof Element ? event.target.closest("button") : null;
+      if (!target) return;
+      if (target.dataset.permissionsTab === "add" ||
+          target.dataset.settingsTab === "add-user" ||
+          target.id === "addUserTabButton") {
+        window.setTimeout(() => mountRoleCatalog(true), 0);
+      }
+    }, { capture: true });
 
     const rotate = document.getElementById("portalRotate");
     if (!rotate || document.getElementById("portalConnectionFile")) return;
