@@ -31,9 +31,20 @@ internal static class LegacyAuthenticationEndpoints
     {
         context.Response.Headers.CacheControl = "no-store";
         var accessCode = AuthenticationEndpoints.ReadBearerToken(context);
+        if (!identityStore.VerifyAccessCode(accessCode))
+        {
+            return Results.Json(
+                new
+                {
+                    localLoginEnabled = false,
+                    accessRequired = true
+                },
+                statusCode: StatusCodes.Status404NotFound);
+        }
+
         return Results.Ok(new
         {
-            localLoginEnabled = identityStore.VerifyAccessCode(accessCode),
+            localLoginEnabled = true,
             accessRequired = true
         });
     }
