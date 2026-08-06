@@ -44,6 +44,8 @@ internal sealed class PortalTunnelRelay
     private const int MaximumBodyBytes = 8 * 1024 * 1024;
     private const int MaximumPendingRequests = 4096;
     private const int MaximumQueuedRequestsPerPortal = 128;
+    private static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan LongPollRequestTimeout = TimeSpan.FromSeconds(45);
 
     private readonly ConcurrentDictionary<string, ConcurrentQueue<TunnelRequest>> _queues =
         new(StringComparer.Ordinal);
@@ -81,16 +83,19 @@ internal sealed class PortalTunnelRelay
         requestHeaders["x-sirk-actor-name"] = NormalizeActorValue(actor.ActorName, "Actor name", 160);
         requestHeaders["x-sirk-actor-role"] = NormalizeActorValue(actor.ActorRole, "Actor role", 64);
 
+        var normalizedMethod = NormalizeMethod(method);
+        var normalizedPath = NormalizePath(path);
+        var requestTimeout = ResolveRequestTimeout(normalizedMethod, normalizedPath);
         var now = DateTimeOffset.UtcNow;
         var request = new TunnelRequest(
             "tun-" + Guid.NewGuid().ToString("N"),
             portalId,
-            NormalizeMethod(method),
-            NormalizePath(path),
+            normalizedMethod,
+            normalizedPath,
             requestHeaders,
             Convert.ToBase64String(body),
             now,
-            now.AddSeconds(30));
+            now.Add(requestTimeout));
 
         var completion = new TaskCompletionSource<TunnelResponse>(
             TaskCreationOptions.RunContinuationsAsynchronously);
@@ -100,7 +105,7 @@ internal sealed class PortalTunnelRelay
         queue.Enqueue(request);
         SignalPortal(portalId);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(30));
+        timeout.CancelAfter(requestTimeout);
         using var registration = timeout.Token.Register(
             static state => ((TaskCompletionSource<TunnelResponse>)state!).TrySetCanceled(),
             completion);
@@ -234,6 +239,20 @@ internal sealed class PortalTunnelRelay
             throw new InvalidDataException("Portal path is invalid.");
         }
         return value;
+    }
+
+    private static TimeSpan ResolveRequestTimeout(string method, string path)
+    {
+        if (!string.Equals(method, "GET", StringComparison.Ordinal))
+            return DefaultRequestTimeout;
+
+        var queryIndex = path.IndexOf('?');
+        var route = queryIndex >= 0 ? path[..queryIndex] : path;
+        return route.Equals("/api/v1/desktop/frame", StringComparison.Ordinal) ||
+               route.Equals("/api/agent-operations", StringComparison.Ordinal) ||
+               route.StartsWith("/api/v1/admin/agent-commands/", StringComparison.Ordinal)
+            ? LongPollRequestTimeout
+            : DefaultRequestTimeout;
     }
 
     private static string NormalizeActorValue(
