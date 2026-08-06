@@ -195,6 +195,7 @@ internal sealed class PortalTunnelRelay
         {
         }
     }
+
     public bool Complete(
         string portalId,
         string requestId,
@@ -578,7 +579,9 @@ internal sealed class PortalTunnelMiddleware
                 }
 
                 if (item.Key.Equals("etag", StringComparison.OrdinalIgnoreCase) ||
-                    item.Key.Equals("last-modified", StringComparison.OrdinalIgnoreCase))
+                    item.Key.Equals("last-modified", StringComparison.OrdinalIgnoreCase) ||
+                    item.Key.Equals("x-sirk-sequence", StringComparison.OrdinalIgnoreCase) ||
+                    item.Key.Equals("x-sirk-metadata", StringComparison.OrdinalIgnoreCase))
                 {
                     context.Response.Headers[item.Key] = item.Value;
                 }
@@ -742,6 +745,7 @@ internal sealed class PortalTunnelMiddleware
             .Split('&', StringSplitOptions.RemoveEmptyEntries)
             .Any(part => part.StartsWith("v=", StringComparison.Ordinal) && part.Length > 2);
     }
+
     private static string RewriteLocation(string? value, string portalId)
     {
         if (string.IsNullOrWhiteSpace(value)) return string.Empty;
