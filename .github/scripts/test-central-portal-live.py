@@ -343,6 +343,32 @@ def wait_connected(central: JsonClient, timeout_seconds: int = 60) -> dict[str, 
     raise RuntimeError(f"Central did not receive the Portal heartbeat: {last}")
 
 
+def wait_proxied_portal_connected(
+    central: JsonClient,
+    timeout_seconds: int = 15,
+) -> dict[str, Any]:
+    # Central records the inbound heartbeat while handling the request. The
+    # Portal marks its own state connected only after the 202 response reaches
+    # it, so the Central-side telemetry can lead the Portal-side snapshot by a
+    # small amount. Keep the product assertion, but wait for propagation.
+    deadline = time.monotonic() + timeout_seconds
+    last: dict[str, Any] = {}
+    while time.monotonic() < deadline:
+        last = central.json(
+            "GET",
+            f"/connect/{PORTAL_ID}/api/v1/system/info",
+            timeout=45,
+        )
+        if (
+            last.get("product") == "SIRK Portal" and
+            last.get("runtime") == ".NET 10" and
+            last.get("central", {}).get("connected") is True
+        ):
+            return last
+        time.sleep(0.25)
+    raise RuntimeError(f"Proxied Portal system state did not become connected: {last}")
+
+
 def dump_log(label: str, path: Path) -> None:
     if not path.exists():
         return
@@ -482,15 +508,7 @@ def main() -> int:
             if connected.get("ok") is not True:
                 raise RuntimeError("Central reverse-tunnel connect failed.")
 
-            proxied = central_client.json(
-                "GET",
-                f"/connect/{PORTAL_ID}/api/v1/system/info",
-                timeout=45,
-            )
-            if proxied.get("product") != "SIRK Portal" or proxied.get("runtime") != ".NET 10":
-                raise RuntimeError(f"Central reverse tunnel returned an invalid Portal response: {proxied}")
-            if proxied.get("central", {}).get("connected") is not True:
-                raise RuntimeError("Proxied Portal system state is not connected to Central.")
+            wait_proxied_portal_connected(central_client)
 
             managed_client = JsonClient(CENTRAL_ORIGIN, ssl_context)
             login_managed_central(managed_client)
