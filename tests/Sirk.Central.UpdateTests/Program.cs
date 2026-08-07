@@ -29,8 +29,9 @@ try
     Require(tickets.ValidateAndConsume(discover.Ticket + "x", "discover") is null,
         "tampered discover ticket must be rejected");
 
-    var descriptor = new AgentReleaseDescriptor(
+    var descriptor = new PlatformReleaseDescriptor(
         1,
+        "sirk-agent",
         "SIRK Agent",
         "0.1.1.11",
         "win-x64",
@@ -38,9 +39,11 @@ try
         "SIRK-Agent-0.1.1.11-net10-win-x64-framework-dependent.zip",
         1234,
         new string('a', 64),
+        new string('b', 40),
         DateTimeOffset.UtcNow,
         new UpdateSignature("ES256", "test", "x"));
-    var cached = new CachedAgentUpdate(
+    var cached = new CachedPlatformUpdate(
+        "sirk-agent",
         "0.1.1.11",
         "win-x64",
         "stable",
@@ -55,11 +58,11 @@ try
     Require(tickets.ValidateAndConsume(download.Ticket, "download") is null,
         "download ticket replay must be rejected");
 
-    Require(AgentUpdateVersion.IsValid("0.1.1.999"), "0.1.1.X must be accepted");
-    Require(!AgentUpdateVersion.IsValid("1.0.0"), "1.0.0 must be rejected by the pre-1.0 gate");
-    Require(!AgentUpdateVersion.IsValid("0.2.0.1"), "non-canonical pre-1.0 version must be rejected");
-    Require(AgentUpdateVersion.Compare("0.1.1.11", "0.1.1.10") > 0, "upgrade ordering is invalid");
-    Require(AgentUpdateVersion.Compare("0.1.1.9", "0.1.1.10") < 0, "rollback ordering is invalid");
+    Require(PlatformUpdateVersion.IsValid("0.1.1.999"), "0.1.1.X must be accepted");
+    Require(!PlatformUpdateVersion.IsValid("1.0.0"), "1.0.0 must be rejected by the pre-1.0 gate");
+    Require(!PlatformUpdateVersion.IsValid("0.2.0.1"), "non-canonical pre-1.0 version must be rejected");
+    Require(PlatformUpdateVersion.Compare("0.1.1.11", "0.1.1.10") > 0, "upgrade ordering is invalid");
+    Require(PlatformUpdateVersion.Compare("0.1.1.9", "0.1.1.10") < 0, "rollback ordering is invalid");
 
     Console.WriteLine("SIRK_CENTRAL_AGENT_UPDATE_CONTRACT_OK");
     return 0;
