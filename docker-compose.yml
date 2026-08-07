@@ -19,6 +19,12 @@ services:
       Sirk__Demo__OrchestratorUrl: http://demo-orchestrator:8090
       Sirk__Demo__ControlTokenFile: /run/secrets/sirk-demo-control-token
       Sirk__Demo__PublicBaseUrl: "https://${SIRK_DEMO_DOMAIN:-demo.sirkportal.com}"
+      Sirk__AgentUpdates__PublicBaseUrl: "https://${SIRK_CENTRAL_DOMAIN:-central.sirkportal.com}"
+      Sirk__AgentUpdates__GitHubRepository: "${SIRK_AGENT_UPDATE_REPOSITORY:-Eris92/SIRK-Agent}"
+      Sirk__AgentUpdates__GitHubTokenFile: /run/secrets/sirk-agent-updates-github-token
+      Sirk__AgentUpdates__CacheRoot: /var/lib/sirk/updates/agent
+      Sirk__AgentUpdates__MetadataTtlSeconds: "300"
+      Sirk__AgentUpdates__Retention: "3"
       Sirk__Security__Enabled: "true"
       Sirk__Security__DataRoot: /var/lib/sirk-central/security
       Sirk__Security__BootstrapSecretFile: /var/lib/sirk-central/security/break-glass-bootstrap.json
@@ -37,6 +43,7 @@ services:
     volumes:
       - sirk-central-data:/var/lib/sirk-central
       - sirk-public-config:/var/lib/sirk-public
+      - sirk-agent-update-cache:/var/lib/sirk/updates/agent
       - ${SIRK_CENTRAL_SECRETS_PATH:-./secrets}:/run/secrets:ro
     read_only: true
     tmpfs:
@@ -135,5 +142,6 @@ networks:
 volumes:
   sirk-central-data:
   sirk-public-config:
+  sirk-agent-update-cache:
   sirk-caddy-data:
   sirk-caddy-config:
