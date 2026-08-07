@@ -170,13 +170,12 @@
     setStatus("loginStatus", "Logowanie...", "");
     const fragment = new URLSearchParams(location.hash.replace(/^#/, ""));
     const accessCode = fragment.get("access") || "";
-    if (!accessCode) {
-      setStatus("loginStatus", "Brak access code w adresie Break-Glass.", "error");
-      return;
-    }
+    const endpoint = accessCode
+      ? `/api/v1/break-glass/${encodeURIComponent(accessCode)}/login`
+      : "/api/v1/auth/local/login";
     try {
       const result = await publicRequest(
-        `/api/v1/break-glass/${encodeURIComponent(accessCode)}/login`,
+        endpoint,
         {
           method: "POST",
           body: {
@@ -184,13 +183,15 @@
             password: $("loginPassword").value
           }
         });
-      if (result.status === 202 || result.data?.mfaRequired) {
+      if (accessCode && (result.status === 202 || result.data?.mfaRequired)) {
         state.mfa = result.data;
         showMfa(result.data);
         return;
       }
-      location.hash = "";
-      history.replaceState(null, "", location.pathname + location.search);
+      if (accessCode) {
+        location.hash = "";
+        history.replaceState(null, "", location.pathname + location.search);
+      }
       state.csrf = null;
       const session = await rawRequest("/api/v1/auth/session");
       showWorkspace(session);
@@ -252,7 +253,7 @@
   }
 
   async function loadPortals() {
-    const value = await rawRequest("/api/v1/admin/portals/");
+    const value = await rawRequest("/api/portals");
     state.portals = value?.portals || [];
     renderPortals();
     return value;
@@ -264,7 +265,7 @@
     select.replaceChildren(...state.portals.map((portal) => {
       const option = document.createElement("option");
       option.value = portal.id;
-      option.textContent = `${portal.name} (${portal.connectionState || (portal.connected ? "online" : "offline")})`;
+      option.textContent = `${portal.name} (${portal.connectionState || portal.status || (portal.connected ? "online" : "offline")})`;
       return option;
     }));
     if (state.portals.some((portal) => portal.id === selected)) select.value = selected;
@@ -275,8 +276,8 @@
     table.append(head);
     const body = document.createElement("tbody");
     for (const portal of state.portals) {
+      const status = portal.connectionState || portal.status || (portal.connected ? "online" : "offline");
       const row = document.createElement("tr");
-      const status = portal.connectionState || (portal.connected ? "online" : "offline");
       const cells = [status, portal.id, portal.name, portal.heartbeat?.portalVersion || "", portal.heartbeat?.agentCount ?? "", portal.heartbeat?.receivedAtUtc || ""];
       cells.forEach((value, index) => {
         const cell = document.createElement("td");
