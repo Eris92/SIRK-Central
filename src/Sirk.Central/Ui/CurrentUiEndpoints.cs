@@ -34,7 +34,7 @@ internal static class CurrentUiEndpoints
         var portals = endpoints.MapGroup("/api/portals")
             .RequireAuthorization();
         portals.MapGet("/", ListPortals);
-        portals.MapPost("/{portalId}/connect", ConnectPortal);
+        portals.MapPost("/{portalId}/connect", ConnectPortalAsync);
         portals.MapPost("/", CreatePortalAsync)
             .RequireAuthorization(SirkPolicies.PortalManagement);
 
@@ -164,15 +164,19 @@ internal static class CurrentUiEndpoints
         }
     }
 
-    private static IResult ConnectPortal(
+    private static async Task<IResult> ConnectPortalAsync(
         string portalId,
         HttpContext context,
+        IAntiforgery antiforgery,
         FilePortalRegistry registry,
         PortalTelemetryStore telemetry,
         IOptions<PortalProtocolOptions> options,
         IdentityAccessStore accessStore)
     {
         NoStore(context);
+        var csrf = await ValidateCsrfAsync(context, antiforgery);
+        if (csrf is not null) return csrf;
+
         var portal = registry.Get(portalId);
         if (portal is null)
         {
@@ -234,6 +238,7 @@ internal static class CurrentUiEndpoints
 
     private static object[] UiUsers(IdentityAccessStore store) =>
         store.ListIdentities()
+            .OrderBy(identity => identity.DisplayName, StringComparer.OrdinalIgnoreCase)
             .Select(identity => (object)new
             {
                 username = identity.UserName,
@@ -249,7 +254,6 @@ internal static class CurrentUiEndpoints
                 identity.UpdatedAtUtc,
                 identity.ApprovedBy
             })
-            .OrderBy(identity => ((dynamic)identity).DisplayName, StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
     private static async Task<IResult> CreateLocalUserAsync(
