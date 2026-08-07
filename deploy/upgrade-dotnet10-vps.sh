@@ -2,13 +2,15 @@
 set -Eeuo pipefail
 umask 077
 
-# Non-destructive upgrade for an existing SIRK Central .NET 10 installation.
-# Preserves /opt/sirk-central/data and /opt/sirk-central/secrets.
+# Non-destructive deployment for SIRK Central .NET 10.
+# Normal bootstrap may fetch repositories. Runtime self-update sets
+# SIRK_SOURCE_READY=1 and deploys only an already verified Central cache payload.
 
 INSTALL_ROOT="${INSTALL_ROOT:-/opt/sirk-central}"
 SOURCE_DIR="${SOURCE_DIR:-${INSTALL_ROOT}/source}"
 DATA_DIR="${DATA_DIR:-${INSTALL_ROOT}/data}"
 SECRETS_DIR="${SECRETS_DIR:-${INSTALL_ROOT}/secrets}"
+UPDATE_CACHE_DIR="${UPDATE_CACHE_DIR:-${INSTALL_ROOT}/updates}"
 COMPOSE_FILE="${COMPOSE_FILE:-${INSTALL_ROOT}/compose.yml}"
 CADDY_FILE="${CADDY_FILE:-${INSTALL_ROOT}/Caddyfile}"
 CADDY_DATA_DIR="${CADDY_DATA_DIR:-${INSTALL_ROOT}/caddy-data}"
@@ -19,6 +21,9 @@ CENTRAL_REPO_URL="${CENTRAL_REPO_URL:-https://github.com/Eris92/SIRK-Central.git
 CENTRAL_REF="${CENTRAL_REF:-main}"
 BUSINESS_REPO_URL="${BUSINESS_REPO_URL:-https://github.com/Eris92/sir-k.pl.git}"
 BUSINESS_REF="${BUSINESS_REF:-main}"
+SOURCE_READY="${SIRK_SOURCE_READY:-0}"
+UPDATE_BUSINESS="${SIRK_UPDATE_BUSINESS:-1}"
+RELEASE_COMMIT="${SIRK_RELEASE_COMMIT:-}"
 
 IMAGE_NAME="${IMAGE_NAME:-sirk-central:dotnet10}"
 CENTRAL_CONTAINER="${CENTRAL_CONTAINER:-sirk-central-test}"
@@ -52,9 +57,12 @@ trap on_error ERR
 [[ $EUID -eq 0 ]] || fail "Uruchom jako root."
 cd /
 
-for command_name in docker git curl jq grep awk sed find stat openssl; do
+for command_name in docker curl jq grep awk sed find stat openssl; do
     command -v "$command_name" >/dev/null 2>&1 || fail "Brak polecenia: ${command_name}"
 done
+if [[ "$SOURCE_READY" != "1" || "$UPDATE_BUSINESS" == "1" ]]; then
+    command -v git >/dev/null 2>&1 || fail "Brak polecenia: git"
+fi
 docker compose version >/dev/null 2>&1 || fail "Brak Docker Compose v2."
 systemctl is-active --quiet docker || fail "Docker nie dziala."
 
@@ -66,10 +74,12 @@ done
 [[ -d "$SECRETS_DIR" ]] || fail "Brak katalogu sekretow: ${SECRETS_DIR}. Najpierw wykonaj pelna instalacje."
 [[ -s "$SECRETS_DIR/sirk-central-dataprotection.pfx" ]] || fail "Brak certyfikatu Data Protection."
 [[ -s "$SECRETS_DIR/sirk-central-dataprotection-password" ]] || fail "Brak hasla certyfikatu Data Protection."
-[[ -s "$SECRETS_DIR/sirk-release-signing-public-key" ]] || fail "Brak klucza publicznego podpisu release."
+[[ -s "$SECRETS_DIR/sirk-release-trusted-keys.json" ]] || fail "Brak publicznego release trust keyring."
+[[ -s "$SECRETS_DIR/sirk-updates-github-token" ]] || fail "Brak Central GitHub update token."
+[[ -s "$SECRETS_DIR/sirk-update-host-token" ]] || fail "Brak lokalnego host update control token."
 
-mkdir -p "$INSTALL_ROOT" "$CADDY_DATA_DIR" "$CADDY_CONFIG_DIR"
-chmod 0700 "$INSTALL_ROOT" "$CADDY_DATA_DIR" "$CADDY_CONFIG_DIR"
+mkdir -p "$INSTALL_ROOT" "$UPDATE_CACHE_DIR" "$CADDY_DATA_DIR" "$CADDY_CONFIG_DIR"
+chmod 0700 "$INSTALL_ROOT" "$UPDATE_CACHE_DIR" "$CADDY_DATA_DIR" "$CADDY_CONFIG_DIR"
 
 update_repository() {
     local directory="$1"
@@ -93,14 +103,27 @@ update_repository() {
     git -C "$directory" clean -ffdqx
 }
 
-echo "=== Aktualizacja SIRK Central ==="
-update_repository "$SOURCE_DIR" "$CENTRAL_REPO_URL" "$CENTRAL_REF"
-CENTRAL_COMMIT="$(git -C "$SOURCE_DIR" rev-parse HEAD)"
+if [[ "$SOURCE_READY" == "1" ]]; then
+    [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || fail "SIRK_RELEASE_COMMIT jest wymagany dla cache update."
+    [[ -s "$SOURCE_DIR/Dockerfile.dotnet10" ]] || fail "Zweryfikowany cache payload nie zawiera Dockerfile.dotnet10."
+    [[ -s "$SOURCE_DIR/src/Sirk.Central/Sirk.Central.csproj" ]] || fail "Zweryfikowany cache payload nie zawiera SIRK Central."
+    CENTRAL_COMMIT="$RELEASE_COMMIT"
+    echo "=== SIRK Central: verified cache source ${CENTRAL_COMMIT} ==="
+else
+    echo "=== Bootstrap/maintenance source fetch SIRK Central ==="
+    update_repository "$SOURCE_DIR" "$CENTRAL_REPO_URL" "$CENTRAL_REF"
+    CENTRAL_COMMIT="$(git -C "$SOURCE_DIR" rev-parse HEAD)"
+fi
 echo "Central commit: ${CENTRAL_COMMIT}"
 
-echo "=== Aktualizacja strony sir-k.pl ==="
-update_repository "$BUSINESS_DIR" "$BUSINESS_REPO_URL" "$BUSINESS_REF"
-BUSINESS_COMMIT="$(git -C "$BUSINESS_DIR" rev-parse HEAD)"
+if [[ "$UPDATE_BUSINESS" == "1" ]]; then
+    echo "=== Aktualizacja strony sir-k.pl ==="
+    update_repository "$BUSINESS_DIR" "$BUSINESS_REPO_URL" "$BUSINESS_REF"
+    BUSINESS_COMMIT="$(git -C "$BUSINESS_DIR" rev-parse HEAD)"
+else
+    [[ -s "$BUSINESS_DIR/index.html" ]] || fail "Brak zachowanej strony firmowej sir-k.pl/index.html."
+    BUSINESS_COMMIT="preserved"
+fi
 echo "sir-k.pl commit: ${BUSINESS_COMMIT}"
 
 [[ -s "$SOURCE_DIR/website/index.html" ]] || fail "Brak strony produktu website/index.html."
@@ -126,14 +149,14 @@ fi
 docker build "${BUILD_ARGS[@]}" "$SOURCE_DIR"
 
 # Keep the current release online until the replacement image has built.
-# Persistent data and certificate directories remain untouched.
 docker rm -f "$CENTRAL_CONTAINER" "$CADDY_CONTAINER" 2>/dev/null || true
 
 APP_UID="$(docker run --rm --entrypoint /bin/sh "$IMAGE_NAME" -c 'id -u')"
 APP_GID="$(docker run --rm --entrypoint /bin/sh "$IMAGE_NAME" -c 'id -g')"
 [[ "$APP_UID" =~ ^[0-9]+$ && "$APP_GID" =~ ^[0-9]+$ ]] || fail "Nieprawidlowy UID/GID obrazu."
-chown -R "${APP_UID}:${APP_GID}" "$DATA_DIR" "$SECRETS_DIR"
-chmod 0700 "$DATA_DIR" "$DATA_DIR/security" "$SECRETS_DIR"
+chown -R "${APP_UID}:${APP_GID}" "$DATA_DIR" "$UPDATE_CACHE_DIR"
+chown -R "${APP_UID}:${APP_GID}" "$SECRETS_DIR"
+chmod 0700 "$DATA_DIR" "$DATA_DIR/security" "$UPDATE_CACHE_DIR" "$SECRETS_DIR"
 
 cat >"$COMPOSE_FILE" <<EOF
 services:
@@ -156,18 +179,24 @@ services:
       Sirk__Security__BootstrapSecretFile: /var/lib/sirk-central/security/break-glass-bootstrap.json
       Sirk__Security__DataProtectionCertificatePath: /run/secrets/sirk-central-dataprotection.pfx
       Sirk__Security__DataProtectionCertificatePasswordFile: /run/secrets/sirk-central-dataprotection-password
-      Sirk__Security__ReleaseSigningPublicKeyFile: /run/secrets/sirk-release-signing-public-key
+      Sirk__Security__ReleaseSigningPublicKeyFile: /run/secrets/sirk-release-trusted-keys.json
       Sirk__Security__RequireProtectedDataProtectionKeys: "true"
       Sirk__Security__RequireSignedReleases: "true"
       Sirk__Security__RequireSingleWriterLease: "true"
       Sirk__Security__SessionMinutes: "30"
       Sirk__Security__LoginAttemptsPerFiveMinutes: "5"
       Sirk__Security__PasswordHashIterations: "600000"
+      Sirk__Updates__GitHubTokenFile: /run/secrets/sirk-updates-github-token
+      Sirk__Updates__HostControlTokenFile: /run/secrets/sirk-update-host-token
+      Sirk__Updates__CacheRoot: /var/lib/sirk/updates
+      Sirk__AgentUpdates__GitHubTokenFile: /run/secrets/sirk-updates-github-token
+      Sirk__AgentUpdates__CacheRoot: /var/lib/sirk/updates/agent
       Sirk__WebAuthn__ServerDomain: "${CENTRAL_HOST}"
       Sirk__WebAuthn__ServerName: "SIRK Central"
       Sirk__WebAuthn__Origins__0: "https://${CENTRAL_HOST}"
     volumes:
       - ${DATA_DIR}:/var/lib/sirk-central
+      - ${UPDATE_CACHE_DIR}:/var/lib/sirk/updates
       - ${SECRETS_DIR}:/run/secrets:ro
     read_only: true
     tmpfs:
@@ -271,7 +300,6 @@ if [[ -s "$ACCESS_CODE_FILE" ]]; then
     unset ACCESS_CODE
 fi
 
-# TLS may need a few seconds after Caddy restart.
 for _ in $(seq 1 30); do
     if curl -fsS --max-time 10 "https://${CENTRAL_HOST}/healthz" >/dev/null &&
        curl -fsS --max-time 10 "https://${WEBSITE_HOST}/" | grep -q 'SIRK' &&
@@ -292,6 +320,7 @@ echo "Central:          https://${CENTRAL_HOST}"
 echo "Product website:  https://${WEBSITE_HOST}"
 echo "Business website: https://${BUSINESS_HOST}"
 echo "Auth alias:       https://${AUTH_HOST}"
+echo "Update cache:     ${UPDATE_CACHE_DIR}"
 echo "Compose:          ${COMPOSE_FILE}"
 echo "Log:              ${LOG_FILE}"
 echo "============================================================"
