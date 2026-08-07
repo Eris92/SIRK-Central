@@ -114,6 +114,16 @@ function Remove-ServiceCompletely {
     & sc.exe delete $Name | Out-Null
 }
 
+function Show-AgentInstallerLogs {
+    Get-ChildItem 'C:\ProgramData\SIRK\Logs' -Filter 'Agent-Group-Installer-*.log' -File -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 3 |
+        ForEach-Object {
+            Write-Host "--- $($_.FullName) ---" -ForegroundColor Cyan
+            Get-Content -LiteralPath $_.FullName -Tail 300 -ErrorAction SilentlyContinue | Out-Host
+        }
+}
+
 function Invoke-AgentCliDiagnostic {
     param([Parameter(Mandatory)][string]$Command)
     if (-not (Test-Path -LiteralPath $AgentCli -PathType Leaf)) {
@@ -163,6 +173,11 @@ function Write-AgentDiagnostics {
             Write-Host "--- $path ---" -ForegroundColor Cyan
             Get-Content -LiteralPath $path -Raw -ErrorAction SilentlyContinue | Out-Host
         }
+    }
+    $portalStatus = Join-Path $AgentRoot 'portal-checkin-status.json'
+    if (Test-Path -LiteralPath $portalStatus -PathType Leaf) {
+        Write-Host "--- $portalStatus ---" -ForegroundColor Cyan
+        Get-Content -LiteralPath $portalStatus -Raw -ErrorAction SilentlyContinue | Out-Host
     }
 }
 
@@ -231,8 +246,25 @@ try {
         throw 'Portal did not generate a valid PE installer.'
     }
 
-    $installer = Start-Process -FilePath $InstallerPath -Wait -PassThru
+    Write-Host 'Starting group-bound Agent EXE...' -ForegroundColor Cyan
+    $installer = Start-Process -FilePath $InstallerPath -PassThru
+    $installerDeadline = (Get-Date).AddMinutes(6)
+    while (-not $installer.HasExited -and (Get-Date) -lt $installerDeadline) {
+        Start-Sleep -Seconds 2
+        $installer.Refresh()
+    }
+    if (-not $installer.HasExited) {
+        Write-Host 'Group-bound Agent EXE exceeded the 6-minute installation limit.' -ForegroundColor Red
+        Show-AgentInstallerLogs
+        & taskkill.exe /PID $installer.Id /T /F 2>&1 | Out-Host
+        Start-Sleep -Seconds 2
+        Show-AgentInstallerLogs
+        throw 'Group-bound Agent EXE did not finish within 6 minutes.'
+    }
+    $installer.Refresh()
+    Write-Host "Group-bound Agent EXE finished. ExitCode=$($installer.ExitCode)" -ForegroundColor Cyan
     if ($installer.ExitCode -ne 0) {
+        Show-AgentInstallerLogs
         throw "Group-bound Agent EXE failed with exit code $($installer.ExitCode)."
     }
 
@@ -241,7 +273,7 @@ try {
     # authenticated control channel, so this does not bypass Agent security.
     Write-AgentDiagnostics
 
-    $deadline = (Get-Date).AddMinutes(6)
+    $deadline = (Get-Date).AddMinutes(2)
     $onlineDevice = $null
     do {
         try {
@@ -283,6 +315,7 @@ try {
 }
 catch {
     Write-Host "SIRK group Agent EXE E2E failed: $($_.Exception.Message)" -ForegroundColor Red
+    Show-AgentInstallerLogs
     Write-AgentDiagnostics
     Get-Content -LiteralPath $PortalLog -Tail 300 -ErrorAction SilentlyContinue | Out-Host
     Get-Content -LiteralPath $PortalErrorLog -Tail 300 -ErrorAction SilentlyContinue | Out-Host
