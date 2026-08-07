@@ -314,12 +314,12 @@ internal sealed class PlatformUpdateCache
         var release = SelectRelease(document.RootElement, definition, runtime, channel)
                       ?? throw new InvalidDataException(
                           $"No compatible signed {definition.Product} release was found.");
-        var existing = ReadCached(definition, release.Value.Version, runtime, channel);
+        var existing = ReadCached(definition, release.Version, runtime, channel);
         var cached = existing ?? await CacheReleaseAsync(
             client,
             definition,
-            release.Value.Release,
-            release.Value.Version,
+            release.Release,
+            release.Version,
             runtime,
             channel,
             cancellationToken);
