@@ -23,6 +23,7 @@
         const path = url.pathname.replace(/\/+$/, "") || "/";
         return path === "/api/login" ||
             path.startsWith("/api/login/") ||
+            path === "/api/v1/auth/local/login" ||
             /^\/api\/v1\/break-glass\/[^/]+\/login$/.test(path) ||
             path === "/auth/entra/frontchannel-logout";
     }
