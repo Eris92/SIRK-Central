@@ -7,6 +7,7 @@ using Sirk.Central;
 using Sirk.Central.Access;
 using Sirk.Central.Approvals;
 using Sirk.Central.Backup;
+using Sirk.Central.Demo;
 using Sirk.Central.Operations;
 using Sirk.Central.Organizations;
 using Sirk.Central.Portals;
@@ -16,6 +17,12 @@ using Sirk.Central.Tickets;
 if (RuntimeHealthProbe.IsRequested(args))
 {
     Environment.ExitCode = await RuntimeHealthProbe.RunAsync(args);
+    return;
+}
+
+if (DemoOrchestratorHost.IsRequested(args))
+{
+    Environment.ExitCode = await DemoOrchestratorHost.RunAsync(args);
     return;
 }
 

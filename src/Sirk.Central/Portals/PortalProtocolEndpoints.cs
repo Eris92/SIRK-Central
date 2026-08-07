@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Text.Json;
 using Microsoft.Extensions.Options;
+using Sirk.Central.Demo;
 using Sirk.Central.PublicSite;
 
 namespace Sirk.Central.Portals;
@@ -12,6 +13,7 @@ internal static class PortalProtocolEndpoints
         endpoints.MapPost("/api/portal/v1/heartbeat", HandleHeartbeatAsync);
         endpoints.MapGet("/api/portal/v1/config", HandleConfiguration);
         PublicSiteConfigEndpoints.Map(endpoints);
+        DemoManagementEndpoints.Map(endpoints);
         return endpoints;
     }
 
