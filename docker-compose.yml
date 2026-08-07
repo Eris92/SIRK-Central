@@ -19,9 +19,12 @@ services:
       Sirk__Demo__OrchestratorUrl: http://demo-orchestrator:8090
       Sirk__Demo__ControlTokenFile: /run/secrets/sirk-demo-control-token
       Sirk__Demo__PublicBaseUrl: "https://${SIRK_DEMO_DOMAIN:-demo.sirkportal.com}"
+      Sirk__Updates__GitHubTokenFile: /run/secrets/sirk-updates-github-token
+      Sirk__Updates__HostControlTokenFile: /run/secrets/sirk-update-host-token
+      Sirk__Updates__CacheRoot: /var/lib/sirk/updates
       Sirk__AgentUpdates__PublicBaseUrl: "https://${SIRK_CENTRAL_DOMAIN:-central.sirkportal.com}"
       Sirk__AgentUpdates__GitHubRepository: "${SIRK_AGENT_UPDATE_REPOSITORY:-Eris92/SIRK-Agent}"
-      Sirk__AgentUpdates__GitHubTokenFile: /run/secrets/sirk-agent-updates-github-token
+      Sirk__AgentUpdates__GitHubTokenFile: /run/secrets/sirk-updates-github-token
       Sirk__AgentUpdates__CacheRoot: /var/lib/sirk/updates/agent
       Sirk__AgentUpdates__MetadataTtlSeconds: "300"
       Sirk__AgentUpdates__Retention: "3"
@@ -30,7 +33,7 @@ services:
       Sirk__Security__BootstrapSecretFile: /var/lib/sirk-central/security/break-glass-bootstrap.json
       Sirk__Security__DataProtectionCertificatePath: /run/secrets/sirk-central-dataprotection.pfx
       Sirk__Security__DataProtectionCertificatePasswordFile: /run/secrets/sirk-central-dataprotection-password
-      Sirk__Security__ReleaseSigningPublicKeyFile: /run/secrets/sirk-release-signing-public-key
+      Sirk__Security__ReleaseSigningPublicKeyFile: /run/secrets/sirk-release-trusted-keys.json
       Sirk__Security__RequireProtectedDataProtectionKeys: "true"
       Sirk__Security__RequireSignedReleases: "true"
       Sirk__Security__RequireSingleWriterLease: "true"
@@ -43,7 +46,7 @@ services:
     volumes:
       - sirk-central-data:/var/lib/sirk-central
       - sirk-public-config:/var/lib/sirk-public
-      - sirk-agent-update-cache:/var/lib/sirk/updates/agent
+      - sirk-update-cache:/var/lib/sirk/updates
       - ${SIRK_CENTRAL_SECRETS_PATH:-./secrets}:/run/secrets:ro
     read_only: true
     tmpfs:
@@ -142,6 +145,6 @@ networks:
 volumes:
   sirk-central-data:
   sirk-public-config:
-  sirk-agent-update-cache:
+  sirk-update-cache:
   sirk-caddy-data:
   sirk-caddy-config:
