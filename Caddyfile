@@ -9,9 +9,23 @@ www.{$SIRK_WEBSITE_DOMAIN} {
 
 {$SIRK_WEBSITE_DOMAIN} {
     encode zstd gzip
-    root * /srv/website
-    try_files {path} {path}/index.html /index.html
-    file_server
+
+    @publicConfig path /.well-known/sirk-config.json
+    handle @publicConfig {
+        root * /srv/public-config
+        rewrite * /sirk-config.json
+        file_server
+    }
+
+    handle {
+        root * /srv/website
+        try_files {path} {path}/index.html /index.html
+        file_server
+    }
+
+    header @publicConfig Cache-Control "public, max-age=60, stale-if-error=86400"
+    @websiteContent not path /.well-known/sirk-config.json
+    header @websiteContent Cache-Control "no-cache"
 
     header {
         Strict-Transport-Security "max-age=31536000; includeSubDomains"
@@ -20,7 +34,6 @@ www.{$SIRK_WEBSITE_DOMAIN} {
         Referrer-Policy "strict-origin-when-cross-origin"
         Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
         Content-Security-Policy "default-src 'self'; style-src 'self'; img-src 'self' data:; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; upgrade-insecure-requests"
-        Cache-Control "no-cache"
         X-Robots-Tag "index, follow"
         -Server
     }
@@ -50,6 +63,39 @@ www.{$SIRK_BUSINESS_DOMAIN} {
         Content-Security-Policy "default-src 'self'; style-src 'self'; img-src 'self' data:; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self' mailto:; upgrade-insecure-requests"
         Cache-Control "no-cache"
         X-Robots-Tag "index, follow"
+        -Server
+    }
+
+    log {
+        output stdout
+        format json
+    }
+}
+
+{$SIRK_DEMO_DOMAIN} {
+    encode zstd gzip
+
+    @demoControl path /control/*
+    respond @demoControl 404
+    reverse_proxy demo-orchestrator:8090 {
+        fail_duration 5s
+        max_fails 2
+        transport http {
+            dial_timeout 5s
+            response_header_timeout 60s
+        }
+    }
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "no-referrer"
+        Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=()"
+        Cross-Origin-Opener-Policy "same-origin"
+        Cross-Origin-Resource-Policy "same-origin"
+        Cache-Control "no-store"
+        X-Robots-Tag "noindex, nofollow"
         -Server
     }
 
