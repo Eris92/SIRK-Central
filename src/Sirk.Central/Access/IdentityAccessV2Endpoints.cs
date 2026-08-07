@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Antiforgery;
 using Sirk.Central.Security;
+using Sirk.Central.Ui;
 
 namespace Sirk.Central.Access;
 
@@ -35,6 +36,11 @@ internal static class IdentityAccessV2Endpoints
             .RequireAuthorization(SirkPolicies.SecurityAdministration);
         currentEntraApprovals.MapPost("/{key}/approve", ApproveEntraRoleAsync);
         currentEntraApprovals.MapPost("/{key}/reject", RejectEntraRoleAsync);
+
+        // The classic permissions UI is still the primary administration
+        // surface. Register its adapter explicitly next to the canonical v1
+        // API so both surfaces share the same IdentityAccessStore.
+        endpoints.MapCurrentUiApi();
 
         return endpoints;
     }
