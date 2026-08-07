@@ -1,13 +1,16 @@
 var root = FindRepositoryRoot();
 var endpointRegistration = File.ReadAllText(Path.Combine(root, "src", "Sirk.Central", "Access", "IdentityAccessV2Endpoints.cs"));
+var portalCompatibilityRegistration = File.ReadAllText(Path.Combine(root, "src", "Sirk.Central", "Portals", "PortalConnectionFileEndpoints.cs"));
 var adapter = File.ReadAllText(Path.Combine(root, "src", "Sirk.Central", "Ui", "CurrentUiEndpoints.cs"));
 var bootstrap = File.ReadAllText(Path.Combine(root, "public", "workspace-bootstrap.js"));
 var workspace = File.ReadAllText(Path.Combine(root, "public", "workspace.js"));
 var csrf = File.ReadAllText(Path.Combine(root, "public", "csrf-bootstrap.js"));
 var classic = File.ReadAllText(Path.Combine(root, "public", "app.js"));
 
-Require(endpointRegistration.Contains("endpoints.MapCurrentUiApi();", StringComparison.Ordinal),
-    "The current permissions UI API is not registered with the canonical identity/access module.");
+Require(portalCompatibilityRegistration.Contains("endpoints.MapCurrentUiApi();", StringComparison.Ordinal),
+    "The current permissions UI API must be registered alongside the Portal compatibility surface.");
+Require(!endpointRegistration.Contains("MapCurrentUiApi", StringComparison.Ordinal),
+    "The current permissions UI API must only be registered once.");
 Require(adapter.Contains("MapGroup(\"/api/access-control\")", StringComparison.Ordinal),
     "The classic permissions UI access-control adapter is missing.");
 Require(adapter.Contains("access.MapPost(\"/teams\", SaveTeamAsync);", StringComparison.Ordinal) &&
