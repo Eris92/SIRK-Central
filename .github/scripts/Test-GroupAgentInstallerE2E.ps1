@@ -302,13 +302,20 @@ try {
         }
     }
 
-    $ticketStore = Join-Path $DataRoot 'security\agent-installer-tickets.json'
+    $ticketStore = Join-Path $DataRoot 'agent-installer-tickets.json'
     if (-not (Test-Path -LiteralPath $ticketStore -PathType Leaf)) {
         throw 'Single-use installer ticket store was not created.'
     }
     $ticketText = Get-Content -LiteralPath $ticketStore -Raw
     if ($ticketText -match 'install-[a-f0-9]{20}\.[A-Za-z0-9_-]{40,128}') {
         throw 'Installer ticket store contains a plaintext ticket.'
+    }
+    $ticketDocument = $ticketText | ConvertFrom-Json
+    $consumedTicket = @($ticketDocument.Tickets | Where-Object {
+        $_.GroupId -eq $GroupId -and $null -ne $_.UsedAtUtc
+    } | Select-Object -First 1)
+    if (-not $consumedTicket) {
+        throw 'Installer ticket was not persisted as consumed after enrollment.'
     }
 
     Write-Host 'SIRK_GROUP_AGENT_EXE_INSTALLATION_E2E_OK' -ForegroundColor Green
