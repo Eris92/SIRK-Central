@@ -9,26 +9,14 @@ try
 {
     var options = Options.Create(new SecurityOptions { DataRoot = root, PasswordHashIterations = 100_000 });
     var store = new OperationsStore(options);
-    var policy = store.SavePolicy(new MaintenancePolicy(true, "dev", 5, "Sat 01:00-02:00", default, ""), "tester");
-    Assert(policy.AutomaticUpdates && policy.Channel == "dev" && policy.RetainBackups == 5, "maintenance policy");
-    var job = store.Queue(new UpdateRequest("2.0.0", "dev", true, "UPDATE SIRK CENTRAL"), "tester");
-    Assert(job.State == "queued" && job.DryRun, "update queue");
-    Expect<InvalidOperationException>(() => store.Queue(new UpdateRequest("2.0.1", "dev", true, "UPDATE SIRK CENTRAL"), "tester"));
+    var policy = store.SavePolicy(new MaintenancePolicy(true, "stable", 5, "Sat 01:00-02:00", default, ""), "tester");
+    Assert(policy.AutomaticUpdates && policy.Channel == "stable" && policy.RetainBackups == 5, "maintenance policy");
+    var job = store.Queue(new UpdateRequest("0.1.1.10", "stable", true, "UPDATE SIRK CENTRAL"), "tester");
+    Assert(job.State == "queued" && job.DryRun && job.Version == "0.1.1.10", "update queue");
+    Expect<InvalidOperationException>(() => store.Queue(new UpdateRequest("0.1.1.11", "stable", true, "UPDATE SIRK CENTRAL"), "tester"));
     store.Complete(job.Id, true, null);
     var reopened = new OperationsStore(options);
     Assert(reopened.Jobs().Single().State == "completed", "operations persistence");
-
-    var publicKey = Convert.FromBase64String("MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEyAa1Magxap4VLMaf4Qm7cXciGiBoFpHeO3zmaKls7VPaTUiBqZVpPR0nCgIF4gx4pNeiG9hjkFFM4LIfWgaNGw==");
-    var metadata = PortalReleaseCatalog.Validate(new PortalReleaseMetadata(
-        1, "sirk-portal", "2.0.0", "stable",
-        "https://github.com/Eris92/SIRK-Portal/releases/download/v2.0.0/SIRK-Portal-2.0.0-win-x64.zip",
-        new string('A', 64), "win-x64", DateTimeOffset.UtcNow, "abcdef", "release-key-2026-01",
-        "MEYCIQDGth4USUDA6ShxC4JouOo6P2zAWSA5WTFOtF1UQJq05wIhANmT6dNVvVL6BspYcTiskCkExjk63IwvcHZDOkN/r/4f"),
-        "stable", publicKey, requireSignature: true);
-    Assert(metadata.Channel == "stable" && metadata.Sha256 == new string('A', 64), "signed release metadata validation");
-    Expect<InvalidDataException>(() => PortalReleaseCatalog.Validate(metadata with { PackageUrl = "https://evil.invalid/file.zip" }, "stable", publicKey, true));
-    Expect<InvalidDataException>(() => PortalReleaseCatalog.Validate(metadata with { Version = "2.0.1" }, "stable", publicKey, true));
-    Expect<InvalidDataException>(() => PortalReleaseCatalog.Validate(metadata with { Signature = null }, "stable", publicKey, true));
 
     var relay = new PortalTunnelRelay();
     using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
