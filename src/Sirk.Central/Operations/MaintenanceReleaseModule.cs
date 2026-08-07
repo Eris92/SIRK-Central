@@ -183,8 +183,8 @@ internal sealed class OperationsStore
         (value ?? string.Empty).Trim().ToLowerInvariant() switch
         {
             "stable" => "stable",
-            "dev" => "dev",
-            _ => throw new InvalidDataException("Channel must be stable or dev.")
+            "preview" => "preview",
+            _ => throw new InvalidDataException("Channel must be stable or preview.")
         };
 
     private static string NormalizeVersion(string? value)
@@ -297,7 +297,7 @@ internal sealed class OperationsMiddleware
                             schemaVersion = 1,
                             applicationId = update.ApplicationId,
                             version = update.Version,
-                            channel = requested == "stable" ? "stable" : "dev",
+                            channel,
                             packageUrl = $"/api/portal/v1/update/products/sirk-portal/{update.Version}/package",
                             sha256 = update.Sha256,
                             architecture = update.Runtime,
