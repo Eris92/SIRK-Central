@@ -27,6 +27,7 @@ grep -q 'ENTRYPOINT \["dotnet", "Sirk.Central.dll"\]' Dockerfile || \
 ! grep -qE '(^|[[:space:]])node([[:space:]]|$)|npm|src/server\.js' Dockerfile docker-compose.yml || \
   fail "Node runtime remains in deployment"
 grep -q 'central:8080' Caddyfile || fail "Caddy does not proxy to the .NET Central service"
+grep -q 'demo-orchestrator:8090' Caddyfile || fail "Caddy does not proxy Demo to the isolated orchestrator"
 grep -q 'CENTRAL_REF=.*main' deploy/install-dotnet10.sh || fail "installer does not default to main"
 grep -q 'CENTRAL_REF=.*main' deploy/reinstall-dotnet10.sh || fail "reinstaller does not default to main"
 
@@ -69,7 +70,29 @@ done < <(
 )
 
 services="$(docker compose config --services 2>/dev/null || true)"
-[[ "$services" == $'central\ncaddy' || "$services" == $'caddy\ncentral' ]] || \
-  fail "Compose must contain only central and caddy services; got: ${services//$'\n'/, }"
+expected_services="$(printf '%s\n' central caddy demo-orchestrator | sort)"
+actual_services="$(printf '%s\n' "$services" | sort)"
+[[ "$actual_services" == "$expected_services" ]] || \
+  fail "Compose must contain central, caddy and demo-orchestrator services; got: ${services//$'\n'/, }"
+
+python3 - <<'PY'
+import subprocess, yaml
+
+compose = yaml.safe_load(subprocess.check_output(['docker', 'compose', 'config'], text=True))
+services = compose['services']
+central_volumes = str(services['central'].get('volumes', []))
+demo_volumes = str(services['demo-orchestrator'].get('volumes', []))
+caddy_volumes = str(services['caddy'].get('volumes', []))
+if '/var/run/docker.sock' in central_volumes:
+    raise SystemExit('Central must never receive the Docker socket.')
+if '/var/run/docker.sock' not in demo_volumes:
+    raise SystemExit('Only Demo orchestrator must receive the Docker socket.')
+if 'sirk-public-config' not in caddy_volumes or '/srv/public-config' not in caddy_volumes:
+    raise SystemExit('Caddy must mount the public config snapshot volume read-only.')
+network = compose.get('networks', {}).get('sirk-demo', {})
+if network.get('internal') is not True:
+    raise SystemExit('Demo network must remain internal/effectively egress-blocked.')
+print('DEMO_DEPLOYMENT_ISOLATION_CONTRACT_OK')
+PY
 
 echo NODE_FREE_DOTNET10_CONTRACT_OK
