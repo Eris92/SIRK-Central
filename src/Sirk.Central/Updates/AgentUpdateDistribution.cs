@@ -365,9 +365,9 @@ internal sealed class AgentUpdateCache
         using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
         var release = SelectRelease(document.RootElement, runtime, channel)
                       ?? throw new InvalidDataException("No compatible signed Agent release was found.");
-        var version = release.Value.Version;
+        var version = release.Version;
         var existing = ReadCached(version, runtime, channel);
-        var cached = existing ?? await CacheReleaseAsync(client, release.Value.Release, version, runtime, channel, cancellationToken);
+        var cached = existing ?? await CacheReleaseAsync(client, release.Release, version, runtime, channel, cancellationToken);
         var etag = response.Headers.ETag?.ToString();
         WriteState(new AgentUpdateSourceState(etag, DateTimeOffset.UtcNow, version, null));
         EnforceRetention(version);
