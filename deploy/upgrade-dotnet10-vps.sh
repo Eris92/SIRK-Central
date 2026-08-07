@@ -113,16 +113,21 @@ if [[ -f "$COMPOSE_FILE" ]]; then
     cp -a "$COMPOSE_FILE" "${COMPOSE_FILE}.before-upgrade-$(date +%Y%m%d-%H%M%S)"
 fi
 
-# Stop only the application containers. Persistent data and certificate directories remain untouched.
-docker rm -f "$CENTRAL_CONTAINER" "$CADDY_CONTAINER" 2>/dev/null || true
-
 echo "=== Budowanie obrazu ${IMAGE_NAME} ==="
-docker build \
-    --pull \
-    --no-cache \
-    --file "$SOURCE_DIR/Dockerfile.dotnet10" \
-    --tag "$IMAGE_NAME" \
-    "$SOURCE_DIR"
+BUILD_ARGS=(
+    --pull
+    --network host
+    --file "$SOURCE_DIR/Dockerfile.dotnet10"
+    --tag "$IMAGE_NAME"
+)
+if [[ "${SIRK_DOCKER_NO_CACHE:-0}" == "1" ]]; then
+    BUILD_ARGS+=(--no-cache)
+fi
+docker build "${BUILD_ARGS[@]}" "$SOURCE_DIR"
+
+# Keep the current release online until the replacement image has built.
+# Persistent data and certificate directories remain untouched.
+docker rm -f "$CENTRAL_CONTAINER" "$CADDY_CONTAINER" 2>/dev/null || true
 
 APP_UID="$(docker run --rm --entrypoint /bin/sh "$IMAGE_NAME" -c 'id -u')"
 APP_GID="$(docker run --rm --entrypoint /bin/sh "$IMAGE_NAME" -c 'id -g')"
