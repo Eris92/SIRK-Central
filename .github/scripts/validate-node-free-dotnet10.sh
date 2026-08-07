@@ -75,19 +75,25 @@ actual_services="$(printf '%s\n' "$services" | sort)"
 [[ "$actual_services" == "$expected_services" ]] || \
   fail "Compose must contain central, caddy and demo-orchestrator services; got: ${services//$'\n'/, }"
 
+docker compose config --format json > /tmp/sirk-central-compose-contract.json
 python3 - <<'PY'
-import subprocess, yaml
+import json
+from pathlib import Path
 
-compose = yaml.safe_load(subprocess.check_output(['docker', 'compose', 'config'], text=True))
+compose = json.loads(Path('/tmp/sirk-central-compose-contract.json').read_text(encoding='utf-8'))
 services = compose['services']
-central_volumes = str(services['central'].get('volumes', []))
-demo_volumes = str(services['demo-orchestrator'].get('volumes', []))
-caddy_volumes = str(services['caddy'].get('volumes', []))
-if '/var/run/docker.sock' in central_volumes:
+
+def targets(service):
+    return [str(item.get('target', '')) for item in services[service].get('volumes', []) if isinstance(item, dict)]
+
+central_targets = targets('central')
+demo_targets = targets('demo-orchestrator')
+caddy_volumes = services['caddy'].get('volumes', [])
+if '/var/run/docker.sock' in central_targets:
     raise SystemExit('Central must never receive the Docker socket.')
-if '/var/run/docker.sock' not in demo_volumes:
+if '/var/run/docker.sock' not in demo_targets:
     raise SystemExit('Only Demo orchestrator must receive the Docker socket.')
-if 'sirk-public-config' not in caddy_volumes or '/srv/public-config' not in caddy_volumes:
+if not any(isinstance(item, dict) and item.get('target') == '/srv/public-config' and item.get('read_only') is True for item in caddy_volumes):
     raise SystemExit('Caddy must mount the public config snapshot volume read-only.')
 network = compose.get('networks', {}).get('sirk-demo', {})
 if network.get('internal') is not True:
