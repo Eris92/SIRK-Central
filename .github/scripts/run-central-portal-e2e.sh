@@ -7,6 +7,13 @@ sudo apt-get install --yes unzip openssl ca-certificates
 rm -rf artifacts/e2e-central artifacts/e2e-portal artifacts/e2e-tls /tmp/sirk-portal-e2e
 mkdir -p artifacts/e2e-central artifacts/e2e-portal artifacts/e2e-tls /tmp/sirk-portal-e2e
 
+update_cache_root="$(mktemp -d /tmp/sirk-central-updates.XXXXXX)"
+cleanup() {
+  rm -rf "$update_cache_root"
+}
+trap cleanup EXIT
+export Sirk__Updates__CacheRoot="$update_cache_root"
+
 dotnet publish src/Sirk.Central/Sirk.Central.csproj \
   --configuration Release \
   --runtime linux-x64 \
