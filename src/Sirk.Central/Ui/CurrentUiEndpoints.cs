@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.Extensions.Options;
 using Sirk.Central.Access;
@@ -22,16 +23,20 @@ internal sealed record UiLocalUserCreateRequest(
     string Role);
 
 internal sealed record UiRoleChangeRequest(string Role);
+internal sealed record UiAccessSimulationRequest(string MemberKey);
 
 internal static class CurrentUiEndpoints
 {
     public static IEndpointRouteBuilder MapCurrentUiApi(this IEndpointRouteBuilder endpoints)
     {
+        // Every authenticated identity may list the Portals it can see and connect
+        // to them. Creating a Portal remains an administrative operation.
         var portals = endpoints.MapGroup("/api/portals")
-            .RequireAuthorization(SirkPolicies.PortalManagement);
+            .RequireAuthorization();
         portals.MapGet("/", ListPortals);
-        portals.MapPost("/", CreatePortalAsync);
         portals.MapPost("/{portalId}/connect", ConnectPortal);
+        portals.MapPost("/", CreatePortalAsync)
+            .RequireAuthorization(SirkPolicies.PortalManagement);
 
         var users = endpoints.MapGroup("/api/settings/users")
             .RequireAuthorization(SirkPolicies.PortalManagement);
@@ -48,6 +53,19 @@ internal static class CurrentUiEndpoints
         entra.MapPut("/", UpdateEntraAsync);
         entra.MapPost("/test", TestEntra);
 
+        // Compatibility surface used by the current Permissions UI. The v1
+        // access-control API remains canonical; these routes only adapt the
+        // response and request shapes expected by public/app.js.
+        var access = endpoints.MapGroup("/api/access-control")
+            .RequireAuthorization(SirkPolicies.PortalManagement);
+        access.MapGet("/", AccessSnapshot);
+        access.MapPost("/teams", SaveTeamAsync);
+        access.MapPut("/teams", SaveTeamAsync);
+        access.MapDelete("/teams/{id}", DeleteTeamAsync);
+        access.MapGet("/portals/{portalId}/policy", GetPortalPolicy);
+        access.MapPut("/portals/{portalId}/policy", SavePortalPolicyAsync);
+        access.MapPost("/simulate", SimulateAccessAsync);
+
         return endpoints;
     }
 
@@ -55,16 +73,23 @@ internal static class CurrentUiEndpoints
         HttpContext context,
         FilePortalRegistry registry,
         PortalTelemetryStore telemetry,
-        IOptions<PortalProtocolOptions> options)
+        IOptions<PortalProtocolOptions> options,
+        IdentityAccessStore accessStore)
     {
         NoStore(context);
         var now = DateTimeOffset.UtcNow;
         var offlineAfter = TimeSpan.FromSeconds(options.Value.OfflineAfterSeconds);
-        var result = registry.List().Select(portal =>
+        var managementView = CanManagePortals(context.User);
+        var result = new List<object>();
+
+        foreach (var portal in registry.List())
         {
+            var effective = ResolveEffectiveAccess(context.User, portal.Id, accessStore);
+            if (!managementView && !effective.Allowed) continue;
+
             var heartbeat = telemetry.Get(portal.Id);
             var online = heartbeat is not null && now - heartbeat.ReceivedAtUtc <= offlineAfter;
-            return new
+            result.Add(new
             {
                 portal.Id,
                 portal.Name,
@@ -83,14 +108,11 @@ internal static class CurrentUiEndpoints
                 },
                 access = new
                 {
-                    teams = Array.Empty<string>(),
-                    capabilities = new Dictionary<string, string>
-                    {
-                        ["portal.connect"] = online ? "allow" : "deny"
-                    }
+                    teams = effective.Teams,
+                    capabilities = effective.Capabilities
                 }
-            };
-        }).ToArray();
+            });
+        }
 
         return Results.Ok(new { ok = true, portals = result });
     }
@@ -147,26 +169,52 @@ internal static class CurrentUiEndpoints
         HttpContext context,
         FilePortalRegistry registry,
         PortalTelemetryStore telemetry,
-        IOptions<PortalProtocolOptions> options)
+        IOptions<PortalProtocolOptions> options,
+        IdentityAccessStore accessStore)
     {
         NoStore(context);
         var portal = registry.Get(portalId);
-        var heartbeat = portal is null ? null : telemetry.Get(portal.Id);
-        var online = heartbeat is not null &&
-            DateTimeOffset.UtcNow - heartbeat.ReceivedAtUtc <=
-            TimeSpan.FromSeconds(options.Value.OfflineAfterSeconds);
-
-        if (!online || heartbeat is null ||
-            !Uri.TryCreate(heartbeat.Metrics.PublicUrl, UriKind.Absolute, out var target) ||
-            target.Scheme != Uri.UriSchemeHttps ||
-            !string.IsNullOrEmpty(target.UserInfo))
+        if (portal is null)
         {
             return Results.Json(
-                new { ok = false, code = "PORTAL_UNAVAILABLE", error = "Portal is offline or has no valid public URL." },
+                new { ok = false, code = "PORTAL_NOT_FOUND", error = "Portal was not found." },
+                statusCode: StatusCodes.Status404NotFound);
+        }
+
+        var effective = ResolveEffectiveAccess(context.User, portal.Id, accessStore);
+        var connectState = effective.Capabilities.GetValueOrDefault("portal.connect") ?? "deny";
+        if (!effective.Allowed || connectState == "deny")
+        {
+            return Results.Json(
+                new { ok = false, code = "PORTAL_ACCESS_DENIED", error = "Portal access denied by policy." },
+                statusCode: StatusCodes.Status403Forbidden);
+        }
+        if (connectState == "approval")
+        {
+            return Results.Json(
+                new { ok = false, code = "PORTAL_APPROVAL_REQUIRED", error = "Portal connection requires approval.", approvalRequired = true },
                 statusCode: StatusCodes.Status409Conflict);
         }
 
-        return Results.Ok(new { ok = true, url = target.AbsoluteUri });
+        var heartbeat = telemetry.Get(portal.Id);
+        var online = heartbeat is not null &&
+            DateTimeOffset.UtcNow - heartbeat.ReceivedAtUtc <=
+            TimeSpan.FromSeconds(options.Value.OfflineAfterSeconds);
+        if (!online)
+        {
+            return Results.Json(
+                new { ok = false, code = "PORTAL_UNAVAILABLE", error = "Portal is offline." },
+                statusCode: StatusCodes.Status409Conflict);
+        }
+
+        // Stay inside Central. /connect/{id}/ is protected again by the tunnel
+        // middleware, so this compatibility route cannot bypass effective access.
+        return Results.Ok(new
+        {
+            ok = true,
+            portalId = portal.Id,
+            url = $"/connect/{Uri.EscapeDataString(portal.Id)}/"
+        });
     }
 
     private static IResult ListRoles(HttpContext context)
@@ -181,8 +229,12 @@ internal static class CurrentUiEndpoints
         IdentityAccessStore store)
     {
         NoStore(context);
-        var users = store.ListIdentities()
-            .Select(identity => new
+        return Results.Ok(new { ok = true, users = UiUsers(store) });
+    }
+
+    private static object[] UiUsers(IdentityAccessStore store) =>
+        store.ListIdentities()
+            .Select(identity => (object)new
             {
                 username = identity.UserName,
                 identity.DisplayName,
@@ -197,11 +249,8 @@ internal static class CurrentUiEndpoints
                 identity.UpdatedAtUtc,
                 identity.ApprovedBy
             })
-            .OrderBy(identity => identity.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(identity => ((dynamic)identity).DisplayName, StringComparer.OrdinalIgnoreCase)
             .ToArray();
-
-        return Results.Ok(new { ok = true, users });
-    }
 
     private static async Task<IResult> CreateLocalUserAsync(
         UiLocalUserCreateRequest request,
@@ -264,7 +313,7 @@ internal static class CurrentUiEndpoints
             });
     }
 
-    private static string[] AssignableRolesFor(System.Security.Claims.ClaimsPrincipal user)
+    private static string[] AssignableRolesFor(ClaimsPrincipal user)
     {
         if (user.IsInRole(SirkRoles.BreakGlass))
         {
@@ -296,6 +345,177 @@ internal static class CurrentUiEndpoints
 
         return [];
     }
+
+    private static IResult AccessSnapshot(
+        HttpContext context,
+        IdentityAccessStore store,
+        FilePortalRegistry registry)
+    {
+        NoStore(context);
+        var portals = registry.List()
+            .Select(portal => new { portal.Id, portal.Name })
+            .OrderBy(portal => portal.Name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        return Results.Ok(new
+        {
+            ok = true,
+            users = UiUsers(store),
+            portals,
+            teams = store.ListTeams(),
+            capabilities = IdentityAccessStore.Capabilities
+        });
+    }
+
+    private static async Task<IResult> SaveTeamAsync(
+        AccessTeamRequest request,
+        HttpContext context,
+        IAntiforgery antiforgery,
+        IdentityAccessStore store)
+    {
+        NoStore(context);
+        return await MutateAsync(
+            context,
+            antiforgery,
+            () =>
+            {
+                var normalized = request with
+                {
+                    Members = request.Members?
+                        .Select(NormalizeClassicMemberKey)
+                        .ToArray()
+                };
+                return Results.Ok(new { ok = true, team = store.SaveTeam(normalized) });
+            });
+    }
+
+    private static async Task<IResult> DeleteTeamAsync(
+        string id,
+        HttpContext context,
+        IAntiforgery antiforgery,
+        IdentityAccessStore store)
+    {
+        NoStore(context);
+        return await MutateAsync(
+            context,
+            antiforgery,
+            () =>
+            {
+                store.DeleteTeam(id);
+                // The current UI always parses JSON, so return a body instead of 204.
+                return Results.Ok(new { ok = true });
+            });
+    }
+
+    private static IResult GetPortalPolicy(
+        string portalId,
+        HttpContext context,
+        IdentityAccessStore store)
+    {
+        NoStore(context);
+        return Results.Ok(new { ok = true, policy = store.PortalPolicy(portalId) });
+    }
+
+    private static async Task<IResult> SavePortalPolicyAsync(
+        string portalId,
+        PortalPolicyRequest request,
+        HttpContext context,
+        IAntiforgery antiforgery,
+        IdentityAccessStore store)
+    {
+        NoStore(context);
+        return await MutateAsync(
+            context,
+            antiforgery,
+            () => Results.Ok(new
+            {
+                ok = true,
+                policy = store.SavePortalPolicy(portalId, request.Policy)
+            }));
+    }
+
+    private static async Task<IResult> SimulateAccessAsync(
+        UiAccessSimulationRequest request,
+        HttpContext context,
+        IAntiforgery antiforgery,
+        IdentityAccessStore store,
+        FilePortalRegistry registry)
+    {
+        NoStore(context);
+        return await MutateAsync(
+            context,
+            antiforgery,
+            () =>
+            {
+                var key = NormalizeClassicMemberKey(request.MemberKey);
+                var identity = store.Get(key)
+                    ?? throw new KeyNotFoundException("Identity was not found.");
+                var result = registry.List()
+                    .Select(portal =>
+                    {
+                        var effective = store.Effective(identity, portal.Id);
+                        return new
+                        {
+                            portal.Id,
+                            portal.Name,
+                            effective.Allowed,
+                            teams = effective.Teams,
+                            capabilities = effective.Capabilities
+                        };
+                    })
+                    .OrderBy(portal => portal.Name, StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+                return Results.Ok(new { ok = true, result });
+            });
+    }
+
+    private static string NormalizeClassicMemberKey(string value)
+    {
+        var key = (value ?? string.Empty).Trim().ToLowerInvariant();
+        const string localDuplicate = "local:local:";
+        const string entraDuplicate = "entra:entra:";
+        if (key.StartsWith(localDuplicate, StringComparison.Ordinal))
+            return "local:" + key[localDuplicate.Length..];
+        if (key.StartsWith(entraDuplicate, StringComparison.Ordinal))
+            return "entra:" + key[entraDuplicate.Length..];
+        return key;
+    }
+
+    private static EffectiveAccess ResolveEffectiveAccess(
+        ClaimsPrincipal actor,
+        string portalId,
+        IdentityAccessStore store)
+    {
+        if (actor.IsInRole(SirkRoles.BreakGlass))
+        {
+            return new EffectiveAccess(
+                true,
+                ["Break-Glass"],
+                IdentityAccessStore.Capabilities.ToDictionary(
+                    capability => capability,
+                    _ => "allow",
+                    StringComparer.Ordinal));
+        }
+
+        var key = actor.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (string.IsNullOrWhiteSpace(key)) return DeniedAccess();
+        ManagedIdentity? identity;
+        try { identity = store.Get(key); }
+        catch (InvalidDataException) { identity = null; }
+        return identity is null ? DeniedAccess() : store.Effective(identity, portalId);
+    }
+
+    private static EffectiveAccess DeniedAccess() => new(
+        false,
+        [],
+        IdentityAccessStore.Capabilities.ToDictionary(
+            capability => capability,
+            _ => "deny",
+            StringComparer.Ordinal));
+
+    private static bool CanManagePortals(ClaimsPrincipal actor) =>
+        actor.IsInRole(SirkRoles.BreakGlass) ||
+        actor.IsInRole(SirkRoles.SecAdmin) ||
+        actor.IsInRole(SirkRoles.Admin);
 
     private static IResult GetEntra(HttpContext context, EntraSettingsStore store)
     {
@@ -382,21 +602,22 @@ internal static class CurrentUiEndpoints
         catch (KeyNotFoundException exception)
         {
             return Results.Json(
-                new { ok = false, code = "USER_NOT_FOUND", error = exception.Message },
+                new { ok = false, code = "RESOURCE_NOT_FOUND", error = exception.Message },
                 statusCode: StatusCodes.Status404NotFound);
         }
         catch (UnauthorizedAccessException exception)
         {
             return Results.Json(
-                new { ok = false, code = "ROLE_ASSIGNMENT_FORBIDDEN", error = exception.Message },
+                new { ok = false, code = "ACCESS_FORBIDDEN", error = exception.Message },
                 statusCode: StatusCodes.Status403Forbidden);
         }
         catch (Exception exception) when (
             exception is InvalidDataException or
-            InvalidOperationException)
+            InvalidOperationException or
+            ArgumentException)
         {
             return Results.Json(
-                new { ok = false, code = "USER_VALIDATION_FAILED", error = exception.Message },
+                new { ok = false, code = "VALIDATION_FAILED", error = exception.Message },
                 statusCode: StatusCodes.Status409Conflict);
         }
     }
