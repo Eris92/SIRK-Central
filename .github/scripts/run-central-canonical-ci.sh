@@ -60,15 +60,17 @@ mkdir -p secrets
 touch \
   secrets/sirk-central-dataprotection.pfx \
   secrets/sirk-central-dataprotection-password \
-  secrets/sirk-release-signing-public-key
+  secrets/sirk-release-signing-public-key \
+  secrets/sirk-demo-control-token
 
 docker compose config > /tmp/sirk-central-compose.yml
-test "$(docker compose config --services | sort | tr '\n' ' ')" = "caddy central "
+test "$(docker compose config --services | sort | tr '\n' ' ')" = "caddy central demo-orchestrator "
 
 docker run --rm \
   -e SIRK_ACME_EMAIL=admin@example.test \
   -e SIRK_WEBSITE_DOMAIN=example.test \
   -e SIRK_BUSINESS_DOMAIN=business.example.test \
+  -e SIRK_DEMO_DOMAIN=demo.example.test \
   -e SIRK_CENTRAL_DOMAIN=central.example.test \
   -e SIRK_AUTH_DOMAIN=auth.example.test \
   -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" \
