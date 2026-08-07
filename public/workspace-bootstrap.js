@@ -206,12 +206,11 @@
         settingsButton.insertAdjacentElement("afterend", button);
     }
 
-    function mountPortalTunnelUi() {
-        if (document.querySelector('script[data-sirk-portal-tunnel-ui="true"]')) return;
+    function mountWorkspaceScript(src) {
+        if (document.querySelector(`script[src="${src}"]`)) return;
         const script = document.createElement("script");
-        script.src = "/portal-tunnel-ui.js";
+        script.src = src;
         script.async = true;
-        script.dataset.sirkPortalTunnelUi = "true";
         document.head.append(script);
     }
 
@@ -227,7 +226,8 @@
 
         if (loginView && !dashboardVisible) loginView.hidden = false;
         mountAdvancedWorkspaceButton();
-        mountPortalTunnelUi();
+        mountWorkspaceScript("/portal-tunnel-ui.js");
+        mountWorkspaceScript("/public-site-ui.js");
     }
 
     if (document.readyState === "loading") {
