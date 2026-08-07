@@ -27,6 +27,11 @@ internal sealed record PublicSiteSnapshot(
     PublicSiteDemoSettings Demo,
     PublicSiteFeatureSettings Features,
     PublicSiteMaintenanceSettings Maintenance);
+internal sealed record PublicSitePublishStatus(
+    bool Healthy,
+    long Revision,
+    DateTimeOffset CheckedAtUtc,
+    string? Error);
 internal sealed record PublicSiteAdminState(
     PublicSiteSettings Settings,
     bool SnapshotPublished,
@@ -38,9 +43,9 @@ internal sealed class PublicSiteConfigStore
     private static readonly object Sync = new();
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private readonly string _settingsPath;
+    private readonly string _publishStatusPath;
     private readonly string _snapshotPath;
     private readonly string _publicDomain;
-    private string? _lastPublishError;
 
     public PublicSiteConfigStore(IConfiguration configuration)
     {
@@ -49,6 +54,7 @@ internal sealed class PublicSiteConfigStore
         var dataRoot = configuration["Sirk:PublicSite:DataRoot"];
         if (string.IsNullOrWhiteSpace(dataRoot)) dataRoot = Path.Combine(centralDataRoot, "public-site");
         _settingsPath = Path.Combine(dataRoot, "settings.json");
+        _publishStatusPath = Path.Combine(dataRoot, "publish-status.json");
         _snapshotPath = configuration["Sirk:PublicSite:SnapshotPath"] ?? "/var/lib/sirk-public/sirk-config.json";
         _publicDomain = (configuration["Sirk:PublicSite:PublicDomain"] ?? "sirkportal.com").Trim().Trim('.').ToLowerInvariant();
     }
@@ -58,7 +64,12 @@ internal sealed class PublicSiteConfigStore
         lock (Sync)
         {
             var settings = ReadOrDefault();
-            return new PublicSiteAdminState(settings, File.Exists(_snapshotPath), _snapshotPath, _lastPublishError);
+            var status = ReadPublishStatus();
+            return new PublicSiteAdminState(
+                settings,
+                File.Exists(_snapshotPath) && status is { Healthy: true } && status.Revision == settings.Revision,
+                _snapshotPath,
+                status?.Error);
         }
     }
 
@@ -78,16 +89,7 @@ internal sealed class PublicSiteConfigStore
                 request.Maintenance);
 
             WriteAtomic(_settingsPath, next);
-            try
-            {
-                Publish(next);
-                _lastPublishError = null;
-            }
-            catch (Exception error)
-            {
-                _lastPublishError = error.GetType().Name + ": " + error.Message;
-                throw;
-            }
+            PublishWithStatus(next);
             return new PublicSiteAdminState(next, true, _snapshotPath, null);
         }
     }
@@ -97,8 +99,7 @@ internal sealed class PublicSiteConfigStore
         lock (Sync)
         {
             var current = ReadOrDefault();
-            Publish(current);
-            _lastPublishError = null;
+            PublishWithStatus(current);
             return new PublicSiteAdminState(current, true, _snapshotPath, null);
         }
     }
@@ -121,6 +122,44 @@ internal sealed class PublicSiteConfigStore
         if (value.SchemaVersion != 1 || value.Revision < 0) throw new InvalidDataException("Public site settings schema is unsupported.");
         Validate(new PublicSiteUpdateRequest(value.Demo, value.Features, value.Maintenance));
         return value;
+    }
+
+    private PublicSitePublishStatus? ReadPublishStatus()
+    {
+        if (!File.Exists(_publishStatusPath)) return null;
+        try
+        {
+            return JsonSerializer.Deserialize<PublicSitePublishStatus>(File.ReadAllBytes(_publishStatusPath), Json);
+        }
+        catch (JsonException)
+        {
+            return new PublicSitePublishStatus(false, -1, DateTimeOffset.UtcNow, "Publish status is invalid.");
+        }
+    }
+
+    private void PublishWithStatus(PublicSiteSettings settings)
+    {
+        try
+        {
+            Publish(settings);
+            WriteAtomic(_publishStatusPath, new PublicSitePublishStatus(true, settings.Revision, DateTimeOffset.UtcNow, null));
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            try
+            {
+                WriteAtomic(_publishStatusPath, new PublicSitePublishStatus(
+                    false,
+                    settings.Revision,
+                    DateTimeOffset.UtcNow,
+                    error.GetType().Name + ": " + error.Message));
+            }
+            catch
+            {
+                // Do not mask the original snapshot publication failure.
+            }
+            throw;
+        }
     }
 
     private void Publish(PublicSiteSettings settings)
@@ -223,13 +262,17 @@ internal static class PublicSiteConfigEndpoints
                 }));
             return Results.Ok(result);
         }
-        catch (Exception error) when (error is InvalidDataException or IOException or UnauthorizedAccessException)
+        catch (InvalidDataException error)
         {
-            auditLog.Write(new SecurityAuditEvent(actorId, actorName, "public-site.settings.update", "public-site", "", false,
-                context.Connection.RemoteIpAddress?.ToString() ?? "unknown", context.TraceIdentifier,
-                new Dictionary<string, string> { ["reason"] = error.GetType().Name }));
+            AuditFailure(context, auditLog, actorId, actorName, error);
             return Results.Json(new { ok = false, code = "PUBLIC_SITE_SETTINGS_INVALID", error = error.Message },
                 statusCode: StatusCodes.Status400BadRequest);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            AuditFailure(context, auditLog, actorId, actorName, error);
+            return Results.Json(new { ok = false, code = "PUBLIC_SITE_PUBLISH_FAILED", error = error.Message },
+                statusCode: StatusCodes.Status503ServiceUnavailable);
         }
     }
 
@@ -245,6 +288,18 @@ internal static class PublicSiteConfigEndpoints
             return Results.Json(new { ok = false, code = "PUBLIC_SITE_PUBLISH_FAILED", error = error.Message },
                 statusCode: StatusCodes.Status503ServiceUnavailable);
         }
+    }
+
+    private static void AuditFailure(
+        HttpContext context,
+        SecurityAuditLog auditLog,
+        string actorId,
+        string actorName,
+        Exception error)
+    {
+        auditLog.Write(new SecurityAuditEvent(actorId, actorName, "public-site.settings.update", "public-site", "", false,
+            context.Connection.RemoteIpAddress?.ToString() ?? "unknown", context.TraceIdentifier,
+            new Dictionary<string, string> { ["reason"] = error.GetType().Name }));
     }
 
     private static async Task<bool> ValidateCsrfAsync(HttpContext context, IAntiforgery antiforgery)
