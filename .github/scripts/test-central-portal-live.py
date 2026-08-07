@@ -25,6 +25,10 @@ CENTRAL_ACCESS = "central-e2e-access-code-0123456789ABCDEF"
 PORTAL_PASSWORD = "Portal-E2E-BreakGlass-2026!"
 PORTAL_ACCESS = "portal-e2e-access-code-0123456789ABCDEF"
 PORTAL_ID = "portal-e2e"
+DENIED_PORTAL_ID = "portal-denied"
+MANAGED_USER = "operator-e2e"
+MANAGED_PASSWORD = "Operator-E2E-Password-2026!"
+TEAM_ID = "operators-e2e"
 
 
 class JsonClient:
@@ -156,6 +160,17 @@ def login_central(client: JsonClient) -> None:
     client.csrf()
 
 
+def login_managed_central(client: JsonClient) -> None:
+    login = client.json(
+        "POST",
+        "/api/v1/auth/local/login",
+        {"userName": MANAGED_USER, "password": MANAGED_PASSWORD},
+    )
+    if login.get("authenticated") is not True or login.get("role") != "OperatorL1":
+        raise RuntimeError(f"Managed local login returned an invalid session: {login}")
+    client.csrf()
+
+
 def login_portal(client: JsonClient) -> None:
     authorization = {"Authorization": "Bearer " + PORTAL_ACCESS}
     login = client.json(
@@ -182,6 +197,13 @@ def create_connection_file(central: JsonClient) -> dict[str, Any]:
     )
     if created.get("portal", {}).get("id") != PORTAL_ID:
         raise RuntimeError("Central did not create the expected Portal.")
+
+    central.json(
+        "POST",
+        "/api/v1/admin/portals/",
+        {"id": DENIED_PORTAL_ID, "name": "Denied Portal E2E"},
+        expected=201,
+    )
 
     raw, headers = central.request(
         "POST",
@@ -210,6 +232,103 @@ def create_connection_file(central: JsonClient) -> dict[str, Any]:
     if document["portalId"] != PORTAL_ID or len(document["portalToken"]) < 32:
         raise RuntimeError("Central connection file credential is invalid.")
     return document
+
+
+def create_managed_access(central: JsonClient) -> None:
+    user = central.json(
+        "POST",
+        "/api/settings/users",
+        {
+            "userName": MANAGED_USER,
+            "displayName": "Operator E2E",
+            "password": MANAGED_PASSWORD,
+            "role": "OperatorL1",
+        },
+    )
+    if user.get("user", {}).get("key") != f"local:{MANAGED_USER}":
+        raise RuntimeError(f"Current UI user endpoint returned an invalid identity: {user}")
+
+    snapshot = central.json("GET", "/api/access-control")
+    user_keys = {item.get("identityKey") for item in snapshot.get("users", [])}
+    portal_ids = {item.get("id") for item in snapshot.get("portals", [])}
+    if f"local:{MANAGED_USER}" not in user_keys:
+        raise RuntimeError(f"Access-control snapshot does not contain the managed user: {snapshot}")
+    if PORTAL_ID not in portal_ids or DENIED_PORTAL_ID not in portal_ids:
+        raise RuntimeError(f"Access-control snapshot does not contain both test Portals: {snapshot}")
+    if "portal.connect" not in snapshot.get("capabilities", []):
+        raise RuntimeError("Access-control snapshot does not expose capabilities.")
+
+    saved = central.json(
+        "POST",
+        "/api/access-control/teams",
+        {
+            "id": TEAM_ID,
+            "name": "Operators E2E",
+            "description": "Classic UI live RBAC contract",
+            # Deliberately use the old broken shape. The compatibility endpoint
+            # must normalize it to the canonical IdentityAccessStore key.
+            "members": [f"local:local:{MANAGED_USER}"],
+            "portalIds": [PORTAL_ID],
+            "profile": {},
+        },
+    )
+    team = saved.get("team", {})
+    if team.get("members") != [f"local:{MANAGED_USER}"]:
+        raise RuntimeError(f"Team member key was not normalized: {saved}")
+    if team.get("portalIds") != [PORTAL_ID]:
+        raise RuntimeError(f"Team Portal assignment was not persisted: {saved}")
+
+    simulated = central.json(
+        "POST",
+        "/api/access-control/simulate",
+        {"memberKey": f"local:local:{MANAGED_USER}"},
+    )
+    by_portal = {item.get("id"): item for item in simulated.get("result", [])}
+    if by_portal.get(PORTAL_ID, {}).get("allowed") is not True:
+        raise RuntimeError(f"Assigned Portal was denied by simulation: {simulated}")
+    if by_portal.get(DENIED_PORTAL_ID, {}).get("allowed") is not False:
+        raise RuntimeError(f"Unassigned Portal was allowed by simulation: {simulated}")
+
+
+def verify_managed_portal_access(client: JsonClient) -> None:
+    session = client.json("GET", "/api/v1/auth/session")
+    if "OperatorL1" not in session.get("roles", []):
+        raise RuntimeError(f"Managed session lost its OperatorL1 role: {session}")
+
+    portals = client.json("GET", "/api/portals")
+    visible = portals.get("portals", [])
+    visible_ids = {item.get("id") for item in visible}
+    if visible_ids != {PORTAL_ID}:
+        raise RuntimeError(f"Managed user sees an invalid Portal scope: {visible_ids}")
+    access = visible[0].get("access", {}) if visible else {}
+    if TEAM_ID not in access.get("teams", []):
+        raise RuntimeError(f"Managed Portal view does not expose the effective team: {visible}")
+    if access.get("capabilities", {}).get("portal.connect") != "allow":
+        raise RuntimeError(f"Managed Portal connect capability is not allowed: {visible}")
+
+    connected = client.json(
+        "POST",
+        f"/api/portals/{PORTAL_ID}/connect",
+        {},
+        timeout=45,
+    )
+    if connected.get("url") != f"/connect/{PORTAL_ID}/":
+        raise RuntimeError(f"Current UI connect returned an invalid tunnel URL: {connected}")
+
+    proxied = client.json(
+        "GET",
+        f"/connect/{PORTAL_ID}/api/v1/system/info",
+        timeout=45,
+    )
+    if proxied.get("product") != "SIRK Portal":
+        raise RuntimeError(f"Managed user could not use the assigned Portal tunnel: {proxied}")
+
+    client.request(
+        "GET",
+        f"/connect/{DENIED_PORTAL_ID}/api/v1/system/info",
+        expected=403,
+        timeout=15,
+    )
 
 
 def wait_connected(central: JsonClient, timeout_seconds: int = 60) -> dict[str, Any]:
@@ -321,6 +440,7 @@ def main() -> int:
                 raise RuntimeError("Central one-time bootstrap file was not removed.")
             login_central(central_client)
             connection = create_connection_file(central_client)
+            create_managed_access(central_client)
 
             portal_process = start_process(portal_dll, portal_env, portal_log)
             wait_ready(portal_client, "Portal")
@@ -372,7 +492,11 @@ def main() -> int:
             if proxied.get("central", {}).get("connected") is not True:
                 raise RuntimeError("Proxied Portal system state is not connected to Central.")
 
-            print("SIRK Central -> Portal live connection, heartbeat and reverse tunnel: OK")
+            managed_client = JsonClient(CENTRAL_ORIGIN, ssl_context)
+            login_managed_central(managed_client)
+            verify_managed_portal_access(managed_client)
+
+            print("SIRK Central -> Portal live connection, team-scoped managed login and reverse tunnel: OK")
             return 0
         except Exception:
             dump_log("Central", central_log)
