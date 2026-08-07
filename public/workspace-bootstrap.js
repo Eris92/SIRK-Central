@@ -57,6 +57,21 @@
         });
     }
 
+    function normalizeClassicAccessSnapshot(payload) {
+        if (!payload || !Array.isArray(payload.users)) return payload;
+        return Object.assign({}, payload, {
+            users: payload.users.map(user => {
+                const source = String(user && user.source || "").toLowerCase();
+                let key = String(user && user.identityKey || "");
+                const prefix = source ? source + ":" : "";
+                if (prefix && key.toLowerCase().startsWith(prefix)) {
+                    key = key.slice(prefix.length);
+                }
+                return Object.assign({}, user, { identityKey: key });
+            })
+        });
+    }
+
     async function rewriteJsonResponse(response, transform) {
         const contentType = response.headers.get("content-type") || "";
         if (!contentType.includes("application/json")) return response;
@@ -118,6 +133,10 @@
 
         if (url.pathname === "/api/login" && response.ok) {
             return rewriteJsonResponse(response, normalizeIdentity);
+        }
+
+        if (url.pathname === "/api/access-control" && response.ok) {
+            return rewriteJsonResponse(response, normalizeClassicAccessSnapshot);
         }
 
         return response;
