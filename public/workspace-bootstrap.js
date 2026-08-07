@@ -13,6 +13,17 @@
         workspaces: ["portals"]
     };
 
+    function permissionsForRole(role) {
+        if (role === "BreakGlass") return ["*"];
+        if (role === "Admin" || role === "SecAdmin") {
+            return ["portals.manage", "portals.connect", "users.manage", "access.manage"];
+        }
+        if (role === "OperatorL1" || role === "SupportL2" || role === "EngineerL3") {
+            return ["portals.connect"];
+        }
+        return [];
+    }
+
     function normalizeIdentity(payload) {
         if (!payload || payload.authenticated !== true) return payload;
 
@@ -42,9 +53,7 @@
             builtIn,
             permissions: Array.isArray(payload.permissions)
                 ? payload.permissions
-                : builtIn
-                    ? ["*"]
-                    : []
+                : permissionsForRole(role)
         });
     }
 
@@ -66,14 +75,23 @@
     }
 
     window.fetch = async function sirkCompatibilityFetch(input, init) {
-        const response = await originalFetch(input, init);
         let url;
         try {
             url = new URL(typeof input === "string" ? input : input.url, window.location.href);
         } catch (_) {
-            return response;
+            return originalFetch(input, init);
         }
 
+        let requestInput = input;
+        if (
+            url.origin === window.location.origin &&
+            url.pathname === "/api/login" &&
+            !accessCode
+        ) {
+            requestInput = "/api/v1/auth/local/login";
+        }
+
+        const response = await originalFetch(requestInput, init);
         if (url.origin !== window.location.origin) return response;
 
         if (url.pathname === "/api/access" && response.ok) {
@@ -105,21 +123,27 @@
         return response;
     };
 
+    function localLoginAllowed() {
+        return accessCode
+            ? accessValidationComplete && accessCodeValid
+            : true;
+    }
+
     function enforceLocalLoginGate() {
         const panel = document.getElementById("breakGlassPanel");
         if (!panel) return;
 
-        const allowed = accessValidationComplete && accessCodeValid;
-        if (!allowed && !panel.hidden) panel.hidden = true;
+        const allowed = localLoginAllowed();
+        if (panel.hidden === allowed) panel.hidden = !allowed;
         panel.setAttribute("aria-hidden", String(!allowed));
         panel.dataset.accessValidated = allowed ? "true" : "false";
+        panel.dataset.loginMode = accessCode ? "break-glass" : "managed-local";
     }
 
     function mountLocalLoginGate() {
         const panel = document.getElementById("breakGlassPanel");
         if (!panel) return;
 
-        panel.hidden = true;
         enforceLocalLoginGate();
         if (gateObserver) gateObserver.disconnect();
         gateObserver = new MutationObserver(enforceLocalLoginGate);
@@ -178,12 +202,10 @@
         accessValidationComplete = true;
         enforceLocalLoginGate();
 
-        const panel = document.getElementById("breakGlassPanel");
         const loginView = document.getElementById("loginView");
         const dashboardView = document.getElementById("dashboardView");
         const dashboardVisible = Boolean(dashboardView && !dashboardView.hidden);
 
-        if (panel && accessCodeValid) panel.hidden = false;
         if (loginView && !dashboardVisible) loginView.hidden = false;
         mountAdvancedWorkspaceButton();
         mountPortalTunnelUi();
