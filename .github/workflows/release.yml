@@ -1,0 +1,114 @@
+name: Signed Central Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Release channel
+        required: true
+        default: preview
+        type: choice
+        options: [preview, stable]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      VERSION: 0.1.1.${{ github.run_number }}
+      CHANNEL: ${{ inputs.channel }}
+      SIGNING_PRIVATE_KEY_PEM: ${{ secrets.SIRK_RELEASE_SIGNING_PRIVATE_KEY_PEM }}
+      SIGNING_KEY_ID: ${{ secrets.SIRK_RELEASE_SIGNING_KEY_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Validate release source
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash .github/scripts/validate-node-free-dotnet10.sh
+          dotnet restore src/Sirk.Central/Sirk.Central.csproj
+          dotnet build src/Sirk.Central/Sirk.Central.csproj -c Release --no-restore
+      - name: Require release signing root
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "$SIGNING_PRIVATE_KEY_PEM" ]] || { echo 'SIRK_RELEASE_SIGNING_PRIVATE_KEY_PEM is required.' >&2; exit 1; }
+          [[ "$SIGNING_KEY_ID" =~ ^[A-Za-z0-9._-]{1,80}$ ]] || { echo 'SIRK_RELEASE_SIGNING_KEY_ID is invalid.' >&2; exit 1; }
+          printf '%s' "$SIGNING_PRIVATE_KEY_PEM" > "$RUNNER_TEMP/release-key.pem"
+          chmod 0600 "$RUNNER_TEMP/release-key.pem"
+      - name: Build signed Central package
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload=artifacts/central-release
+          release=artifacts/release
+          rm -rf "$payload" "$release"
+          mkdir -p "$payload/deploy/dotnet10" "$payload/src" "$release"
+          cp Dockerfile.dotnet10 Directory.Build.props global.json "$payload/"
+          cp deploy/upgrade-dotnet10-vps.sh "$payload/deploy/"
+          cp deploy/dotnet10/Caddyfile "$payload/deploy/dotnet10/"
+          cp -a src/Sirk.Central "$payload/src/"
+          cp -a website "$payload/"
+          [[ ! -e "$payload/.git" ]]
+          python3 - "$payload" "$VERSION" "$SIGNING_KEY_ID" "$RUNNER_TEMP/release-key.pem" <<'PY'
+          import base64,hashlib,json,os,subprocess,sys,tempfile
+          root,version,key_id,key_path=sys.argv[1:]
+          files=[]
+          for base,dirs,names in os.walk(root):
+              dirs[:]=[d for d in dirs if d not in ('.git','bin','obj')]
+              for name in names:
+                  p=os.path.join(base,name); rel=os.path.relpath(p,root).replace(os.sep,'/')
+                  if rel=='update-manifest.json': continue
+                  data=open(p,'rb').read(); files.append({'path':rel,'size':len(data),'sha256':hashlib.sha256(data).hexdigest()})
+          files.sort(key=lambda x:x['path'])
+          obj={'schemaVersion':1,'applicationId':'sirk-central','product':'SIRK Central','version':version,'runtime':'linux-x64','files':files,'signature':{'algorithm':'ES256','keyId':key_id,'value':''}}
+          canonical=json.dumps({k:v for k,v in obj.items() if k!='signature'},sort_keys=True,separators=(',',':')).encode()
+          with tempfile.NamedTemporaryFile(delete=False) as f:f.write(canonical);p=f.name
+          der=p+'.sig';subprocess.check_call(['openssl','dgst','-sha256','-sign',key_path,'-out',der,p]);sig=open(der,'rb').read()
+          def rl(b,i):
+              n=b[i];i+=1
+              if n<128:return n,i
+              c=n&127;return int.from_bytes(b[i:i+c],'big'),i+c
+          i=1;_,i=rl(sig,i);i+=1;n,i=rl(sig,i);r=sig[i:i+n];i+=n;i+=1;n,i=rl(sig,i);s=sig[i:i+n]
+          obj['signature']['value']=base64.urlsafe_b64encode(r.lstrip(b'\0').rjust(32,b'\0')+s.lstrip(b'\0').rjust(32,b'\0')).decode().rstrip('=')
+          with open(os.path.join(root,'update-manifest.json'),'w',encoding='utf-8') as f:json.dump(obj,f,separators=(',',':'))
+          os.unlink(p);os.unlink(der)
+          PY
+          asset="$release/SIRK-Central-${VERSION}-linux-x64.zip"
+          (cd "$payload" && zip -q -r "$GITHUB_WORKSPACE/$asset" .)
+          python3 - "$asset" "$VERSION" "$CHANNEL" "$GITHUB_SHA" "$SIGNING_KEY_ID" "$RUNNER_TEMP/release-key.pem" "$release/SIRK-Central-${VERSION}-linux-x64.update.json" <<'PY'
+          import base64,datetime,hashlib,json,os,subprocess,sys,tempfile
+          asset,version,channel,commit,key_id,key_path,out=sys.argv[1:]
+          data=open(asset,'rb').read();published=datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='microseconds')
+          obj={'schemaVersion':1,'applicationId':'sirk-central','product':'SIRK Central','version':version,'runtime':'linux-x64','channel':channel,'assetName':os.path.basename(asset),'size':len(data),'sha256':hashlib.sha256(data).hexdigest(),'commit':commit,'publishedAtUtc':published,'signature':{'algorithm':'ES256','keyId':key_id,'value':''}}
+          canonical=json.dumps({k:v for k,v in obj.items() if k!='signature'},sort_keys=True,separators=(',',':')).encode()
+          with tempfile.NamedTemporaryFile(delete=False) as f:f.write(canonical);p=f.name
+          der=p+'.sig';subprocess.check_call(['openssl','dgst','-sha256','-sign',key_path,'-out',der,p]);sig=open(der,'rb').read()
+          def rl(b,i):
+              n=b[i];i+=1
+              if n<128:return n,i
+              c=n&127;return int.from_bytes(b[i:i+c],'big'),i+c
+          i=1;_,i=rl(sig,i);i+=1;n,i=rl(sig,i);r=sig[i:i+n];i+=n;i+=1;n,i=rl(sig,i);s=sig[i:i+n]
+          obj['signature']['value']=base64.urlsafe_b64encode(r.lstrip(b'\0').rjust(32,b'\0')+s.lstrip(b'\0').rjust(32,b'\0')).decode().rstrip('=')
+          with open(out,'w',encoding='utf-8') as f:json.dump(obj,f,separators=(',',':'))
+          os.unlink(p);os.unlink(der)
+          PY
+      - name: Publish immutable GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=("v$VERSION" "artifacts/release/SIRK-Central-${VERSION}-linux-x64.zip" "artifacts/release/SIRK-Central-${VERSION}-linux-x64.update.json")
+          if [[ "$CHANNEL" == preview ]]; then args+=(--prerelease); fi
+          gh release create "${args[@]}" --title "SIRK Central $VERSION" --target "$GITHUB_SHA" --notes "Signed SIRK Central $CHANNEL self-update. Installed updates are consumed from the local Central verified cache."
+      - name: Remove private key
+        if: always()
+        shell: bash
+        run: rm -f "$RUNNER_TEMP/release-key.pem"
