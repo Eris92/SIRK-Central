@@ -57,14 +57,21 @@ test -f artifacts/linux-x64/Sirk.Central.dll
 test -f artifacts/linux-x64/public/index.html
 
 mkdir -p secrets
+printf '%s\n' '{"keys":[{"keyId":"ci-only","publicKeyPem":"-----BEGIN PUBLIC KEY-----\\nCI FIXTURE ONLY\\n-----END PUBLIC KEY-----"}]}' \
+  > secrets/sirk-release-trusted-keys.json
+printf '%064d\n' 0 > secrets/sirk-updates-github-token
+printf '%064d\n' 1 > secrets/sirk-update-host-token
 touch \
   secrets/sirk-central-dataprotection.pfx \
   secrets/sirk-central-dataprotection-password \
-  secrets/sirk-release-signing-public-key \
   secrets/sirk-demo-control-token
 
 docker compose config > /tmp/sirk-central-compose.yml
 test "$(docker compose config --services | sort | tr '\n' ' ')" = "caddy central demo-orchestrator "
+grep -q '/var/lib/sirk/updates' /tmp/sirk-central-compose.yml
+grep -q 'sirk-updates-github-token' /tmp/sirk-central-compose.yml
+! grep -q 'sirk-agent-updates-github-token' /tmp/sirk-central-compose.yml
+! grep -q 'sirk-release-signing-public-key' /tmp/sirk-central-compose.yml
 
 docker run --rm \
   -e SIRK_ACME_EMAIL=admin@example.test \
