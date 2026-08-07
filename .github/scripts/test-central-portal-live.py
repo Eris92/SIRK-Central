@@ -320,7 +320,7 @@ def verify_managed_portal_access(client: JsonClient) -> None:
         f"/connect/{PORTAL_ID}/api/v1/system/info",
         timeout=45,
     )
-    if proxied.get("product") != "SIRK Portal":
+    if proxied.get("product") != "SIRK Portal" or proxied.get("delegated") is not True:
         raise RuntimeError(f"Managed user could not use the assigned Portal tunnel: {proxied}")
 
     client.request(
@@ -343,30 +343,20 @@ def wait_connected(central: JsonClient, timeout_seconds: int = 60) -> dict[str, 
     raise RuntimeError(f"Central did not receive the Portal heartbeat: {last}")
 
 
-def wait_proxied_portal_connected(
-    central: JsonClient,
-    timeout_seconds: int = 15,
-) -> dict[str, Any]:
-    # Central records the inbound heartbeat while handling the request. The
-    # Portal marks its own state connected only after the 202 response reaches
-    # it, so the Central-side telemetry can lead the Portal-side snapshot by a
-    # small amount. Keep the product assertion, but wait for propagation.
-    deadline = time.monotonic() + timeout_seconds
-    last: dict[str, Any] = {}
-    while time.monotonic() < deadline:
-        last = central.json(
-            "GET",
-            f"/connect/{PORTAL_ID}/api/v1/system/info",
-            timeout=45,
-        )
-        if (
-            last.get("product") == "SIRK Portal" and
-            last.get("runtime") == ".NET 10" and
-            last.get("central", {}).get("connected") is True
-        ):
-            return last
-        time.sleep(0.25)
-    raise RuntimeError(f"Proxied Portal system state did not become connected: {last}")
+def verify_breakglass_tunnel(central: JsonClient) -> dict[str, Any]:
+    value = central.json(
+        "GET",
+        f"/connect/{PORTAL_ID}/api/v1/system/info",
+        timeout=45,
+    )
+    if (
+        value.get("product") != "SIRK Portal" or
+        value.get("runtime") != ".NET 10" or
+        value.get("delegated") is not True or
+        value.get("portalId") != PORTAL_ID
+    ):
+        raise RuntimeError(f"Central reverse tunnel returned an invalid delegated Portal response: {value}")
+    return value
 
 
 def dump_log(label: str, path: Path) -> None:
@@ -508,7 +498,7 @@ def main() -> int:
             if connected.get("ok") is not True:
                 raise RuntimeError("Central reverse-tunnel connect failed.")
 
-            wait_proxied_portal_connected(central_client)
+            verify_breakglass_tunnel(central_client)
 
             managed_client = JsonClient(CENTRAL_ORIGIN, ssl_context)
             login_managed_central(managed_client)
