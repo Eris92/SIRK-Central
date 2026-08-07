@@ -2,68 +2,215 @@
 set -Eeuo pipefail
 umask 077
 
-INSTALL_DIR="${SIRK_INSTALL_DIR:-/opt/sirk-central}"
-REPO_REF="${SIRK_REPO_REF:-main}"
-BASE_COMPOSE_FILE="${SIRK_COMPOSE_FILE:-docker-compose.yml}"
-KEEP_MAINTENANCE_OPEN="${SIRK_UPDATE_KEEP_MAINTENANCE_OPEN:-false}"
+INSTALL_ROOT="${INSTALL_ROOT:-/opt/sirk-central}"
+SOURCE_DIR="${SOURCE_DIR:-${INSTALL_ROOT}/source}"
+SECRETS_DIR="${SECRETS_DIR:-${INSTALL_ROOT}/secrets}"
+UPDATE_CACHE_DIR="${UPDATE_CACHE_DIR:-${INSTALL_ROOT}/updates}"
+STATE_FILE="${UPDATE_STATE_FILE:-${INSTALL_ROOT}/current-release.json}"
+PREVIOUS_SOURCE_DIR="${INSTALL_ROOT}/source.previous"
+CENTRAL_LOCAL_URL="${SIRK_CENTRAL_LOCAL_URL:-http://127.0.0.1:8080}"
+HOST_TOKEN_FILE="${SIRK_UPDATE_HOST_TOKEN_FILE:-${SECRETS_DIR}/sirk-update-host-token}"
+LOCK_FILE="${INSTALL_ROOT}/update.lock"
 
 log() { printf '[SIRK UPDATE] %s\n' "$*"; }
 die() { printf '[SIRK UPDATE] ERROR: %s\n' "$*" >&2; exit 1; }
 
 [[ "$(id -u)" -eq 0 ]] || die "run this script through sudo or as root"
-[[ -d "${INSTALL_DIR}/.git" ]] || die "${INSTALL_DIR} is not a Git clone"
-[[ -f "${INSTALL_DIR}/.env" ]] || die "${INSTALL_DIR}/.env is missing"
-[[ -f "${INSTALL_DIR}/${BASE_COMPOSE_FILE}" ]] || die "missing ${BASE_COMPOSE_FILE}"
-[[ -f "${INSTALL_DIR}/deploy/web-update.sh" ]] || die "transactional update script is missing"
-[[ -f "${INSTALL_DIR}/deploy/maintenance-up.sh" ]] || die "maintenance-up.sh is missing"
-[[ -f "${INSTALL_DIR}/deploy/maintenance-down.sh" ]] || die "maintenance-down.sh is missing"
-command -v docker >/dev/null 2>&1 || die "docker is required"
-docker compose version >/dev/null 2>&1 || die "Docker Compose plugin is required"
-git check-ref-format --branch "$REPO_REF" >/dev/null 2>&1 || die "invalid repository ref: $REPO_REF"
-
-cd "$INSTALL_DIR"
-COMPOSE=(docker compose -f "$BASE_COMPOSE_FILE" --profile auth --profile maintenance)
-
-close_maintenance() {
-  if [[ "$KEEP_MAINTENANCE_OPEN" != "true" ]]; then
-    SIRK_INSTALL_DIR="$INSTALL_DIR" \
-    SIRK_COMPOSE_FILE="$BASE_COMPOSE_FILE" \
-          bash deploy/maintenance-down.sh || true
-  fi
-}
-trap close_maintenance EXIT
-
-log "Opening the explicit updater maintenance window"
-SIRK_INSTALL_DIR="$INSTALL_DIR" \
-SIRK_COMPOSE_FILE="$BASE_COMPOSE_FILE" \
-  bash deploy/maintenance-up.sh
-
-updater_id="$("${COMPOSE[@]}" ps -q updater)"
-[[ -n "$updater_id" ]] || die "privileged updater worker is not running"
-
-requested_by="cli:$(id -un)@$(hostname -s 2>/dev/null || hostname)"
-started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-log "Running transactional update to origin/${REPO_REF}"
-
-"${COMPOSE[@]}" exec -T \
-  -e "SIRK_REPO_REF=${REPO_REF}" \
-  -e "SIRK_UPDATE_REQUESTED_BY=${requested_by}" \
-  -e "SIRK_UPDATE_STARTED_AT=${started_at}" \
-  updater /usr/bin/env bash /opt/sirk-central/deploy/web-update.sh
-
-log "Verifying canonical base stack"
-BASE_COMPOSE=(docker compose -f "$BASE_COMPOSE_FILE" --profile auth)
-for service in central auth updater-gateway backup-manager caddy; do
-  [[ -n "$("${BASE_COMPOSE[@]}" ps -q "$service")" ]] || die "base service is missing after update: $service"
+for command in curl jq python3 sha256sum stat docker; do
+    command -v "$command" >/dev/null 2>&1 || die "missing command: $command"
 done
+[[ -d "$SOURCE_DIR" ]] || die "Central source directory is missing: $SOURCE_DIR"
+[[ -s "$HOST_TOKEN_FILE" ]] || die "host update control token is missing"
+[[ -d "$UPDATE_CACHE_DIR" ]] || die "Central update cache is missing: $UPDATE_CACHE_DIR"
+[[ -x "$SOURCE_DIR/deploy/upgrade-dotnet10-vps.sh" ]] || chmod 0700 "$SOURCE_DIR/deploy/upgrade-dotnet10-vps.sh"
+[[ -s "$SOURCE_DIR/deploy/upgrade-dotnet10-vps.sh" ]] || die "current deployment helper is missing"
 
-central_id="$("${BASE_COMPOSE[@]}" ps -q central)"
-docker exec "$central_id" node -e "fetch('http://127.0.0.1:8080/readyz').then(async r=>{const b=await r.json();if(!r.ok||!b.ok)process.exit(1)}).catch(()=>process.exit(1))" \
-  || die "Central readiness validation failed after update"
+exec 9>"$LOCK_FILE"
+flock -n 9 || die "another Central update is already running"
+chmod 0600 "$LOCK_FILE"
 
-log "Transactional update completed at commit $(git rev-parse --short HEAD)"
-if [[ "$KEEP_MAINTENANCE_OPEN" == "true" ]]; then
-  log "Maintenance worker intentionally remains open because SIRK_UPDATE_KEEP_MAINTENANCE_OPEN=true"
-else
-  log "Maintenance worker will now be stopped and removed"
+current_commit() {
+    if [[ -s "$SOURCE_DIR/.sirk-release-commit" ]]; then
+        tr -d '\r\n' < "$SOURCE_DIR/.sirk-release-commit"
+        return
+    fi
+    if [[ -d "$SOURCE_DIR/.git" ]] && command -v git >/dev/null 2>&1; then
+        git -C "$SOURCE_DIR" rev-parse HEAD 2>/dev/null || true
+    fi
+}
+
+CURRENT_COMMIT="$(current_commit)"
+[[ -z "$CURRENT_COMMIT" || "$CURRENT_COMMIT" =~ ^[0-9a-f]{40}$ ]] ||
+    die "current Central source commit marker is invalid"
+CURRENT_VERSION=""
+if [[ -s "$STATE_FILE" ]]; then
+    CURRENT_VERSION="$(jq -r '.version // empty' "$STATE_FILE")"
 fi
+
+HOST_TOKEN="$(tr -d '\r\n' < "$HOST_TOKEN_FILE")"
+[[ ${#HOST_TOKEN} -ge 32 && ${#HOST_TOKEN} -le 512 ]] || die "host update control token is invalid"
+CURL_CONFIG="$(mktemp /tmp/sirk-central-update-curl.XXXXXX)"
+RESPONSE_FILE="$(mktemp /tmp/sirk-central-update-response.XXXXXX.json)"
+STAGING_ROOT="$(mktemp -d "${INSTALL_ROOT}/.update-source.XXXXXX")"
+BACKUP_SOURCE="${INSTALL_ROOT}/.source-backup-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+FAILED_SOURCE="${INSTALL_ROOT}/.source-failed-$$"
+cleanup() {
+    rm -f "$CURL_CONFIG" "$RESPONSE_FILE"
+    [[ ! -d "$STAGING_ROOT" ]] || rm -rf --one-file-system "$STAGING_ROOT"
+    unset HOST_TOKEN || true
+}
+trap cleanup EXIT
+
+cat > "$CURL_CONFIG" <<EOF
+silent
+show-error
+fail
+max-time = 900
+request = "POST"
+url = "${CENTRAL_LOCAL_URL}/api/internal/v1/update/central/prepare"
+header = "Authorization: Bearer ${HOST_TOKEN}"
+header = "Accept: application/json"
+output = "${RESPONSE_FILE}"
+EOF
+chmod 0600 "$CURL_CONFIG"
+
+log "requesting a verified SIRK Central release from the local Central broker"
+curl --config "$CURL_CONFIG"
+unset HOST_TOKEN
+rm -f "$CURL_CONFIG"
+
+APPLICATION_ID="$(jq -r '.applicationId // empty' "$RESPONSE_FILE")"
+VERSION="$(jq -r '.version // empty' "$RESPONSE_FILE")"
+RUNTIME="$(jq -r '.runtime // empty' "$RESPONSE_FILE")"
+CHANNEL="$(jq -r '.channel // empty' "$RESPONSE_FILE")"
+SIZE="$(jq -r '.size // empty' "$RESPONSE_FILE")"
+SHA256="$(jq -r '.sha256 // empty' "$RESPONSE_FILE" | tr '[:upper:]' '[:lower:]')"
+COMMIT="$(jq -r '.commit // empty' "$RESPONSE_FILE" | tr '[:upper:]' '[:lower:]')"
+CONTAINER_PACKAGE="$(jq -r '.packagePath // empty' "$RESPONSE_FILE")"
+
+[[ "$APPLICATION_ID" == "sirk-central" ]] || die "broker returned a different application"
+[[ "$VERSION" =~ ^0\.1\.1\.[0-9]+$ ]] || die "broker returned a non-canonical pre-1.0 version"
+[[ "$RUNTIME" == "linux-x64" ]] || die "broker returned an unsupported runtime"
+[[ "$CHANNEL" == "stable" ]] || die "broker returned an unsupported channel"
+[[ "$SIZE" =~ ^[0-9]+$ && "$SIZE" -gt 0 && "$SIZE" -le 536870912 ]] || die "broker returned an invalid package size"
+[[ "$SHA256" =~ ^[0-9a-f]{64}$ ]] || die "broker returned an invalid SHA256"
+[[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || die "broker returned an invalid commit"
+case "$CONTAINER_PACKAGE" in
+    /var/lib/sirk/updates/*) ;;
+    *) die "broker returned a package outside the Central update cache" ;;
+esac
+RELATIVE_PACKAGE="${CONTAINER_PACKAGE#/var/lib/sirk/updates/}"
+[[ "$RELATIVE_PACKAGE" != *".."* && "$RELATIVE_PACKAGE" != /* ]] || die "broker returned an unsafe cache path"
+PACKAGE_PATH="${UPDATE_CACHE_DIR}/${RELATIVE_PACKAGE}"
+[[ -f "$PACKAGE_PATH" ]] || die "verified cache package is missing on the host"
+[[ "$(stat -c %s "$PACKAGE_PATH")" == "$SIZE" ]] || die "cached package size changed after broker verification"
+ACTUAL_SHA="$(sha256sum "$PACKAGE_PATH" | awk '{print tolower($1)}')"
+[[ "$ACTUAL_SHA" == "$SHA256" ]] || die "cached package SHA256 changed after broker verification"
+
+if [[ "$CURRENT_VERSION" == "$VERSION" && "$CURRENT_COMMIT" == "$COMMIT" ]]; then
+    log "Central is already at ${VERSION} (${COMMIT}); no update is required"
+    exit 0
+fi
+
+log "extracting verified ${VERSION} cache payload without repository access"
+python3 - "$PACKAGE_PATH" "$STAGING_ROOT" <<'PY'
+import os,pathlib,stat,sys,zipfile
+archive=pathlib.Path(sys.argv[1])
+root=pathlib.Path(sys.argv[2]).resolve()
+with zipfile.ZipFile(archive) as z:
+    if not 1 <= len(z.infolist()) <= 8192:
+        raise SystemExit('invalid archive entry count')
+    seen=set()
+    for info in z.infolist():
+        name=info.filename.replace('\\','/')
+        parts=pathlib.PurePosixPath(name).parts
+        if not name or name.startswith('/') or '..' in parts or name in seen:
+            raise SystemExit('unsafe or duplicate archive entry: '+name)
+        seen.add(name)
+        mode=(info.external_attr >> 16) & 0xFFFF
+        if stat.S_ISLNK(mode):
+            raise SystemExit('symlink archive entry is forbidden: '+name)
+        target=(root/pathlib.PurePosixPath(name)).resolve()
+        if root != target and root not in target.parents:
+            raise SystemExit('archive entry escaped staging root')
+    z.extractall(root)
+PY
+
+for required in \
+    Dockerfile.dotnet10 \
+    Directory.Build.props \
+    global.json \
+    src/Sirk.Central/Sirk.Central.csproj \
+    deploy/upgrade-dotnet10-vps.sh \
+    deploy/dotnet10/Caddyfile \
+    website/index.html \
+    update-manifest.json; do
+    [[ -f "$STAGING_ROOT/$required" ]] || die "verified release payload is incomplete: $required"
+done
+[[ ! -d "$STAGING_ROOT/.git" ]] || die "runtime release package must not contain repository metadata"
+printf '%s\n' "$COMMIT" > "$STAGING_ROOT/.sirk-release-commit"
+chmod 0600 "$STAGING_ROOT/.sirk-release-commit"
+chmod 0700 "$STAGING_ROOT/deploy/upgrade-dotnet10-vps.sh"
+
+rollback_source() {
+    local original_code="$1"
+    trap - ERR
+    log "deployment failed; restoring the previous verified/deployed source"
+    if [[ -d "$SOURCE_DIR" ]]; then
+        rm -rf --one-file-system "$FAILED_SOURCE" 2>/dev/null || true
+        mv "$SOURCE_DIR" "$FAILED_SOURCE" || true
+    fi
+    if [[ -d "$BACKUP_SOURCE" ]]; then
+        mv "$BACKUP_SOURCE" "$SOURCE_DIR"
+        if [[ "$CURRENT_COMMIT" =~ ^[0-9a-f]{40}$ && -s "$SOURCE_DIR/deploy/upgrade-dotnet10-vps.sh" ]]; then
+            SIRK_SOURCE_READY=1 \
+            SIRK_RELEASE_COMMIT="$CURRENT_COMMIT" \
+            SIRK_UPDATE_BUSINESS=0 \
+            INSTALL_ROOT="$INSTALL_ROOT" \
+            SOURCE_DIR="$SOURCE_DIR" \
+            UPDATE_CACHE_DIR="$UPDATE_CACHE_DIR" \
+            bash "$SOURCE_DIR/deploy/upgrade-dotnet10-vps.sh" || true
+        fi
+    fi
+    rm -rf --one-file-system "$FAILED_SOURCE" 2>/dev/null || true
+    exit "$original_code"
+}
+trap 'rollback_source $?' ERR
+
+mv "$SOURCE_DIR" "$BACKUP_SOURCE"
+mv "$STAGING_ROOT" "$SOURCE_DIR"
+STAGING_ROOT=""
+
+log "deploying ${VERSION} from the verified local cache"
+SIRK_SOURCE_READY=1 \
+SIRK_RELEASE_COMMIT="$COMMIT" \
+SIRK_UPDATE_BUSINESS=0 \
+INSTALL_ROOT="$INSTALL_ROOT" \
+SOURCE_DIR="$SOURCE_DIR" \
+UPDATE_CACHE_DIR="$UPDATE_CACHE_DIR" \
+bash "$SOURCE_DIR/deploy/upgrade-dotnet10-vps.sh"
+
+trap - ERR
+python3 - "$STATE_FILE" "$VERSION" "$COMMIT" "$SHA256" <<'PY'
+import datetime,json,os,sys,tempfile
+path,version,commit,sha=sys.argv[1:]
+data={
+  'schemaVersion':1,
+  'applicationId':'sirk-central',
+  'version':version,
+  'commit':commit,
+  'sha256':sha,
+  'updatedAtUtc':datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00','Z')
+}
+os.makedirs(os.path.dirname(path),exist_ok=True)
+fd,tmp=tempfile.mkstemp(dir=os.path.dirname(path),prefix='.current-release-',text=True)
+with os.fdopen(fd,'w') as f:
+    json.dump(data,f,indent=2);f.write('\n');f.flush();os.fsync(f.fileno())
+os.chmod(tmp,0o600)
+os.replace(tmp,path)
+PY
+
+rm -rf --one-file-system "$PREVIOUS_SOURCE_DIR" 2>/dev/null || true
+mv "$BACKUP_SOURCE" "$PREVIOUS_SOURCE_DIR"
+rm -f "$RESPONSE_FILE"
+log "Central update completed: ${VERSION} (${COMMIT})"
