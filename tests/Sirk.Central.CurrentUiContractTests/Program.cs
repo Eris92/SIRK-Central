@@ -2,6 +2,7 @@ var root = FindRepositoryRoot();
 var endpointRegistration = File.ReadAllText(Path.Combine(root, "src", "Sirk.Central", "Access", "IdentityAccessV2Endpoints.cs"));
 var adapter = File.ReadAllText(Path.Combine(root, "src", "Sirk.Central", "Ui", "CurrentUiEndpoints.cs"));
 var bootstrap = File.ReadAllText(Path.Combine(root, "public", "workspace-bootstrap.js"));
+var workspace = File.ReadAllText(Path.Combine(root, "public", "workspace.js"));
 var csrf = File.ReadAllText(Path.Combine(root, "public", "csrf-bootstrap.js"));
 var classic = File.ReadAllText(Path.Combine(root, "public", "app.js"));
 
@@ -28,16 +29,21 @@ Require(adapter.Contains("users = UiUsers(store)", StringComparison.Ordinal) &&
 Require(bootstrap.Contains("/api/v1/auth/local/login", StringComparison.Ordinal) &&
         bootstrap.Contains("managed-local", StringComparison.Ordinal) &&
         bootstrap.Contains("permissionsForRole", StringComparison.Ordinal),
-    "Managed local accounts must be able to sign in through the current UI without a Break-Glass access code.");
+    "Managed local accounts must be able to sign in through the current classic UI without a Break-Glass access code.");
 Require(bootstrap.Contains("normalizeClassicAccessSnapshot", StringComparison.Ordinal),
     "Classic team-member identity keys must be normalized before rendering checkboxes.");
+Require(workspace.Contains("\"/api/v1/auth/local/login\"", StringComparison.Ordinal) &&
+        workspace.Contains("? `/api/v1/break-glass/", StringComparison.Ordinal),
+    "The main workspace must separate managed local login from Break-Glass login.");
+Require(workspace.Contains("rawRequest(\"/api/portals\")", StringComparison.Ordinal),
+    "The main workspace must list Portals through the RBAC-filtered current-user endpoint.");
 Require(csrf.Contains("path === \"/api/v1/auth/local/login\"", StringComparison.Ordinal),
     "Managed local login must remain an anonymous write in the CSRF bootstrap.");
 Require(classic.Contains("api(\"/api/access-control\")", StringComparison.Ordinal) &&
         classic.Contains("method:\"POST\"", StringComparison.Ordinal),
     "The regression contract must continue to cover the currently deployed classic permissions UI shape.");
 
-Console.WriteLine("SIRK Central current permissions UI team, local-login and RBAC contracts: OK");
+Console.WriteLine("SIRK Central current permissions UI team, managed-login and RBAC contracts: OK");
 
 static string FindRepositoryRoot()
 {
