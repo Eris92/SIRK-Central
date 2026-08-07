@@ -13,6 +13,7 @@ using Sirk.Central.Organizations;
 using Sirk.Central.Portals;
 using Sirk.Central.Security;
 using Sirk.Central.Tickets;
+using Sirk.Central.Updates;
 
 if (RuntimeHealthProbe.IsRequested(args))
 {
@@ -47,6 +48,12 @@ builder.Services.AddSingleton<PortalRequestAuthenticator>();
 builder.Services.AddSingleton<PortalTelemetryStore>();
 builder.Services.Configure<SecurityOptions>(
     builder.Configuration.GetSection(SecurityOptions.SectionName));
+builder.Services.AddSingleton<AgentUpdateTicketService>();
+builder.Services.AddSingleton<AgentUpdateCache>();
+builder.Services.AddHttpClient("SirkAgentUpdates", client =>
+{
+    client.Timeout = TimeSpan.FromMinutes(5);
+});
 builder.Services.AddSingleton<SingleWriterLease>();
 builder.Services.AddSingleton<LocalIdentityStore>();
 builder.Services.AddSingleton<BreakGlassLoginTransactionStore>();
@@ -298,6 +305,7 @@ app.MapGet("/api/v1/system/version", () => Results.Ok(new
 }));
 
 app.MapPortalProtocol();
+AgentUpdateDistributionEndpoints.Map(app);
 if (securityOptions.Enabled)
 {
     app.MapSirkAuthentication();
