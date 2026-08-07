@@ -23,11 +23,6 @@ services:
       Sirk__Updates__HostControlTokenFile: /run/secrets/sirk-update-host-token
       Sirk__Updates__CacheRoot: /var/lib/sirk/updates
       Sirk__AgentUpdates__PublicBaseUrl: "https://${SIRK_CENTRAL_DOMAIN:-central.sirkportal.com}"
-      Sirk__AgentUpdates__GitHubRepository: "${SIRK_AGENT_UPDATE_REPOSITORY:-Eris92/SIRK-Agent}"
-      Sirk__AgentUpdates__GitHubTokenFile: /run/secrets/sirk-updates-github-token
-      Sirk__AgentUpdates__CacheRoot: /var/lib/sirk/updates/agent
-      Sirk__AgentUpdates__MetadataTtlSeconds: "300"
-      Sirk__AgentUpdates__Retention: "3"
       Sirk__Security__Enabled: "true"
       Sirk__Security__DataRoot: /var/lib/sirk-central/security
       Sirk__Security__BootstrapSecretFile: /var/lib/sirk-central/security/break-glass-bootstrap.json
