@@ -8,8 +8,15 @@ fail() {
 
 for forbidden in \
   package.json package-lock.json npm-shrinkwrap.json yarn.lock pnpm-lock.yaml \
-  .nvmrc auth updater test scripts tools/finalize-dotnet10.py; do
-  [[ ! -e "$forbidden" ]] || fail "legacy Node or migration artifact remains: $forbidden"
+  .nvmrc auth updater test scripts tools/finalize-dotnet10.py \
+  docker-compose.appliance.yml \
+  deploy/acceptance-test.sh deploy/appliance-bootstrap.sh deploy/appliance-install.sh \
+  deploy/appliance-migrate.sh deploy/appliance-web-update.sh deploy/backup.sh \
+  deploy/caddy deploy/clean-reinstall.sh deploy/configure-and-start.sh deploy/configure-auth.sh \
+  deploy/dotnet10/docker-compose.yml deploy/install.sh deploy/maintenance-down.sh \
+  deploy/maintenance-up.sh deploy/repair-breakglass-ui.sh deploy/reset-breakglass-password.sh \
+  deploy/restore.sh deploy/rotate-access-key.sh deploy/smoke-test.sh deploy/web-update.sh; do
+  [[ ! -e "$forbidden" ]] || fail "legacy Node/appliance/update artifact remains: $forbidden"
 done
 
 [[ -f src/Sirk.Central/Sirk.Central.csproj ]] || fail "Central .NET project is missing"
@@ -31,11 +38,41 @@ grep -q 'demo-orchestrator:8090' Caddyfile || fail "Caddy does not proxy Demo to
 grep -q 'CENTRAL_REF=.*main' deploy/install-dotnet10.sh || fail "installer does not default to main"
 grep -q 'CENTRAL_REF=.*main' deploy/reinstall-dotnet10.sh || fail "reinstaller does not default to main"
 
-bash -n deploy/upgrade-dotnet10-vps.sh || fail "VPS upgrade script contains Bash syntax errors"
+for script in deploy/upgrade-dotnet10-vps.sh deploy/reinstall-dotnet10.sh deploy/install-dotnet10.sh deploy/update.sh update.sh; do
+  bash -n "$script" || fail "$script contains Bash syntax errors"
+done
+
 grep -Fq -- '--network host' deploy/upgrade-dotnet10-vps.sh || \
   fail "VPS upgrade build does not use host networking"
 grep -Fq 'SIRK_DOCKER_NO_CACHE' deploy/upgrade-dotnet10-vps.sh || \
   fail "VPS upgrade does not expose optional no-cache diagnostics"
+grep -Fq 'SIRK_SOURCE_READY' deploy/upgrade-dotnet10-vps.sh || \
+  fail "VPS upgrade does not support verified cache source deployment"
+
+# Runtime self-update must never rediscover source through Git or GitHub.
+if grep -Eiq 'git[[:space:]]+(fetch|pull|clone|checkout)|raw\.githubusercontent\.com|api\.github\.com|github\.com/.*/releases' deploy/update.sh; then
+  fail "runtime Central self-update still contains direct Git/GitHub source access"
+fi
+grep -Fq '/api/internal/v1/update/central/prepare' deploy/update.sh || \
+  fail "runtime Central self-update does not use the local Central broker"
+grep -Fq '/var/lib/sirk/updates/' deploy/update.sh || \
+  fail "runtime Central self-update does not enforce the verified cache boundary"
+
+# The Central runtime host may only import public release trust. Private signing
+# material belongs exclusively to CI/signing environments.
+! grep -Eq 'ecparam[^\n]*-genkey|genpkey[^\n]*EC|BEGIN (EC )?PRIVATE KEY' deploy/reinstall-dotnet10.sh || \
+  fail "Central installer still generates/contains release private signing material"
+grep -Fq 'sirk-release-trusted-keys.json' deploy/reinstall-dotnet10.sh || \
+  fail "Central installer does not import the public release trust keyring"
+grep -Fq 'sirk-updates-github-token' deploy/reinstall-dotnet10.sh || \
+  fail "Central installer does not provision the single GitHub update token"
+grep -Fq 'sirk-release-trusted-keys.json' docker-compose.yml || \
+  fail "Compose does not mount the public release trust keyring"
+grep -Fq 'sirk-updates-github-token' docker-compose.yml || \
+  fail "Compose does not use the single Central GitHub update token"
+! grep -Fq 'sirk-agent-updates-github-token' docker-compose.yml || \
+  fail "legacy Agent-specific GitHub token remains in Compose"
+
 python3 - <<'PY'
 from pathlib import Path
 
@@ -93,6 +130,8 @@ if '/var/run/docker.sock' in central_targets:
     raise SystemExit('Central must never receive the Docker socket.')
 if '/var/run/docker.sock' not in demo_targets:
     raise SystemExit('Only Demo orchestrator must receive the Docker socket.')
+if '/var/lib/sirk/updates' not in central_targets:
+    raise SystemExit('Central must mount the shared update cache read-write.')
 if not any(isinstance(item, dict) and item.get('target') == '/srv/public-config' and item.get('read_only') is True for item in caddy_volumes):
     raise SystemExit('Caddy must mount the public config snapshot volume read-only.')
 network = compose.get('networks', {}).get('sirk-demo', {})
