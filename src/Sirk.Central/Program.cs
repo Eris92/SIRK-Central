@@ -50,9 +50,15 @@ builder.Services.Configure<SecurityOptions>(
     builder.Configuration.GetSection(SecurityOptions.SectionName));
 builder.Services.AddSingleton<AgentUpdateTicketService>();
 builder.Services.AddSingleton<AgentUpdateCache>();
+builder.Services.AddSingleton<PlatformUpdateCache>();
+builder.Services.AddSingleton<HostUpdateControl>();
 builder.Services.AddHttpClient("SirkAgentUpdates", client =>
 {
     client.Timeout = TimeSpan.FromMinutes(5);
+});
+builder.Services.AddHttpClient("SirkUpdates", client =>
+{
+    client.Timeout = TimeSpan.FromMinutes(10);
 });
 builder.Services.AddSingleton<SingleWriterLease>();
 builder.Services.AddSingleton<LocalIdentityStore>();
@@ -306,6 +312,7 @@ app.MapGet("/api/v1/system/version", () => Results.Ok(new
 
 app.MapPortalProtocol();
 AgentUpdateDistributionEndpoints.Map(app);
+PlatformUpdateDistributionEndpoints.Map(app);
 if (securityOptions.Enabled)
 {
     app.MapSirkAuthentication();
