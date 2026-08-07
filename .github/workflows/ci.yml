@@ -39,7 +39,7 @@ jobs:
 
   group-agent-exe-live:
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
