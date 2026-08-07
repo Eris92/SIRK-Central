@@ -14,6 +14,11 @@ services:
       AllowedHosts: "${SIRK_CENTRAL_DOMAIN:-central.sirkportal.com};localhost;127.0.0.1"
       Sirk__ReverseProxy__TrustAll: "true"
       Sirk__PortalProtocol__DataRoot: /var/lib/sirk-central
+      Sirk__PublicSite__SnapshotPath: /var/lib/sirk-public/sirk-config.json
+      Sirk__PublicSite__PublicDomain: "${SIRK_WEBSITE_DOMAIN:-sirkportal.com}"
+      Sirk__Demo__OrchestratorUrl: http://demo-orchestrator:8090
+      Sirk__Demo__ControlTokenFile: /run/secrets/sirk-demo-control-token
+      Sirk__Demo__PublicBaseUrl: "https://${SIRK_DEMO_DOMAIN:-demo.sirkportal.com}"
       Sirk__Security__Enabled: "true"
       Sirk__Security__DataRoot: /var/lib/sirk-central/security
       Sirk__Security__BootstrapSecretFile: /var/lib/sirk-central/security/break-glass-bootstrap.json
@@ -31,6 +36,7 @@ services:
       Sirk__WebAuthn__Origins__0: "https://${SIRK_CENTRAL_DOMAIN:-central.sirkportal.com}"
     volumes:
       - sirk-central-data:/var/lib/sirk-central
+      - sirk-public-config:/var/lib/sirk-public
       - ${SIRK_CENTRAL_SECRETS_PATH:-./secrets}:/run/secrets:ro
     read_only: true
     tmpfs:
@@ -49,6 +55,36 @@ services:
     networks:
       - sirk-edge
 
+  demo-orchestrator:
+    image: ${SIRK_CENTRAL_IMAGE:-sirk-central:dotnet10}
+    container_name: ${SIRK_DEMO_ORCHESTRATOR_CONTAINER:-sirk-demo-orchestrator}
+    command: ["--demo-orchestrator"]
+    restart: unless-stopped
+    user: "0:0"
+    expose:
+      - "8090"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      Sirk__Demo__ControlTokenFile: /run/secrets/sirk-demo-control-token
+      Sirk__Demo__PortalImage: "${SIRK_PORTAL_DEMO_IMAGE:-ghcr.io/eris92/sirk-portal}"
+      Sirk__Demo__Network: sirk-demo
+      Sirk__Demo__PublicBaseUrl: "https://${SIRK_DEMO_DOMAIN:-demo.sirkportal.com}"
+      Sirk__Demo__DockerSocket: /var/run/docker.sock
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${SIRK_CENTRAL_SECRETS_PATH:-./secrets}:/run/secrets:ro
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    networks:
+      - sirk-edge
+      - sirk-demo
+
   caddy:
     image: caddy:2.10.0-alpine
     container_name: ${SIRK_CADDY_CONTAINER:-sirk-caddy}
@@ -56,6 +92,8 @@ services:
     depends_on:
       central:
         condition: service_healthy
+      demo-orchestrator:
+        condition: service_started
     ports:
       - "80:80"
       - "443:443"
@@ -64,11 +102,13 @@ services:
       SIRK_ACME_EMAIL: "${SIRK_ACME_EMAIL:-admin@example.com}"
       SIRK_WEBSITE_DOMAIN: "${SIRK_WEBSITE_DOMAIN:-sirkportal.com}"
       SIRK_BUSINESS_DOMAIN: "${SIRK_BUSINESS_DOMAIN:-sir-k.pl}"
+      SIRK_DEMO_DOMAIN: "${SIRK_DEMO_DOMAIN:-demo.sirkportal.com}"
       SIRK_CENTRAL_DOMAIN: "${SIRK_CENTRAL_DOMAIN:-central.sirkportal.com}"
       SIRK_AUTH_DOMAIN: "${SIRK_AUTH_DOMAIN:-auth.sirkportal.com}"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - ./website:/srv/website:ro
+      - sirk-public-config:/srv/public-config:ro
       - ${SIRK_BUSINESS_SITE_PATH:-./website}:/srv/sir-k:ro
       - sirk-caddy-data:/data
       - sirk-caddy-config:/config
@@ -87,8 +127,13 @@ services:
 networks:
   sirk-edge:
     driver: bridge
+  sirk-demo:
+    name: sirk-demo
+    driver: bridge
+    internal: true
 
 volumes:
   sirk-central-data:
+  sirk-public-config:
   sirk-caddy-data:
   sirk-caddy-config:
