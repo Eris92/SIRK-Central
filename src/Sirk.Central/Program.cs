@@ -49,13 +49,8 @@ builder.Services.AddSingleton<PortalTelemetryStore>();
 builder.Services.Configure<SecurityOptions>(
     builder.Configuration.GetSection(SecurityOptions.SectionName));
 builder.Services.AddSingleton<AgentUpdateTicketService>();
-builder.Services.AddSingleton<AgentUpdateCache>();
 builder.Services.AddSingleton<PlatformUpdateCache>();
 builder.Services.AddSingleton<HostUpdateControl>();
-builder.Services.AddHttpClient("SirkAgentUpdates", client =>
-{
-    client.Timeout = TimeSpan.FromMinutes(5);
-});
 builder.Services.AddHttpClient("SirkUpdates", client =>
 {
     client.Timeout = TimeSpan.FromMinutes(10);
