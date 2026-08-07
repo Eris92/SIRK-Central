@@ -44,7 +44,8 @@ env \
     BG_USER="${BG_USER:-breakglass}" \
     BG_PASSWORD="${BG_PASSWORD:-}" \
     BG_ACCESS_CODE="${BG_ACCESS_CODE:-}" \
-    KEEP_RELEASE_PRIVATE_KEY="${KEEP_RELEASE_PRIVATE_KEY:-0}" \
+    SIRK_RELEASE_TRUSTED_KEYS_FILE="${SIRK_RELEASE_TRUSTED_KEYS_FILE:-/root/sirk-release-trusted-keys.json}" \
+    SIRK_UPDATES_GITHUB_TOKEN_FILE="${SIRK_UPDATES_GITHUB_TOKEN_FILE:-/root/sirk-updates-github-token}" \
     bash "$TMP_DIR/install-dotnet10.sh"
 
 ACCESS_CODE_FILE="/root/sirk-central-breakglass-access-code.txt"
