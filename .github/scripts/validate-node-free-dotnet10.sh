@@ -30,6 +30,29 @@ grep -q 'central:8080' Caddyfile || fail "Caddy does not proxy to the .NET Centr
 grep -q 'CENTRAL_REF=.*main' deploy/install-dotnet10.sh || fail "installer does not default to main"
 grep -q 'CENTRAL_REF=.*main' deploy/reinstall-dotnet10.sh || fail "reinstaller does not default to main"
 
+bash -n deploy/upgrade-dotnet10-vps.sh || fail "VPS upgrade script contains Bash syntax errors"
+grep -Fq -- '--network host' deploy/upgrade-dotnet10-vps.sh || \
+  fail "VPS upgrade build does not use host networking"
+grep -Fq 'SIRK_DOCKER_NO_CACHE' deploy/upgrade-dotnet10-vps.sh || \
+  fail "VPS upgrade does not expose optional no-cache diagnostics"
+python3 - <<'PY'
+from pathlib import Path
+
+path = Path('deploy/upgrade-dotnet10-vps.sh')
+text = path.read_text(encoding='utf-8')
+build = 'docker build "${BUILD_ARGS[@]}" "$SOURCE_DIR"'
+stop = 'docker rm -f "$CENTRAL_CONTAINER" "$CADDY_CONTAINER"'
+if build not in text:
+    raise SystemExit('VPS upgrade is missing the resilient Docker build invocation.')
+if stop not in text:
+    raise SystemExit('VPS upgrade is missing the live-container replacement point.')
+if text.index(build) >= text.index(stop):
+    raise SystemExit('VPS upgrade must finish the new Docker build before stopping live containers.')
+if 'if [[ "${SIRK_DOCKER_NO_CACHE:-0}" == "1" ]]; then' not in text:
+    raise SystemExit('VPS upgrade must keep --no-cache opt-in rather than unconditional.')
+print('VPS_UPGRADE_RESILIENCE_CONTRACT_OK')
+PY
+
 if grep -RIE --include='*.yml' --include='*.yaml' \
   'actions/setup-node|(^|[[:space:]])npm[[:space:]]+(ci|test|run)|(^|[[:space:]])node[[:space:]]+(--test|src/)|auth/server\.js|updater-gateway|Dockerfile\.gateway|Dockerfile\.manager' \
   .github/workflows; then
