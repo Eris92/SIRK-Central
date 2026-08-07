@@ -27,6 +27,8 @@ $PortalProcess = $null
 $Certificate = $null
 $HostsPath = Join-Path $env:SystemRoot 'System32\drivers\etc\hosts'
 $HostsMarker = '# SIRK product E2E'
+$AgentRoot = 'C:\ProgramData\SIRK\Agent'
+$AgentCli = 'C:\Program Files\SIRK\Agent\sirkctl.exe'
 
 function Test-Administrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -112,6 +114,58 @@ function Remove-ServiceCompletely {
     & sc.exe delete $Name | Out-Null
 }
 
+function Invoke-AgentCliDiagnostic {
+    param([Parameter(Mandatory)][string]$Command)
+    if (-not (Test-Path -LiteralPath $AgentCli -PathType Leaf)) {
+        Write-Host "Agent CLI is missing: $AgentCli" -ForegroundColor Yellow
+        return
+    }
+    Write-Host "--- sirkctl $Command ---" -ForegroundColor Cyan
+    $stdout = Join-Path $Root ("sirkctl-$Command.stdout.log")
+    $stderr = Join-Path $Root ("sirkctl-$Command.stderr.log")
+    $process = Start-Process -FilePath $AgentCli `
+        -ArgumentList @($Command) `
+        -RedirectStandardOutput $stdout `
+        -RedirectStandardError $stderr `
+        -Wait `
+        -PassThru
+    Write-Host "ExitCode=$($process.ExitCode)"
+    Get-Content -LiteralPath $stdout -Raw -ErrorAction SilentlyContinue | Out-Host
+    Get-Content -LiteralPath $stderr -Raw -ErrorAction SilentlyContinue | Out-Host
+}
+
+function Write-AgentDiagnostics {
+    Write-Host '=== SIRK Agent diagnostics ===' -ForegroundColor Cyan
+    foreach ($serviceName in @('SirkAgent','SirkAgentWatchdog','SirkUpdater')) {
+        Get-CimInstance Win32_Service -Filter "Name='$serviceName'" -ErrorAction SilentlyContinue |
+            Select-Object Name,State,StartMode,StartName,PathName |
+            Format-List | Out-Host
+    }
+
+    $credential = Join-Path $AgentRoot 'portal-credential.bin'
+    $heartbeat = Join-Path $AgentRoot 'heartbeat-latest.json'
+    $management = Join-Path $AgentRoot 'management-state.json'
+    [pscustomobject]@{
+        CredentialExists = Test-Path -LiteralPath $credential -PathType Leaf
+        CredentialLength = if (Test-Path -LiteralPath $credential -PathType Leaf) { (Get-Item -LiteralPath $credential).Length } else { 0 }
+        HeartbeatExists = Test-Path -LiteralPath $heartbeat -PathType Leaf
+        ManagementStateExists = Test-Path -LiteralPath $management -PathType Leaf
+        AgentCliExists = Test-Path -LiteralPath $AgentCli -PathType Leaf
+    } | Format-List | Out-Host
+
+    Invoke-AgentCliDiagnostic -Command 'status'
+    Invoke-AgentCliDiagnostic -Command 'sync'
+    Start-Sleep -Seconds 2
+    Invoke-AgentCliDiagnostic -Command 'status'
+
+    foreach ($path in @($heartbeat,$management)) {
+        if (Test-Path -LiteralPath $path -PathType Leaf) {
+            Write-Host "--- $path ---" -ForegroundColor Cyan
+            Get-Content -LiteralPath $path -Raw -ErrorAction SilentlyContinue | Out-Host
+        }
+    }
+}
+
 if (-not (Test-Administrator)) {
     throw 'Windows E2E runner must have local Administrator rights.'
 }
@@ -182,6 +236,11 @@ try {
         throw "Group-bound Agent EXE failed with exit code $($installer.ExitCode)."
     }
 
+    # Force one explicit post-install management cycle and expose its response.
+    # The service remains the actor; sirkctl only requests sync through the local
+    # authenticated control channel, so this does not bypass Agent security.
+    Write-AgentDiagnostics
+
     $deadline = (Get-Date).AddMinutes(6)
     $onlineDevice = $null
     do {
@@ -200,6 +259,7 @@ try {
     } while ((Get-Date) -lt $deadline)
 
     if (-not $onlineDevice) {
+        Write-AgentDiagnostics
         throw 'Installed Agent did not appear online in the selected Portal group.'
     }
 
@@ -223,6 +283,7 @@ try {
 }
 catch {
     Write-Host "SIRK group Agent EXE E2E failed: $($_.Exception.Message)" -ForegroundColor Red
+    Write-AgentDiagnostics
     Get-Content -LiteralPath $PortalLog -Tail 300 -ErrorAction SilentlyContinue | Out-Host
     Get-Content -LiteralPath $PortalErrorLog -Tail 300 -ErrorAction SilentlyContinue | Out-Host
     Get-ChildItem 'C:\ProgramData\SIRK\Logs' -File -ErrorAction SilentlyContinue |
