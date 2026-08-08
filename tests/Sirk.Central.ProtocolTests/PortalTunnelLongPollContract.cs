@@ -50,6 +50,15 @@ internal static class PortalTunnelLongPollContract
                 "context.Response.Headers[item.Key] = item.Value",
                 StringComparison.Ordinal),
             "Central must forward desktop frame sequence and metadata headers to the browser.");
+
+        var connectStart = tunnel.IndexOf("private async Task<bool> HandleConnectAsync", StringComparison.Ordinal);
+        var proxyStart = tunnel.IndexOf("private async Task<bool> HandleProxyAsync", connectStart, StringComparison.Ordinal);
+        var connectHandler = tunnel[connectStart..proxyStart];
+        Require(
+            !connectHandler.Contains("_relay.RequestAsync", StringComparison.Ordinal) &&
+            connectHandler.Contains("ResolveAccess(context, portalId)", StringComparison.Ordinal) &&
+            connectHandler.Contains("url = $\"/connect/", StringComparison.Ordinal),
+            "Portal connect must validate access and return the tunnel URL without a serial preflight round trip.");
     }
 
     private static string FindRepositoryRoot()

@@ -482,29 +482,6 @@ internal sealed class PortalTunnelMiddleware
             return true;
         }
 
-        var actor = ResolveActor(context);
-        var response = await _relay.RequestAsync(
-            portalId,
-            "GET",
-            "/api/v1/system/info",
-            actor,
-            new Dictionary<string, string>(),
-            [],
-            context.RequestAborted);
-        if (response.StatusCode is < 200 or >= 300)
-        {
-            context.Response.StatusCode = StatusCodes.Status502BadGateway;
-            await context.Response.WriteAsJsonAsync(
-                new
-                {
-                    ok = false,
-                    code = "PORTAL_TUNNEL_UNAVAILABLE",
-                    error = "Portal did not accept the delegated connection."
-                },
-                context.RequestAborted);
-            return true;
-        }
-
         await context.Response.WriteAsJsonAsync(
             new
             {
