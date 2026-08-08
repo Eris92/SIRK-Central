@@ -315,8 +315,8 @@ internal static class DemoOrchestratorHost
                     NetworkMode = _network,
                     Tmpfs = new Dictionary<string, string>
                     {
-                        ["/tmp"] = "rw,noexec,nosuid,nodev,size=64m",
-                        ["/var/lib/sirk-portal"] = "rw,noexec,nosuid,nodev,size=256m"
+                        ["/tmp"] = "rw,noexec,nosuid,nodev,size=64m,uid=65532,gid=65532,mode=0700",
+                        ["/var/lib/sirk-portal"] = "rw,noexec,nosuid,nodev,size=256m,uid=65532,gid=65532,mode=0700"
                     }
                 }
             };
