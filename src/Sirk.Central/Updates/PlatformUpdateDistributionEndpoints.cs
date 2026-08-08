@@ -1,4 +1,3 @@
-using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -28,10 +27,7 @@ internal sealed class HostUpdateControl
 
     public bool Authenticate(HttpContext context)
     {
-        if (_token.Length == 0 ||
-            context.Connection.RemoteIpAddress is null ||
-            !IPAddress.IsLoopback(context.Connection.RemoteIpAddress))
-            return false;
+        if (_token.Length == 0) return false;
         var authorization = context.Request.Headers.Authorization.ToString();
         if (!authorization.StartsWith("Bearer ", StringComparison.Ordinal)) return false;
         var supplied = Encoding.UTF8.GetBytes(authorization[7..].Trim());
@@ -81,7 +77,7 @@ internal static class PlatformUpdateDistributionEndpoints
         var authentication = authenticator.AuthenticateCredentials(context.Request);
         if (!authentication.Succeeded || authentication.Portal is null)
             return Results.NotFound();
-        if (applicationId is not ("sirk-portal" or "sirk-updater"))
+        if (applicationId != "sirk-portal")
             return Results.NotFound();
 
         var runtime = context.Request.Query["runtime"].ToString();
@@ -137,7 +133,7 @@ internal static class PlatformUpdateDistributionEndpoints
         var authentication = authenticator.AuthenticateCredentials(context.Request);
         if (!authentication.Succeeded || authentication.Portal is null)
             return Results.NotFound();
-        if (applicationId is not ("sirk-portal" or "sirk-updater"))
+        if (applicationId != "sirk-portal")
             return Results.NotFound();
         var runtime = context.Request.Query["runtime"].ToString();
         var channel = context.Request.Query["channel"].ToString();
