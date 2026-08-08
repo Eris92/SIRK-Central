@@ -184,7 +184,6 @@ for required in \
     global.json \
     src/Sirk.Central/Sirk.Central.csproj \
     deploy/upgrade-dotnet10-vps.sh \
-    deploy/web-update-worker.sh \
     deploy/dotnet10/Caddyfile \
     website/index.html \
     update-manifest.json; do
