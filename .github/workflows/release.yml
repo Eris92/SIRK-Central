@@ -56,7 +56,12 @@ jobs:
           cp deploy/dotnet10/Caddyfile "$payload/deploy/dotnet10/"
           cp -a src/Sirk.Central "$payload/src/"
           cp -a website "$payload/"
+          find "$payload/src/Sirk.Central" -type d \( -name bin -o -name obj \) -prune -exec rm -rf -- {} +
           [[ ! -e "$payload/.git" ]]
+          if find "$payload/src/Sirk.Central" -type d \( -name bin -o -name obj \) -print -quit | grep -q .; then
+            echo 'Central release payload contains build output directories.' >&2
+            exit 1
+          fi
           python3 - "$RUNNER_TEMP/release-public.pem" "$SIGNING_KEY_ID" "$release/release-trusted-keys.json" <<'PY'
           import json,sys
           pem=open(sys.argv[1],encoding='utf-8').read()
