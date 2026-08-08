@@ -45,13 +45,11 @@ try
         new UpdateSignature("ES256", "test", "x"));
     var canonicalDescriptor = Encoding.UTF8.GetString(
         CanonicalUpdateJson.SerializeWithoutTopLevelSignature(descriptor));
-    if (!canonicalDescriptor.Contains(
-            "\"publishedAtUtc\":\"2026-08-08T05:00:00Z\"",
-            StringComparison.Ordinal))
-    {
-        throw new InvalidOperationException(
-            "signed release timestamp canonical form mismatch: " + canonicalDescriptor);
-    }
+    Require(
+        canonicalDescriptor.Contains(
+            "\"publishedAtUtc\":\"2026-08-08T05:00:00\\u002B00:00\"",
+            StringComparison.Ordinal),
+        "signed release timestamp canonical form must preserve System.Text.Json escaping");
 
     var cached = new CachedPlatformUpdate(
         "sirk-agent",
@@ -74,6 +72,16 @@ try
     Require(!PlatformUpdateVersion.IsValid("0.2.0.1"), "non-canonical pre-1.0 version must be rejected");
     Require(PlatformUpdateVersion.Compare("0.1.1.11", "0.1.1.10") > 0, "upgrade ordering is invalid");
     Require(PlatformUpdateVersion.Compare("0.1.1.9", "0.1.1.10") < 0, "rollback ordering is invalid");
+
+    try
+    {
+        _ = PlatformUpdateDefinitions.Get("sirk-updater");
+        throw new InvalidOperationException("SIRK Updater must not be distributed through the Central product cache.");
+    }
+    catch (KeyNotFoundException)
+    {
+        // Expected: Updater is the transaction executor, not a cached SIRK product payload.
+    }
 
     Console.WriteLine("SIRK_CENTRAL_AGENT_UPDATE_CONTRACT_OK");
     return 0;
