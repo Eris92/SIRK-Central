@@ -142,7 +142,7 @@ static async Task RunRealReleaseE2EAsync(string root)
 
         var scopes = new (string ApplicationId, string Runtime, string MinimumVersion)[]
         {
-            ("sirk-agent", "win-x64", "0.1.1.35"),
+            ("sirk-agent", "win-x64", "0.1.1.36"),
             ("sirk-portal", "win-x64", "0.1.1.2"),
             ("sirk-portal", "linux-x64", "0.1.1.2"),
             ("sirk-central", "linux-x64", "0.1.1.1")
@@ -151,11 +151,23 @@ static async Task RunRealReleaseE2EAsync(string root)
         var verified = new List<CachedPlatformUpdate>();
         foreach (var scope in scopes)
         {
-            var latest = await cache.GetLatestAsync(
-                scope.ApplicationId,
-                scope.Runtime,
-                "preview",
-                CancellationToken.None);
+            Console.WriteLine($"SIRK_REAL_RELEASE_SCOPE_BEGIN {scope.ApplicationId}/{scope.Runtime}");
+            CachedPlatformUpdate? latest;
+            try
+            {
+                latest = await cache.GetLatestAsync(
+                    scope.ApplicationId,
+                    scope.Runtime,
+                    "preview",
+                    CancellationToken.None);
+            }
+            catch (Exception error)
+            {
+                throw new InvalidOperationException(
+                    $"real signed release cache verification failed: {scope.ApplicationId}/{scope.Runtime}",
+                    error);
+            }
+
             Require(latest is not null,
                 $"real signed release was not discovered: {scope.ApplicationId}/{scope.Runtime}");
             Require(PlatformUpdateVersion.Compare(latest!.Version, scope.MinimumVersion) >= 0,
@@ -197,6 +209,7 @@ static async Task RunRealReleaseE2EAsync(string root)
                     status.CachedVersions.Contains(latest.Version, StringComparer.Ordinal),
                 $"verified cache status mismatch: {scope.ApplicationId}/{scope.Runtime}");
             verified.Add(latest);
+            Console.WriteLine($"SIRK_REAL_RELEASE_SCOPE_OK {scope.ApplicationId}/{scope.Runtime} {latest.Version}");
         }
 
         File.Delete(tokenPath);
