@@ -103,6 +103,7 @@ function Export-VerifiedAgentRelease {
         Export = $env:SIRK_REAL_RELEASE_EXPORT_DIR
         App = $env:SIRK_REAL_RELEASE_EXPORT_APPLICATION_ID
         Runtime = $env:SIRK_REAL_RELEASE_EXPORT_RUNTIME
+        Channel = $env:SIRK_REAL_RELEASE_EXPORT_CHANNEL
     }
     try {
         $env:SIRK_REAL_RELEASE_E2E = '1'
@@ -110,6 +111,7 @@ function Export-VerifiedAgentRelease {
         $env:SIRK_REAL_RELEASE_EXPORT_DIR = $exportRoot
         $env:SIRK_REAL_RELEASE_EXPORT_APPLICATION_ID = 'sirk-agent'
         $env:SIRK_REAL_RELEASE_EXPORT_RUNTIME = 'win-x64'
+        $env:SIRK_REAL_RELEASE_EXPORT_CHANNEL = 'preview'
         dotnet run `
             --project (Join-Path $centralRoot 'tests\Sirk.Central.UpdateTests\Sirk.Central.UpdateTests.csproj') `
             --configuration Release | Out-Host
@@ -123,6 +125,7 @@ function Export-VerifiedAgentRelease {
         $env:SIRK_REAL_RELEASE_EXPORT_DIR = $previous.Export
         $env:SIRK_REAL_RELEASE_EXPORT_APPLICATION_ID = $previous.App
         $env:SIRK_REAL_RELEASE_EXPORT_RUNTIME = $previous.Runtime
+        $env:SIRK_REAL_RELEASE_EXPORT_CHANNEL = $previous.Channel
     }
 
     $metadataPath = Join-Path $exportRoot 'release.json'
