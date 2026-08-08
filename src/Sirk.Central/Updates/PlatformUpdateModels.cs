@@ -14,7 +14,7 @@ internal sealed record PlatformReleaseDescriptor(
     [property: JsonPropertyName("size")] long Size,
     [property: JsonPropertyName("sha256")] string Sha256,
     [property: JsonPropertyName("commit")] string Commit,
-    [property: JsonPropertyName("publishedAtUtc")] DateTimeOffset PublishedAtUtc,
+    [property: JsonPropertyName("publishedAtUtc"), JsonConverter(typeof(ReleaseTimestampJsonConverter))] DateTimeOffset PublishedAtUtc,
     [property: JsonPropertyName("signature")] UpdateSignature Signature);
 
 internal sealed record PlatformPackageManifest(
@@ -91,14 +91,7 @@ internal static class PlatformUpdateDefinitions
                 "Eris92/SIRK-Central",
                 "SIRK-Central",
                 new HashSet<string>(StringComparer.Ordinal) { "linux-x64" },
-                512L * 1024 * 1024),
-            ["sirk-updater"] = new(
-                "sirk-updater",
-                "SIRK Updater",
-                "Eris92/SIRK-Updater",
-                "SIRK-Updater",
-                new HashSet<string>(StringComparer.Ordinal) { "win-x64", "linux-x64" },
-                128L * 1024 * 1024)
+                512L * 1024 * 1024)
         };
 
     public static PlatformUpdateDefinition Get(string applicationId) =>
