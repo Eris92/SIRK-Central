@@ -45,11 +45,13 @@ try
         new UpdateSignature("ES256", "test", "x"));
     var canonicalDescriptor = Encoding.UTF8.GetString(
         CanonicalUpdateJson.SerializeWithoutTopLevelSignature(descriptor));
-    Require(
-        canonicalDescriptor.Contains(
-            "\"publishedAtUtc\":\"2026-08-08T05:00:00+00:00\"",
-            StringComparison.Ordinal),
-        "signed release timestamp canonical form must be second-aligned RFC3339 with +00:00");
+    if (!canonicalDescriptor.Contains(
+            "\"publishedAtUtc\":\"2026-08-08T05:00:00Z\"",
+            StringComparison.Ordinal))
+    {
+        throw new InvalidOperationException(
+            "signed release timestamp canonical form mismatch: " + canonicalDescriptor);
+    }
 
     var cached = new CachedPlatformUpdate(
         "sirk-agent",
