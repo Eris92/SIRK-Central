@@ -189,8 +189,6 @@ services:
       Sirk__Updates__GitHubTokenFile: /run/secrets/sirk-updates-github-token
       Sirk__Updates__HostControlTokenFile: /run/secrets/sirk-update-host-token
       Sirk__Updates__CacheRoot: /var/lib/sirk/updates
-      Sirk__AgentUpdates__GitHubTokenFile: /run/secrets/sirk-updates-github-token
-      Sirk__AgentUpdates__CacheRoot: /var/lib/sirk/updates/agent
       Sirk__WebAuthn__ServerDomain: "${CENTRAL_HOST}"
       Sirk__WebAuthn__ServerName: "SIRK Central"
       Sirk__WebAuthn__Origins__0: "https://${CENTRAL_HOST}"
