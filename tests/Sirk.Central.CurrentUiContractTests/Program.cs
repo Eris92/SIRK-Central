@@ -7,6 +7,8 @@ var workspaceHtml = File.ReadAllText(Path.Combine(root, "public", "workspace.htm
 var workspace = File.ReadAllText(Path.Combine(root, "public", "workspace.js"));
 var csrf = File.ReadAllText(Path.Combine(root, "public", "csrf-bootstrap.js"));
 var classic = File.ReadAllText(Path.Combine(root, "public", "app.js"));
+var classicHtml = File.ReadAllText(Path.Combine(root, "public", "index.html"));
+var operationsUi = File.ReadAllText(Path.Combine(root, "public", "operations-ui.js"));
 
 Require(portalCompatibilityRegistration.Contains("endpoints.MapCurrentUiApi();", StringComparison.Ordinal),
     "The current permissions UI API must be registered alongside the Portal compatibility surface.");
@@ -58,6 +60,11 @@ Require(workspaceHtml.Contains("id=\"portalUpdate\"", StringComparison.Ordinal) 
 Require(classic.Contains("api(\"/api/access-control\")", StringComparison.Ordinal) &&
         classic.Contains("method:\"POST\"", StringComparison.Ordinal),
     "The regression contract must continue to cover the currently deployed classic permissions UI shape.");
+Require(classicHtml.Contains("<script src=\"/operations-ui.js\" defer></script>", StringComparison.Ordinal) &&
+        classicHtml.Contains("<script src=\"/operations-actions.js\" defer></script>", StringComparison.Ordinal) &&
+        operationsUi.Contains("/api/settings/update/run", StringComparison.Ordinal) &&
+        operationsUi.Contains("runUpdateButton", StringComparison.Ordinal),
+    "The current Central update button must load its update handler and status enhancement.");
 
 Console.WriteLine("SIRK Central current permissions UI team, managed-login and RBAC contracts: OK");
 
