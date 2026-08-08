@@ -36,7 +36,7 @@ WEBSITE_HOST="${WEBSITE_HOST:-sirkportal.com}"
 BUSINESS_HOST="${BUSINESS_HOST:-sir-k.pl}"
 AUTH_HOST="${AUTH_HOST:-auth.sirkportal.com}"
 DEMO_HOST="${DEMO_HOST:-demo.sirkportal.com}"
-PORTAL_DEMO_IMAGE="${PORTAL_DEMO_IMAGE:-ghcr.io/eris92/sirk-portal:0.1.1.7}"
+PORTAL_DEMO_IMAGE="${PORTAL_DEMO_IMAGE:-ghcr.io/eris92/sirk-portal:0.1.1.8}"
 GITHUB_CONTAINER_USER="${GITHUB_CONTAINER_USER:-Eris92}"
 ACME_EMAIL="${ACME_EMAIL:-admin@sirkportal.com}"
 
@@ -251,7 +251,7 @@ services:
       Sirk__Demo__PublicBaseUrl: "https://${DEMO_HOST}"
       Sirk__Demo__DockerSocket: /var/run/docker.sock
       Sirk__Demo__Enabled: "true"
-      Sirk__Demo__Version: "0.1.1.7"
+      Sirk__Demo__Version: "0.1.1.8"
       Sirk__Demo__MaxSessions: "4"
       Sirk__Demo__IdleTtlMinutes: "20"
       Sirk__Demo__AbsoluteTtlMinutes: "60"
