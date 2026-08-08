@@ -160,7 +160,7 @@ with zipfile.ZipFile(archive) as z:
         if not name or name.startswith('/') or '..' in parts or name in declared or not isinstance(size,int) or size < 0 or not re.fullmatch(r'[0-9a-f]{64}',sha):
             raise SystemExit('signed Central package manifest contains an invalid file entry: '+name)
         info=entries.get(name)
-        if info is None or info.file_size != size:
+        if info is None or info.is_dir() or info.file_size != size:
             raise SystemExit('signed Central package file size/path mismatch: '+name)
         with z.open(info) as stream:
             actual=hashlib.sha256(stream.read()).hexdigest()
@@ -168,7 +168,7 @@ with zipfile.ZipFile(archive) as z:
             raise SystemExit('signed Central package file hash mismatch: '+name)
         declared[name]=item
 
-    actual_payload=set(entries)-{'update-manifest.json'}
+    actual_payload={name for name,info in entries.items() if name != 'update-manifest.json' and not info.is_dir()}
     if actual_payload != set(declared):
         extra=sorted(actual_payload-set(declared))
         missing=sorted(set(declared)-actual_payload)
