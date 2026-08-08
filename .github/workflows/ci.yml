@@ -26,6 +26,15 @@ jobs:
       - name: Build test audit publish container and smoke
         run: bash .github/scripts/run-central-canonical-ci.sh
 
+  central-self-update-transaction:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Central verified-cache host transaction and rollback
+        shell: bash
+        run: bash .github/scripts/test-central-self-update-transaction.sh
+
   central-portal-live:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
