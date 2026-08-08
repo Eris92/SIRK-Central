@@ -262,6 +262,7 @@ internal sealed class PlatformUpdateCache
             if (release.TryGetProperty("draft", out var draft) && draft.GetBoolean()) continue;
             var prerelease = release.TryGetProperty("prerelease", out var pre) && pre.GetBoolean();
             if (channel == "stable" && prerelease) continue;
+            if (channel == "preview" && !prerelease) continue;
             var tag = release.GetProperty("tag_name").GetString()?.Trim() ?? string.Empty;
             var version = tag.StartsWith('v') ? tag[1..] : tag;
             if (!PlatformUpdateVersion.IsValid(version)) continue;
