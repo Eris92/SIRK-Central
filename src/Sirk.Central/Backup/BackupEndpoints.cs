@@ -7,6 +7,7 @@ using Sirk.Central.Security;
 namespace Sirk.Central.Backup;
 
 internal sealed record RestoreBackupRequest(string FileName, string Password, string Confirmation);
+internal sealed record CurrentBackupRunRequest(string? Confirm);
 
 internal static class BackupEndpoints
 {
@@ -27,14 +28,43 @@ internal static class BackupEndpoints
         group.MapPost("/restore", (RestoreBackupRequest request, HttpContext context,
                 IAntiforgery antiforgery, SecurityAuditLog auditLog) =>
             RestoreAsync(request, context, antiforgery, service, auditLog));
+
+        var current = endpoints.MapGroup("/api/settings/backup")
+            .RequireAuthorization(SirkPolicies.SecurityAdministration);
+        current.MapGet("/status", () => Results.Ok(new
+        {
+            backups = service.List().Select(info => new
+            {
+                name = info.FileName,
+                size = info.Size,
+                createdAtUtc = info.CreatedAtUtc
+            }),
+            restore = new { state = "idle" }
+        }));
+        current.MapPost("/run", (CurrentBackupRunRequest request, HttpContext context,
+                IAntiforgery antiforgery, SecurityAuditLog auditLog) =>
+            CreateCurrentAsync(request, context, antiforgery, service, auditLog));
         return endpoints;
+    }
+
+    private static async Task<IResult> CreateCurrentAsync(
+        CurrentBackupRunRequest request,
+        HttpContext context,
+        IAntiforgery antiforgery,
+        BackupArchiveService service,
+        SecurityAuditLog auditLog)
+    {
+        if (!string.Equals(request.Confirm, "BACKUP SIRK CENTRAL", StringComparison.Ordinal))
+            return Results.Json(new { ok = false, code = "BACKUP_CONFIRMATION_INVALID" }, statusCode: 400);
+        return await CreateAsync(context, antiforgery, service, auditLog, currentUi: true);
     }
 
     private static async Task<IResult> CreateAsync(
         HttpContext context,
         IAntiforgery antiforgery,
         BackupArchiveService service,
-        SecurityAuditLog auditLog)
+        SecurityAuditLog auditLog,
+        bool currentUi = false)
     {
         if (!await ValidateCsrfAsync(context, antiforgery)) return CsrfFailure();
         var actor = Actor(context);
@@ -56,7 +86,18 @@ internal static class BackupEndpoints
                     ["recipient"] = info.Recipient,
                     ["keyRotation"] = info.KeyRotation.ToString()
                 }));
-            return Results.Ok(info);
+            return currentUi
+                ? Results.Ok(new
+                {
+                    ok = true,
+                    backup = new
+                    {
+                        name = info.FileName,
+                        size = info.Size,
+                        createdAtUtc = info.CreatedAtUtc
+                    }
+                })
+                : Results.Ok(info);
         }
         catch (Exception exception) when (exception is InvalidOperationException or InvalidDataException or IOException)
         {

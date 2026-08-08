@@ -9,6 +9,7 @@ var csrf = File.ReadAllText(Path.Combine(root, "public", "csrf-bootstrap.js"));
 var classic = File.ReadAllText(Path.Combine(root, "public", "app.js"));
 var classicHtml = File.ReadAllText(Path.Combine(root, "public", "index.html"));
 var operationsUi = File.ReadAllText(Path.Combine(root, "public", "operations-ui.js"));
+var backupEndpoints = File.ReadAllText(Path.Combine(root, "src", "Sirk.Central", "Backup", "BackupEndpoints.cs"));
 
 Require(portalCompatibilityRegistration.Contains("endpoints.MapCurrentUiApi();", StringComparison.Ordinal),
     "The current permissions UI API must be registered alongside the Portal compatibility surface.");
@@ -65,6 +66,11 @@ Require(classicHtml.Contains("<script src=\"/operations-ui.js\" defer></script>"
         operationsUi.Contains("/api/settings/update/run", StringComparison.Ordinal) &&
         operationsUi.Contains("runUpdateButton", StringComparison.Ordinal),
     "The current Central update button must load its update handler and status enhancement.");
+Require(operationsUi.Contains("/api/settings/backup/run", StringComparison.Ordinal) &&
+        operationsUi.Contains("BACKUP SIRK CENTRAL", StringComparison.Ordinal) &&
+        backupEndpoints.Contains("MapGroup(\"/api/settings/backup\")", StringComparison.Ordinal) &&
+        backupEndpoints.Contains("current.MapPost(\"/run\"", StringComparison.Ordinal),
+    "The current Central backup button must reach the canonical encrypted backup service.");
 
 Console.WriteLine("SIRK Central current permissions UI team, managed-login and RBAC contracts: OK");
 
