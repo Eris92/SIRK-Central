@@ -41,10 +41,7 @@ function Wait-AgentOnline {
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     do {
         try {
-            $snapshot = Invoke-RestMethod `
-                -Uri ($BaseUrl + '/api/v1/admin/computer-groups') `
-                -WebSession $PortalSession `
-                -TimeoutSec 15
+            $snapshot = Invoke-RestMethod -Uri ($BaseUrl + '/api/v1/admin/computer-groups') -WebSession $PortalSession -TimeoutSec 15
             $device = @($snapshot.value.devices | Where-Object {
                 $_.groupId -eq $GroupId -and $_.online -eq $true
             } | Select-Object -First 1)
@@ -69,8 +66,9 @@ function Invoke-Updater {
     $previousTimeout = $env:SIRK_UPDATER_HEALTH_TIMEOUT_SECONDS
     $env:SIRK_UPDATER_HEALTH_TIMEOUT_SECONDS = '5'
     try {
+        $arguments = 'update sirk-agent "{0}" {1} {2}' -f $PackagePath,$Sha256,$Version
         $process = Start-Process -FilePath $updaterCli `
-            -ArgumentList @('update','sirk-agent',$PackagePath,$Sha256,$Version) `
+            -ArgumentList $arguments `
             -RedirectStandardOutput $stdout `
             -RedirectStandardError $stderr `
             -Wait `
@@ -79,18 +77,14 @@ function Invoke-Updater {
     finally {
         $env:SIRK_UPDATER_HEALTH_TIMEOUT_SECONDS = $previousTimeout
     }
-    $outText = Get-Content -LiteralPath $stdout -Raw -ErrorAction SilentlyContinue
-    $errText = Get-Content -LiteralPath $stderr -Raw -ErrorAction SilentlyContinue
+    $outText = [string](Get-Content -LiteralPath $stdout -Raw -ErrorAction SilentlyContinue)
+    $errText = [string](Get-Content -LiteralPath $stderr -Raw -ErrorAction SilentlyContinue)
     if ($outText) { Write-Host $outText }
     if ($errText) { Write-Host $errText }
     if ($process.ExitCode -ne $ExpectedExitCode) {
         throw "SIRK Updater $Label transaction returned ExitCode=$($process.ExitCode), expected $ExpectedExitCode."
     }
-    return [pscustomobject]@{
-        ExitCode = $process.ExitCode
-        StdOut = [string]$outText
-        StdErr = [string]$errText
-    }
+    return [pscustomobject]@{ ExitCode = $process.ExitCode; StdOut = $outText; StdErr = $errText }
 }
 
 function Export-VerifiedAgentRelease {
@@ -118,7 +112,7 @@ function Export-VerifiedAgentRelease {
         $env:SIRK_REAL_RELEASE_EXPORT_RUNTIME = 'win-x64'
         dotnet run `
             --project (Join-Path $centralRoot 'tests\Sirk.Central.UpdateTests\Sirk.Central.UpdateTests.csproj') `
-            --configuration Release
+            --configuration Release | Out-Host
         if ($LASTEXITCODE -ne 0) {
             throw "Central PlatformUpdateCache export failed. ExitCode=$LASTEXITCODE"
         }
@@ -136,14 +130,16 @@ function Export-VerifiedAgentRelease {
         throw 'Central PlatformUpdateCache did not export release metadata.'
     }
     $release = Get-Content -LiteralPath $metadataPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    foreach ($property in @('applicationId','version','runtime','channel','sha256','size','packagePath')) {
+        if (-not $release.PSObject.Properties[$property]) {
+            throw "Central cache export metadata is missing property: $property"
+        }
+    }
     if ($release.applicationId -ne 'sirk-agent' -or $release.runtime -ne 'win-x64' -or $release.channel -ne 'preview') {
         throw 'Exported Central cache release scope is invalid.'
     }
-    if ([string]$release.version -notmatch '^0\.1\.1\.\d+$') {
-        throw "Exported Agent version is invalid: $($release.version)"
-    }
-    if ([version]$release.version -lt [version]'0.1.1.37') {
-        throw "Exported Agent release is older than the fixed baseline: $($release.version)"
+    if ([string]$release.version -notmatch '^0\.1\.1\.\d+$' -or [version]$release.version -lt [version]'0.1.1.37') {
+        throw "Exported Agent release is outside the accepted baseline: $($release.version)"
     }
     if ([string]$release.sha256 -notmatch '^[a-fA-F0-9]{64}$') {
         throw 'Exported Agent SHA256 is invalid.'
@@ -160,10 +156,10 @@ function Export-VerifiedAgentRelease {
 
 function Start-SentinelHealthServer {
     param([Parameter(Mandatory)][string]$SentinelPath)
-    $listenerProbe = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
-    $listenerProbe.Start()
-    $port = ([Net.IPEndPoint]$listenerProbe.LocalEndpoint).Port
-    $listenerProbe.Stop()
+    $probe = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+    $probe.Start()
+    $port = ([Net.IPEndPoint]$probe.LocalEndpoint).Port
+    $probe.Stop()
 
     $stopFile = Join-Path $Root 'rollback-health.stop'
     $scriptPath = Join-Path $Root 'rollback-health.ps1'
@@ -200,10 +196,7 @@ finally {
 }
 "@
     Set-Content -LiteralPath $scriptPath -Value $script -Encoding UTF8
-    $process = Start-Process -FilePath 'powershell.exe' `
-        -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',$scriptPath) `
-        -WindowStyle Hidden `
-        -PassThru
+    $process = Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',$scriptPath) -WindowStyle Hidden -PassThru
     $uri = "http://127.0.0.1:$port/health"
     $deadline = (Get-Date).AddSeconds(15)
     do {
@@ -231,21 +224,15 @@ function Stop-SentinelHealthServer {
     }
 }
 
-if (-not (Test-Path -LiteralPath $updaterCli -PathType Leaf)) {
-    throw "Installed SIRK Updater CLI is missing: $updaterCli"
-}
-if (-not (Test-Path -LiteralPath $agentCli -PathType Leaf)) {
-    throw "Installed Agent verifier is missing: $agentCli"
-}
-if (-not (Test-Path -LiteralPath $updaterManifestPath -PathType Leaf)) {
-    throw "Registered Agent Updater manifest is missing: $updaterManifestPath"
+foreach ($requiredPath in @($updaterCli,$agentCli,$updaterManifestPath,$trustedKeys)) {
+    if (-not (Test-Path -LiteralPath $requiredPath -PathType Leaf)) {
+        throw "Required Agent update E2E file is missing: $requiredPath"
+    }
 }
 
 $originalManifestText = Get-Content -LiteralPath $updaterManifestPath -Raw -Encoding UTF8
 $manifest = $originalManifestText | ConvertFrom-Json
-if ($manifest.applicationId -ne 'sirk-agent' -or
-    $manifest.updateSource -ne 'sirk-central-cache' -or
-    $manifest.signatureRequired -ne $true) {
+if ($manifest.applicationId -ne 'sirk-agent' -or $manifest.updateSource -ne 'sirk-central-cache' -or $manifest.signatureRequired -ne $true) {
     throw 'Installed Agent Updater manifest does not enforce the Central-cache signed update contract.'
 }
 if (-not [string]::Equals([string]$manifest.signatureVerifierPath, $agentCli, [StringComparison]::OrdinalIgnoreCase)) {
@@ -259,12 +246,7 @@ if (-not ($verifierArguments -contains '{payload}') -or -not ($verifierArguments
 $release = Export-VerifiedAgentRelease
 Write-Host "Central-cache Agent package ready: $($release.version), $($release.size) bytes" -ForegroundColor Cyan
 
-$positive = Invoke-Updater `
-    -PackagePath ([string]$release.packagePath) `
-    -Sha256 ([string]$release.sha256) `
-    -Version ([string]$release.version) `
-    -ExpectedExitCode 0 `
-    -Label 'positive'
+$positive = Invoke-Updater -PackagePath ([string]$release.packagePath) -Sha256 ([string]$release.sha256) -Version ([string]$release.version) -ExpectedExitCode 0 -Label 'positive'
 $positiveState = $positive.StdOut | ConvertFrom-Json
 if ($positiveState.phase -ne 'completed' -or $positiveState.progress -ne 100) {
     throw 'Positive SIRK Updater transaction did not reach Completed/100.'
@@ -287,12 +269,7 @@ try {
     & $updaterCli register $modifiedManifestPath | Out-Host
     if ($LASTEXITCODE -ne 0) { throw 'Could not register rollback E2E manifest.' }
 
-    $failed = Invoke-Updater `
-        -PackagePath ([string]$release.packagePath) `
-        -Sha256 ([string]$release.sha256) `
-        -Version ([string]$release.version) `
-        -ExpectedExitCode 3 `
-        -Label 'rollback'
+    $failed = Invoke-Updater -PackagePath ([string]$release.packagePath) -Sha256 ([string]$release.sha256) -Version ([string]$release.version) -ExpectedExitCode 3 -Label 'rollback'
     $failedState = $failed.StdErr | ConvertFrom-Json
     if ($failedState.phase -ne 'failed' -or $failedState.message -notmatch 'rollback was attempted') {
         throw 'Rollback E2E did not expose the expected failed-after-rollback state.'
