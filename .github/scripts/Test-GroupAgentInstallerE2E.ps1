@@ -230,7 +230,7 @@ try {
         throw 'Portal did not create the expected computer group.'
     }
 
-    $installerBody = @{ validMinutes = 60; channel = 'dev' } | ConvertTo-Json -Compress
+    $installerBody = @{ validMinutes = 60; channel = 'preview' } | ConvertTo-Json -Compress
     Invoke-WebRequest `
         -Uri ($BaseUrl + '/api/v1/admin/agent-groups/' + $GroupId + '/installer') `
         -Method Post `
