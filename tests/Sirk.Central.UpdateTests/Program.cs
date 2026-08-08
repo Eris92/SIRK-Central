@@ -1,3 +1,4 @@
+using System.Text;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 using Sirk.Central.Security;
@@ -40,8 +41,16 @@ try
         1234,
         new string('a', 64),
         new string('b', 40),
-        DateTimeOffset.UtcNow,
+        new DateTimeOffset(2026, 8, 8, 5, 0, 0, TimeSpan.Zero),
         new UpdateSignature("ES256", "test", "x"));
+    var canonicalDescriptor = Encoding.UTF8.GetString(
+        CanonicalUpdateJson.SerializeWithoutTopLevelSignature(descriptor));
+    Require(
+        canonicalDescriptor.Contains(
+            "\"publishedAtUtc\":\"2026-08-08T05:00:00+00:00\"",
+            StringComparison.Ordinal),
+        "signed release timestamp canonical form must be second-aligned RFC3339 with +00:00");
+
     var cached = new CachedPlatformUpdate(
         "sirk-agent",
         "0.1.1.11",
