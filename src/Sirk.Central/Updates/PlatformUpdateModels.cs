@@ -14,7 +14,7 @@ internal sealed record PlatformReleaseDescriptor(
     [property: JsonPropertyName("size")] long Size,
     [property: JsonPropertyName("sha256")] string Sha256,
     [property: JsonPropertyName("commit")] string Commit,
-    [property: JsonPropertyName("publishedAtUtc"), JsonConverter(typeof(ReleaseTimestampJsonConverter))] DateTimeOffset PublishedAtUtc,
+    [property: JsonPropertyName("publishedAtUtc")] DateTimeOffset PublishedAtUtc,
     [property: JsonPropertyName("signature")] UpdateSignature Signature);
 
 internal sealed record PlatformPackageManifest(
