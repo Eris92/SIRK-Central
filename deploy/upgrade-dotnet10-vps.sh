@@ -262,6 +262,9 @@ Requires=docker.service
 [Service]
 Type=oneshot
 Environment=INSTALL_ROOT=${INSTALL_ROOT}
+Environment=DOCKER_CONFIG=/run/sirk-central-web-update/docker
+RuntimeDirectory=sirk-central-web-update
+RuntimeDirectoryMode=0700
 ExecStart=/usr/local/sbin/sirk-central-web-update
 PrivateTmp=true
 ProtectHome=true
