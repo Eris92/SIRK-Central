@@ -85,7 +85,7 @@ jobs:
           python3 - "$asset" "$VERSION" "$CHANNEL" "$GITHUB_SHA" "$SIGNING_KEY_ID" "$RUNNER_TEMP/release-key.pem" "$release/SIRK-Central-${VERSION}-linux-x64.update.json" <<'PY'
           import base64,datetime,hashlib,json,os,subprocess,sys,tempfile
           asset,version,channel,commit,key_id,key_path,out=sys.argv[1:]
-          data=open(asset,'rb').read();published=datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='microseconds')
+          data=open(asset,'rb').read();published=datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat()
           obj={'schemaVersion':1,'applicationId':'sirk-central','product':'SIRK Central','version':version,'runtime':'linux-x64','channel':channel,'assetName':os.path.basename(asset),'size':len(data),'sha256':hashlib.sha256(data).hexdigest(),'commit':commit,'publishedAtUtc':published,'signature':{'algorithm':'ES256','keyId':key_id,'value':''}}
           canonical=json.dumps({k:v for k,v in obj.items() if k!='signature'},sort_keys=True,separators=(',',':')).encode()
           with tempfile.NamedTemporaryFile(delete=False) as f:f.write(canonical);p=f.name
