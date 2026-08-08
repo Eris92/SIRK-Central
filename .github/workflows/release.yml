@@ -54,8 +54,10 @@ jobs:
           cp Dockerfile.dotnet10 Directory.Build.props global.json "$payload/"
           cp deploy/update.sh deploy/upgrade-dotnet10-vps.sh deploy/web-update-worker.sh "$payload/deploy/"
           cp deploy/dotnet10/Caddyfile "$payload/deploy/dotnet10/"
+          cp -a public "$payload/"
           cp -a src/Sirk.Central "$payload/src/"
           cp -a website "$payload/"
+          [[ -s "$payload/public/index.html" && -s "$payload/public/csrf-bootstrap.js" ]]
           find "$payload/src/Sirk.Central" -type d \( -name bin -o -name obj \) -prune -exec rm -rf -- {} +
           [[ ! -e "$payload/.git" ]]
           if find "$payload/src/Sirk.Central" -type d \( -name bin -o -name obj \) -print -quit | grep -q .; then
