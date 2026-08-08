@@ -187,7 +187,8 @@ try {
         `$context = `$listener.EndGetContext(`$async)
         `$healthy = Test-Path -LiteralPath `$sentinel -PathType Leaf
         `$context.Response.StatusCode = if (`$healthy) { 200 } else { 503 }
-        `$bytes = [Text.Encoding]::UTF8.GetBytes((if (`$healthy) { 'healthy' } else { 'update-active' }))
+        `$body = if (`$healthy) { 'healthy' } else { 'update-active' }
+        `$bytes = [Text.Encoding]::UTF8.GetBytes(`$body)
         `$context.Response.ContentLength64 = `$bytes.Length
         `$context.Response.OutputStream.Write(`$bytes, 0, `$bytes.Length)
         `$context.Response.Close()
@@ -216,6 +217,7 @@ finally {
         if ($process.HasExited) { throw "Rollback health server exited early with code $($process.ExitCode)." }
         Start-Sleep -Milliseconds 250
     } while ((Get-Date) -lt $deadline)
+    Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
     throw 'Rollback health server did not become ready.'
 }
 
