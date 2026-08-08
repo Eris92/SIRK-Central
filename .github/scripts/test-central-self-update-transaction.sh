@@ -57,7 +57,6 @@ create_package() {
   printf '<Project Sdk="Microsoft.NET.Sdk.Web" />\n' > "$payload/src/Sirk.Central/Sirk.Central.csproj"
   printf ':80 { respond "test" 200 }\n' > "$payload/deploy/dotnet10/Caddyfile"
   printf '<!doctype html><title>SIRK</title>\n' > "$payload/website/index.html"
-  printf '{"schemaVersion":1,"applicationId":"sirk-central","product":"SIRK Central","version":"%s","runtime":"linux-x64","files":[],"signature":{"algorithm":"ES256","keyId":"fixture","value":"fixture"}}\n' "$version" > "$payload/update-manifest.json"
   cat > "$payload/deploy/upgrade-dotnet10-vps.sh" <<SH
 #!/usr/bin/env bash
 set -euo pipefail
@@ -69,6 +68,31 @@ printf 'new-source-deploy $version %s\n' "\${SIRK_RELEASE_COMMIT:-}" >> "\${INST
 SH
   chmod 0700 "$payload/deploy/upgrade-dotnet10-vps.sh"
   printf 'new-source-%s\n' "$version" > "$payload/source-marker.txt"
+  python3 - "$payload" "$version" <<'PY'
+import hashlib,json,os,sys
+root,version=sys.argv[1:]
+files=[]
+for base,dirs,names in os.walk(root):
+    dirs.sort(); names.sort()
+    for name in names:
+        path=os.path.join(base,name)
+        rel=os.path.relpath(path,root).replace(os.sep,'/')
+        if rel=='update-manifest.json':
+            continue
+        data=open(path,'rb').read()
+        files.append({'path':rel,'size':len(data),'sha256':hashlib.sha256(data).hexdigest()})
+manifest={
+    'schemaVersion':1,
+    'applicationId':'sirk-central',
+    'product':'SIRK Central',
+    'version':version,
+    'runtime':'linux-x64',
+    'files':files,
+    'signature':{'algorithm':'ES256','keyId':'fixture','value':'fixture'}
+}
+with open(os.path.join(root,'update-manifest.json'),'w',encoding='utf-8') as f:
+    json.dump(manifest,f,separators=(',',':'))
+PY
   python3 - "$payload" "$package" <<'PY'
 import os,sys,zipfile
 root,out=sys.argv[1:]
