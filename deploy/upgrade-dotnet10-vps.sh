@@ -244,6 +244,7 @@ services:
       - "8090"
     environment:
       ASPNETCORE_ENVIRONMENT: Production
+      AllowedHosts: "${DEMO_HOST};localhost;127.0.0.1"
       Sirk__Demo__ControlTokenFile: /run/secrets/sirk-demo-control-token
       Sirk__Demo__PortalImage: "ghcr.io/eris92/sirk-portal"
       Sirk__Demo__Network: sirk-demo
