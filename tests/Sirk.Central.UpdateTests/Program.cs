@@ -1,5 +1,6 @@
 using System.Text;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Sirk.Central.Security;
 using Sirk.Central.Updates;
@@ -84,6 +85,15 @@ try
     }
 
     Console.WriteLine("SIRK_CENTRAL_AGENT_UPDATE_CONTRACT_OK");
+
+    if (string.Equals(
+            Environment.GetEnvironmentVariable("SIRK_REAL_RELEASE_E2E"),
+            "1",
+            StringComparison.Ordinal))
+    {
+        await RunRealReleaseE2EAsync(root);
+    }
+
     return 0;
 }
 finally
@@ -91,7 +101,134 @@ finally
     try { Directory.Delete(root, recursive: true); } catch { }
 }
 
+static async Task RunRealReleaseE2EAsync(string root)
+{
+    var token = Environment.GetEnvironmentVariable("SIRK_REAL_RELEASE_GITHUB_TOKEN")?.Trim();
+    Require(!string.IsNullOrWhiteSpace(token) && token.Length >= 20,
+        "real-release E2E requires a GitHub read token");
+
+    var trustedKeysPath = Environment.GetEnvironmentVariable("SIRK_REAL_RELEASE_TRUSTED_KEYS");
+    Require(!string.IsNullOrWhiteSpace(trustedKeysPath) && File.Exists(trustedKeysPath),
+        "real-release E2E requires a public release trust keyring");
+
+    var realRoot = Path.Combine(root, "real-release");
+    var tokenPath = Path.Combine(realRoot, "github-token");
+    var cacheRoot = Path.Combine(realRoot, "cache");
+    Directory.CreateDirectory(realRoot);
+    await File.WriteAllTextAsync(tokenPath, token!);
+
+    try
+    {
+        var security = Options.Create(new SecurityOptions
+        {
+            DataRoot = Path.Combine(realRoot, "security"),
+            ReleaseSigningPublicKeyFile = trustedKeysPath!,
+            RequireSignedReleases = true
+        });
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Sirk:Updates:GitHubTokenFile"] = tokenPath,
+                ["Sirk:Updates:CacheRoot"] = cacheRoot,
+                ["Sirk:Updates:MetadataTtlSeconds"] = "300",
+                ["Sirk:Updates:Retention"] = "3"
+            })
+            .Build();
+        var cache = new PlatformUpdateCache(
+            new SingleHttpClientFactory(),
+            security,
+            configuration,
+            NullLogger<PlatformUpdateCache>.Instance);
+
+        var scopes = new (string ApplicationId, string Runtime, string MinimumVersion)[]
+        {
+            ("sirk-agent", "win-x64", "0.1.1.35"),
+            ("sirk-portal", "win-x64", "0.1.1.2"),
+            ("sirk-portal", "linux-x64", "0.1.1.2"),
+            ("sirk-central", "linux-x64", "0.1.1.1")
+        };
+
+        var verified = new List<CachedPlatformUpdate>();
+        foreach (var scope in scopes)
+        {
+            var latest = await cache.GetLatestAsync(
+                scope.ApplicationId,
+                scope.Runtime,
+                "preview",
+                CancellationToken.None);
+            Require(latest is not null,
+                $"real signed release was not discovered: {scope.ApplicationId}/{scope.Runtime}");
+            Require(PlatformUpdateVersion.Compare(latest!.Version, scope.MinimumVersion) >= 0,
+                $"real signed release is older than the accepted baseline: {scope.ApplicationId}/{scope.Runtime}");
+            Require(latest.ApplicationId == scope.ApplicationId &&
+                    latest.Runtime == scope.Runtime &&
+                    latest.Channel == "preview",
+                $"real signed release scope mismatch: {scope.ApplicationId}/{scope.Runtime}");
+            Require(latest.Descriptor.ApplicationId == scope.ApplicationId &&
+                    latest.Descriptor.Runtime == scope.Runtime &&
+                    latest.Descriptor.Channel == "preview" &&
+                    latest.Descriptor.Version == latest.Version,
+                $"real signed descriptor mismatch: {scope.ApplicationId}/{scope.Runtime}");
+
+            var package = cache.GetPackage(
+                scope.ApplicationId,
+                latest.Version,
+                scope.Runtime,
+                "preview",
+                latest.Sha256);
+            Require(File.Exists(package.PackagePath),
+                $"verified cache package is missing: {scope.ApplicationId}/{scope.Runtime}");
+            Require(new FileInfo(package.PackagePath).Length == package.Size,
+                $"verified cache package size mismatch: {scope.ApplicationId}/{scope.Runtime}");
+
+            var second = await cache.GetLatestAsync(
+                scope.ApplicationId,
+                scope.Runtime,
+                "preview",
+                CancellationToken.None);
+            Require(second is not null &&
+                    second.Version == latest.Version &&
+                    second.Sha256 == latest.Sha256 &&
+                    second.PackagePath == latest.PackagePath,
+                $"second discovery did not reuse immutable cache: {scope.ApplicationId}/{scope.Runtime}");
+
+            var status = cache.Status(scope.ApplicationId, scope.Runtime, "preview");
+            Require(status.LatestVersion == latest.Version &&
+                    status.CachedVersions.Contains(latest.Version, StringComparer.Ordinal),
+                $"verified cache status mismatch: {scope.ApplicationId}/{scope.Runtime}");
+            verified.Add(latest);
+        }
+
+        File.Delete(tokenPath);
+        foreach (var release in verified)
+        {
+            var offline = await cache.GetLatestAsync(
+                release.ApplicationId,
+                release.Runtime,
+                release.Channel,
+                CancellationToken.None);
+            Require(offline is not null &&
+                    offline.Version == release.Version &&
+                    offline.Sha256 == release.Sha256,
+                $"verified cache was not reusable without GitHub access: {release.ApplicationId}/{release.Runtime}");
+        }
+
+        Console.WriteLine("SIRK_REAL_SIGNED_RELEASE_CACHE_E2E_OK");
+    }
+    finally
+    {
+        if (File.Exists(tokenPath)) File.Delete(tokenPath);
+    }
+}
+
 static void Require(bool condition, string message)
 {
     if (!condition) throw new InvalidOperationException(message);
+}
+
+sealed class SingleHttpClientFactory : IHttpClientFactory
+{
+    private readonly HttpClient _client = new();
+
+    public HttpClient CreateClient(string name) => _client;
 }
