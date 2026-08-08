@@ -318,6 +318,12 @@ try {
         throw 'Installer ticket was not persisted as consumed after enrollment.'
     }
 
+    & "$PSScriptRoot\Test-AgentUpdaterTransactionE2E.ps1" `
+        -Root $Root `
+        -BaseUrl $BaseUrl `
+        -PortalSession $auth.Session `
+        -GroupId $GroupId
+
     Write-Host 'SIRK_GROUP_AGENT_EXE_INSTALLATION_E2E_OK' -ForegroundColor Green
 }
 catch {
