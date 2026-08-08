@@ -438,6 +438,16 @@ internal sealed class PlatformUpdateCache
                 throw new InvalidDataException(
                     "Signed package manifest file hash mismatch: " + path);
         }
+
+        var actualFiles = entries
+            .Where(item =>
+                !string.Equals(item.Key, "update-manifest.json", StringComparison.OrdinalIgnoreCase) &&
+                !string.IsNullOrEmpty(item.Value.Name))
+            .Select(item => item.Key)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (!actualFiles.SetEquals(seen))
+            throw new InvalidDataException(
+                "Signed package manifest does not cover the exact update ZIP file set.");
     }
 
     private void VerifySignature<T>(T value, UpdateSignature signature)
