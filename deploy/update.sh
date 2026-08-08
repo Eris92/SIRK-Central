@@ -113,26 +113,66 @@ if [[ "$CURRENT_VERSION" == "$VERSION" && "$CURRENT_COMMIT" == "$COMMIT" ]]; the
 fi
 
 log "extracting verified ${VERSION} cache payload without repository access"
-python3 - "$PACKAGE_PATH" "$STAGING_ROOT" <<'PY'
-import os,pathlib,stat,sys,zipfile
+python3 - "$PACKAGE_PATH" "$STAGING_ROOT" "$VERSION" "$RUNTIME" <<'PY'
+import hashlib,json,pathlib,re,stat,sys,zipfile
 archive=pathlib.Path(sys.argv[1])
 root=pathlib.Path(sys.argv[2]).resolve()
+expected_version=sys.argv[3]
+expected_runtime=sys.argv[4]
 with zipfile.ZipFile(archive) as z:
-    if not 1 <= len(z.infolist()) <= 8192:
+    infos=z.infolist()
+    if not 1 <= len(infos) <= 8192:
         raise SystemExit('invalid archive entry count')
-    seen=set()
-    for info in z.infolist():
+    entries={}
+    for info in infos:
         name=info.filename.replace('\\','/')
         parts=pathlib.PurePosixPath(name).parts
-        if not name or name.startswith('/') or '..' in parts or name in seen:
+        if not name or name.startswith('/') or '..' in parts or name in entries:
             raise SystemExit('unsafe or duplicate archive entry: '+name)
-        seen.add(name)
         mode=(info.external_attr >> 16) & 0xFFFF
         if stat.S_ISLNK(mode):
             raise SystemExit('symlink archive entry is forbidden: '+name)
         target=(root/pathlib.PurePosixPath(name)).resolve()
         if root != target and root not in target.parents:
             raise SystemExit('archive entry escaped staging root')
+        entries[name]=info
+
+    manifest_info=entries.get('update-manifest.json')
+    if manifest_info is None or not 0 < manifest_info.file_size <= 131072:
+        raise SystemExit('signed Central package manifest is missing')
+    with z.open(manifest_info) as stream:
+        manifest=json.load(stream)
+    if manifest.get('schemaVersion') != 1 or manifest.get('applicationId') != 'sirk-central' or manifest.get('product') != 'SIRK Central' or manifest.get('version') != expected_version or manifest.get('runtime') != expected_runtime:
+        raise SystemExit('signed Central package manifest scope is invalid')
+    signature=manifest.get('signature') or {}
+    if signature.get('algorithm') != 'ES256' or not signature.get('keyId') or not signature.get('value'):
+        raise SystemExit('signed Central package manifest signature metadata is invalid')
+    files=manifest.get('files')
+    if not isinstance(files,list) or not 1 <= len(files) <= 8191:
+        raise SystemExit('signed Central package manifest file list is invalid')
+
+    declared={}
+    for item in files:
+        name=str(item.get('path') or '').replace('\\','/')
+        parts=pathlib.PurePosixPath(name).parts
+        sha=str(item.get('sha256') or '').lower()
+        size=item.get('size')
+        if not name or name.startswith('/') or '..' in parts or name in declared or not isinstance(size,int) or size < 0 or not re.fullmatch(r'[0-9a-f]{64}',sha):
+            raise SystemExit('signed Central package manifest contains an invalid file entry: '+name)
+        info=entries.get(name)
+        if info is None or info.file_size != size:
+            raise SystemExit('signed Central package file size/path mismatch: '+name)
+        with z.open(info) as stream:
+            actual=hashlib.sha256(stream.read()).hexdigest()
+        if actual != sha:
+            raise SystemExit('signed Central package file hash mismatch: '+name)
+        declared[name]=item
+
+    actual_payload=set(entries)-{'update-manifest.json'}
+    if actual_payload != set(declared):
+        extra=sorted(actual_payload-set(declared))
+        missing=sorted(set(declared)-actual_payload)
+        raise SystemExit('signed Central package exact file set mismatch; extra='+','.join(extra)+' missing='+','.join(missing))
     z.extractall(root)
 PY
 
