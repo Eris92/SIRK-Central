@@ -76,13 +76,13 @@ jobs:
           root="$RUNNER_TEMP/sirk-real-release"
           mkdir -p "$root"
           curl --fail --silent --show-error --location \
-            https://github.com/Eris92/SIRK-Agent/releases/download/v0.1.1.37/release-trusted-keys.json \
+            https://github.com/Eris92/SIRK-Agent/releases/download/v0.1.1.38/release-trusted-keys.json \
             --output "$root/agent.json"
           curl --fail --silent --show-error --location \
-            https://github.com/Eris92/SIRK-Portal/releases/download/v0.1.1.2/release-trusted-keys.json \
+            https://github.com/Eris92/SIRK-Portal/releases/download/v0.1.1.3/release-trusted-keys.json \
             --output "$root/portal.json"
           curl --fail --silent --show-error --location \
-            https://github.com/Eris92/SIRK-Central/releases/download/v0.1.1.1/release-trusted-keys.json \
+            https://github.com/Eris92/SIRK-Central/releases/download/v0.1.1.2/release-trusted-keys.json \
             --output "$root/central.json"
           python3 - "$root/agent.json" "$root/portal.json" "$root/central.json" <<'PY'
           import hashlib,json,sys
@@ -109,4 +109,11 @@ jobs:
           SIRK_REAL_RELEASE_E2E: '1'
           SIRK_REAL_RELEASE_GITHUB_TOKEN: ${{ github.token }}
           SIRK_REAL_RELEASE_TRUSTED_KEYS: ${{ runner.temp }}/sirk-real-release/trusted-keys.json
+          SIRK_REAL_RELEASE_EXPORT_DIR: ${{ runner.temp }}/sirk-real-central
+          SIRK_REAL_RELEASE_EXPORT_APPLICATION_ID: sirk-central
+          SIRK_REAL_RELEASE_EXPORT_RUNTIME: linux-x64
+          SIRK_REAL_RELEASE_EXPORT_CHANNEL: stable
         run: dotnet run --project tests/Sirk.Central.UpdateTests/Sirk.Central.UpdateTests.csproj --configuration Release
+      - name: Exercise real stable Central package through host transaction and rollback
+        shell: bash
+        run: sudo env SIRK_REAL_CENTRAL_RELEASE_DIR="$RUNNER_TEMP/sirk-real-central" bash .github/scripts/test-central-self-update-transaction.sh
