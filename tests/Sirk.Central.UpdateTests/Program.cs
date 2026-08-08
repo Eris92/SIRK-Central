@@ -115,12 +115,15 @@ static async Task RunRealReleaseE2EAsync(string root)
     var exportRoot = Environment.GetEnvironmentVariable("SIRK_REAL_RELEASE_EXPORT_DIR")?.Trim();
     var exportApplicationId = Environment.GetEnvironmentVariable("SIRK_REAL_RELEASE_EXPORT_APPLICATION_ID")?.Trim();
     var exportRuntime = Environment.GetEnvironmentVariable("SIRK_REAL_RELEASE_EXPORT_RUNTIME")?.Trim();
+    var exportChannel = Environment.GetEnvironmentVariable("SIRK_REAL_RELEASE_EXPORT_CHANNEL")?.Trim();
     if (!string.IsNullOrWhiteSpace(exportRoot))
     {
         Require(!string.IsNullOrWhiteSpace(exportApplicationId),
             "real-release export requires an application id");
         Require(!string.IsNullOrWhiteSpace(exportRuntime),
             "real-release export requires a runtime");
+        Require(exportChannel is "stable" or "preview",
+            "real-release export requires stable or preview channel");
         exportRoot = Path.GetFullPath(exportRoot);
         Directory.CreateDirectory(exportRoot);
     }
@@ -154,86 +157,88 @@ static async Task RunRealReleaseE2EAsync(string root)
             configuration,
             NullLogger<PlatformUpdateCache>.Instance);
 
-        var scopes = new (string ApplicationId, string Runtime, string MinimumVersion)[]
+        var scopes = new (string ApplicationId, string Runtime, string Channel, string MinimumVersion)[]
         {
-            ("sirk-agent", "win-x64", "0.1.1.37"),
-            ("sirk-portal", "win-x64", "0.1.1.2"),
-            ("sirk-portal", "linux-x64", "0.1.1.2"),
-            ("sirk-central", "linux-x64", "0.1.1.1")
+            ("sirk-agent", "win-x64", "preview", "0.1.1.38"),
+            ("sirk-portal", "win-x64", "preview", "0.1.1.3"),
+            ("sirk-portal", "linux-x64", "preview", "0.1.1.3"),
+            ("sirk-central", "linux-x64", "preview", "0.1.1.1"),
+            ("sirk-central", "linux-x64", "stable", "0.1.1.2")
         };
 
         var verified = new List<CachedPlatformUpdate>();
         var exportCompleted = false;
         foreach (var scope in scopes)
         {
-            Console.WriteLine($"SIRK_REAL_RELEASE_SCOPE_BEGIN {scope.ApplicationId}/{scope.Runtime}");
+            Console.WriteLine($"SIRK_REAL_RELEASE_SCOPE_BEGIN {scope.ApplicationId}/{scope.Runtime}/{scope.Channel}");
             CachedPlatformUpdate? latest;
             try
             {
                 latest = await cache.GetLatestAsync(
                     scope.ApplicationId,
                     scope.Runtime,
-                    "preview",
+                    scope.Channel,
                     CancellationToken.None);
             }
             catch (Exception error)
             {
                 throw new InvalidOperationException(
-                    $"real signed release cache verification failed: {scope.ApplicationId}/{scope.Runtime}",
+                    $"real signed release cache verification failed: {scope.ApplicationId}/{scope.Runtime}/{scope.Channel}",
                     error);
             }
 
             Require(latest is not null,
-                $"real signed release was not discovered: {scope.ApplicationId}/{scope.Runtime}");
+                $"real signed release was not discovered: {scope.ApplicationId}/{scope.Runtime}/{scope.Channel}");
             Require(PlatformUpdateVersion.Compare(latest!.Version, scope.MinimumVersion) >= 0,
-                $"real signed release is older than the accepted baseline: {scope.ApplicationId}/{scope.Runtime}");
+                $"real signed release is older than the accepted baseline: {scope.ApplicationId}/{scope.Runtime}/{scope.Channel}");
             Require(latest.ApplicationId == scope.ApplicationId &&
                     latest.Runtime == scope.Runtime &&
-                    latest.Channel == "preview",
-                $"real signed release scope mismatch: {scope.ApplicationId}/{scope.Runtime}");
+                    latest.Channel == scope.Channel,
+                $"real signed release scope mismatch: {scope.ApplicationId}/{scope.Runtime}/{scope.Channel}");
             Require(latest.Descriptor.ApplicationId == scope.ApplicationId &&
                     latest.Descriptor.Runtime == scope.Runtime &&
-                    latest.Descriptor.Channel == "preview" &&
+                    latest.Descriptor.Channel == scope.Channel &&
                     latest.Descriptor.Version == latest.Version,
-                $"real signed descriptor mismatch: {scope.ApplicationId}/{scope.Runtime}");
+                $"real signed descriptor mismatch: {scope.ApplicationId}/{scope.Runtime}/{scope.Channel}");
 
             var package = cache.GetPackage(
                 scope.ApplicationId,
                 latest.Version,
                 scope.Runtime,
-                "preview",
+                scope.Channel,
                 latest.Sha256);
             Require(File.Exists(package.PackagePath),
-                $"verified cache package is missing: {scope.ApplicationId}/{scope.Runtime}");
+                $"verified cache package is missing: {scope.ApplicationId}/{scope.Runtime}/{scope.Channel}");
             Require(new FileInfo(package.PackagePath).Length == package.Size,
-                $"verified cache package size mismatch: {scope.ApplicationId}/{scope.Runtime}");
+                $"verified cache package size mismatch: {scope.ApplicationId}/{scope.Runtime}/{scope.Channel}");
 
             var second = await cache.GetLatestAsync(
                 scope.ApplicationId,
                 scope.Runtime,
-                "preview",
+                scope.Channel,
                 CancellationToken.None);
             Require(second is not null &&
                     second.Version == latest.Version &&
                     second.Sha256 == latest.Sha256 &&
                     second.PackagePath == latest.PackagePath,
-                $"second discovery did not reuse immutable cache: {scope.ApplicationId}/{scope.Runtime}");
+                $"second discovery did not reuse immutable cache: {scope.ApplicationId}/{scope.Runtime}/{scope.Channel}");
 
-            var status = cache.Status(scope.ApplicationId, scope.Runtime, "preview");
+            var status = cache.Status(scope.ApplicationId, scope.Runtime, scope.Channel);
             Require(status.LatestVersion == latest.Version &&
                     status.CachedVersions.Contains(latest.Version, StringComparer.Ordinal),
-                $"verified cache status mismatch: {scope.ApplicationId}/{scope.Runtime}");
+                $"verified cache status mismatch: {scope.ApplicationId}/{scope.Runtime}/{scope.Channel}");
             verified.Add(latest);
 
             if (!string.IsNullOrWhiteSpace(exportRoot) &&
                 string.Equals(scope.ApplicationId, exportApplicationId, StringComparison.Ordinal) &&
-                string.Equals(scope.Runtime, exportRuntime, StringComparison.Ordinal))
+                string.Equals(scope.Runtime, exportRuntime, StringComparison.Ordinal) &&
+                string.Equals(scope.Channel, exportChannel, StringComparison.Ordinal))
             {
                 await ExportVerifiedReleaseAsync(exportRoot!, package);
                 exportCompleted = true;
             }
 
-            Console.WriteLine($"SIRK_REAL_RELEASE_SCOPE_OK {scope.ApplicationId}/{scope.Runtime} {latest.Version}");
+            Console.WriteLine($"SIRK_REAL_RELEASE_SCOPE_OK {scope.ApplicationId}/{scope.Runtime}/{scope.Channel} {latest.Version}");
         }
 
         if (!string.IsNullOrWhiteSpace(exportRoot))
@@ -250,7 +255,7 @@ static async Task RunRealReleaseE2EAsync(string root)
             Require(offline is not null &&
                     offline.Version == release.Version &&
                     offline.Sha256 == release.Sha256,
-                $"verified cache was not reusable without GitHub access: {release.ApplicationId}/{release.Runtime}");
+                $"verified cache was not reusable without GitHub access: {release.ApplicationId}/{release.Runtime}/{release.Channel}");
         }
 
         Console.WriteLine("SIRK_REAL_SIGNED_RELEASE_CACHE_E2E_OK");
@@ -277,10 +282,11 @@ static async Task ExportVerifiedReleaseAsync(string exportRoot, CachedPlatformUp
             channel = release.Channel,
             sha256 = release.Sha256,
             size = release.Size,
+            commit = release.Descriptor.Commit,
             packagePath
         }, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }),
         new UTF8Encoding(false));
-    Console.WriteLine($"SIRK_REAL_RELEASE_EXPORTED {release.ApplicationId}/{release.Runtime} {release.Version} {packagePath}");
+    Console.WriteLine($"SIRK_REAL_RELEASE_EXPORTED {release.ApplicationId}/{release.Runtime}/{release.Channel} {release.Version} {packagePath}");
 }
 
 static void Require(bool condition, string message)
