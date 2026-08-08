@@ -66,6 +66,11 @@ jobs:
           python3 - "$payload" "$VERSION" "$SIGNING_KEY_ID" "$RUNNER_TEMP/release-key.pem" <<'PY'
           import base64,hashlib,json,os,subprocess,sys,tempfile
           root,version,key_id,key_path=sys.argv[1:]
+          def canonical_bytes(value):
+              text=json.dumps(value,sort_keys=True,separators=(',',':'),ensure_ascii=True)
+              for raw,escaped in (('+','\\u002B'),('&','\\u0026'),('<','\\u003C'),('>','\\u003E'),("'",'\\u0027')):
+                  text=text.replace(raw,escaped)
+              return text.encode()
           files=[]
           for base,dirs,names in os.walk(root):
               dirs[:]=[d for d in dirs if d not in ('.git','bin','obj')]
@@ -75,7 +80,7 @@ jobs:
                   data=open(p,'rb').read(); files.append({'path':rel,'size':len(data),'sha256':hashlib.sha256(data).hexdigest()})
           files.sort(key=lambda x:x['path'])
           obj={'schemaVersion':1,'applicationId':'sirk-central','product':'SIRK Central','version':version,'runtime':'linux-x64','files':files,'signature':{'algorithm':'ES256','keyId':key_id,'value':''}}
-          canonical=json.dumps({k:v for k,v in obj.items() if k!='signature'},sort_keys=True,separators=(',',':')).encode()
+          canonical=canonical_bytes({k:v for k,v in obj.items() if k!='signature'})
           with tempfile.NamedTemporaryFile(delete=False) as f:f.write(canonical);p=f.name
           der=p+'.sig';subprocess.check_call(['openssl','dgst','-sha256','-sign',key_path,'-out',der,p]);sig=open(der,'rb').read()
           def rl(b,i):
@@ -92,9 +97,14 @@ jobs:
           python3 - "$asset" "$VERSION" "$CHANNEL" "$GITHUB_SHA" "$SIGNING_KEY_ID" "$RUNNER_TEMP/release-key.pem" "$release/SIRK-Central-${VERSION}-linux-x64.update.json" <<'PY'
           import base64,datetime,hashlib,json,os,subprocess,sys,tempfile
           asset,version,channel,commit,key_id,key_path,out=sys.argv[1:]
-          data=open(asset,'rb').read();published=datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace('+00:00','Z')
+          def canonical_bytes(value):
+              text=json.dumps(value,sort_keys=True,separators=(',',':'),ensure_ascii=True)
+              for raw,escaped in (('+','\\u002B'),('&','\\u0026'),('<','\\u003C'),('>','\\u003E'),("'",'\\u0027')):
+                  text=text.replace(raw,escaped)
+              return text.encode()
+          data=open(asset,'rb').read();published=datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat()
           obj={'schemaVersion':1,'applicationId':'sirk-central','product':'SIRK Central','version':version,'runtime':'linux-x64','channel':channel,'assetName':os.path.basename(asset),'size':len(data),'sha256':hashlib.sha256(data).hexdigest(),'commit':commit,'publishedAtUtc':published,'signature':{'algorithm':'ES256','keyId':key_id,'value':''}}
-          canonical=json.dumps({k:v for k,v in obj.items() if k!='signature'},sort_keys=True,separators=(',',':')).encode()
+          canonical=canonical_bytes({k:v for k,v in obj.items() if k!='signature'})
           with tempfile.NamedTemporaryFile(delete=False) as f:f.write(canonical);p=f.name
           der=p+'.sig';subprocess.check_call(['openssl','dgst','-sha256','-sign',key_path,'-out',der,p]);sig=open(der,'rb').read()
           def rl(b,i):
