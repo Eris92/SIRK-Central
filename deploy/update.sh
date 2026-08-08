@@ -16,7 +16,7 @@ log() { printf '[SIRK UPDATE] %s\n' "$*"; }
 die() { printf '[SIRK UPDATE] ERROR: %s\n' "$*" >&2; exit 1; }
 
 [[ "$(id -u)" -eq 0 ]] || die "run this script through sudo or as root"
-for command in curl jq python3 sha256sum stat docker; do
+for command in curl jq python3 sha256sum stat docker flock; do
     command -v "$command" >/dev/null 2>&1 || die "missing command: $command"
 done
 [[ -d "$SOURCE_DIR" ]] || die "Central source directory is missing: $SOURCE_DIR"
