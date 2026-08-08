@@ -167,3 +167,120 @@ grep -q "new-source-deploy 0.1.1.101 $FAIL_COMMIT" "$TEST_INSTALL/deployment-eve
 grep -q "old-source-redeploy $OLD_COMMIT" "$TEST_INSTALL/deployment-events.log"
 printf 'SIRK_CENTRAL_SELF_UPDATE_ROLLBACK_OK\n'
 printf 'SIRK_CENTRAL_SELF_UPDATE_TRANSACTION_E2E_OK\n'
+
+run_real_signed_case() {
+  local mode="$1" release_dir="$2"
+  local metadata="$release_dir/release.json"
+  [[ -s "$metadata" ]] || { echo 'real Central release metadata is missing' >&2; exit 81; }
+
+  local application_id version runtime channel sha size commit package
+  application_id="$(jq -r '.applicationId // empty' "$metadata")"
+  version="$(jq -r '.version // empty' "$metadata")"
+  runtime="$(jq -r '.runtime // empty' "$metadata")"
+  channel="$(jq -r '.channel // empty' "$metadata")"
+  sha="$(jq -r '.sha256 // empty' "$metadata" | tr '[:upper:]' '[:lower:]')"
+  size="$(jq -r '.size // empty' "$metadata")"
+  commit="$(jq -r '.commit // empty' "$metadata" | tr '[:upper:]' '[:lower:]')"
+  package="$(jq -r '.packagePath // empty' "$metadata")"
+
+  [[ "$application_id" == 'sirk-central' ]] || { echo 'real release is not sirk-central' >&2; exit 82; }
+  [[ "$version" =~ ^0\.1\.1\.[0-9]+$ ]] || { echo 'real release version is invalid' >&2; exit 83; }
+  [[ "$runtime" == 'linux-x64' && "$channel" == 'stable' ]] || { echo 'real release scope is invalid' >&2; exit 84; }
+  [[ "$sha" =~ ^[0-9a-f]{64}$ && "$commit" =~ ^[0-9a-f]{40}$ ]] || { echo 'real release identity is invalid' >&2; exit 85; }
+  [[ "$size" =~ ^[0-9]+$ && "$size" -gt 0 && -f "$package" ]] || { echo 'real release package is missing' >&2; exit 86; }
+  [[ "$(stat -c %s "$package")" == "$size" ]] || { echo 'real release package size changed after cache export' >&2; exit 87; }
+  [[ "$(sha256sum "$package" | awk '{print tolower($1)}')" == "$sha" ]] || { echo 'real release package hash changed after cache export' >&2; exit 88; }
+
+  local install="$ROOT/real-$mode"
+  local fake="$ROOT/real-$mode-bin"
+  local response="$ROOT/real-$mode-broker.json"
+  local relative="sirk-central/linux-x64/stable/$version/package.zip"
+  mkdir -p "$install/source/deploy" "$install/secrets" "$install/updates/$(dirname "$relative")" "$fake"
+  printf '%064d\n' 0 > "$install/secrets/sirk-update-host-token"
+  printf '%s\n' "$OLD_COMMIT" > "$install/source/.sirk-release-commit"
+  printf 'old-source\n' > "$install/source/source-marker.txt"
+  cat > "$install/source/deploy/upgrade-dotnet10-vps.sh" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+  chmod 0700 "$install/source/deploy/upgrade-dotnet10-vps.sh"
+  cat > "$install/current-release.json" <<JSON
+{"schemaVersion":1,"applicationId":"sirk-central","version":"0.1.1.1","commit":"$OLD_COMMIT","sha256":"$(printf 'a%.0s' {1..64})"}
+JSON
+  cp "$package" "$install/updates/$relative"
+  cat > "$response" <<JSON
+{"applicationId":"sirk-central","version":"$version","runtime":"linux-x64","channel":"stable","size":$size,"sha256":"$sha","commit":"$commit","packagePath":"/var/lib/sirk/updates/$relative"}
+JSON
+
+  cat > "$fake/docker" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+  cat > "$fake/curl" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$1" == "--config" && -f "$2" ]] || exit 64
+out="$(awk -F'"' '/^output = / {print $2; exit}' "$2")"
+cp "$SIRK_TEST_BROKER_RESPONSE" "$out"
+SH
+  cat > "$fake/bash" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+script="${1:-}"
+if [[ "$script" == */deploy/upgrade-dotnet10-vps.sh ]]; then
+  printf 'deploy %s\n' "${SIRK_RELEASE_COMMIT:-}" >> "${INSTALL_ROOT}/real-deployment-events.log"
+  if [[ -n "${SIRK_TEST_FAIL_COMMIT:-}" && "${SIRK_RELEASE_COMMIT:-}" == "$SIRK_TEST_FAIL_COMMIT" ]]; then
+    exit 73
+  fi
+  exit 0
+fi
+exec /usr/bin/bash "$@"
+SH
+  chmod 0700 "$fake/docker" "$fake/curl" "$fake/bash"
+
+  local fail_commit=""
+  [[ "$mode" != 'rollback' ]] || fail_commit="$commit"
+  set +e
+  env \
+    PATH="$fake:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+    INSTALL_ROOT="$install" \
+    SOURCE_DIR="$install/source" \
+    SECRETS_DIR="$install/secrets" \
+    UPDATE_CACHE_DIR="$install/updates" \
+    UPDATE_STATE_FILE="$install/current-release.json" \
+    SIRK_UPDATE_HOST_TOKEN_FILE="$install/secrets/sirk-update-host-token" \
+    SIRK_CENTRAL_LOCAL_URL="http://127.0.0.1:18080" \
+    SIRK_TEST_BROKER_RESPONSE="$response" \
+    SIRK_TEST_FAIL_COMMIT="$fail_commit" \
+    /usr/bin/bash "$REPO_ROOT/deploy/update.sh"
+  local code=$?
+  set -e
+
+  if [[ "$mode" == 'success' ]]; then
+    [[ "$code" -eq 0 ]] || { echo 'real signed Central update failed' >&2; exit 89; }
+    grep -qx "$commit" "$install/source/.sirk-release-commit"
+    grep -qx 'old-source' "$install/source.previous/source-marker.txt"
+    jq -e --arg version "$version" --arg commit "$commit" --arg sha "$sha" \
+      '.applicationId == "sirk-central" and .version == $version and .commit == $commit and .sha256 == $sha' \
+      "$install/current-release.json" >/dev/null
+    [[ ! -d "$install/source/.git" ]]
+    grep -q "deploy $commit" "$install/real-deployment-events.log"
+    printf 'SIRK_CENTRAL_REAL_SIGNED_SELF_UPDATE_OK version=%s\n' "$version"
+    return
+  fi
+
+  [[ "$code" -ne 0 ]] || { echo 'real signed rollback fixture unexpectedly succeeded' >&2; exit 90; }
+  grep -qx 'old-source' "$install/source/source-marker.txt"
+  grep -qx "$OLD_COMMIT" "$install/source/.sirk-release-commit"
+  jq -e --arg commit "$OLD_COMMIT" '.version == "0.1.1.1" and .commit == $commit' "$install/current-release.json" >/dev/null
+  grep -q "deploy $commit" "$install/real-deployment-events.log"
+  grep -q "deploy $OLD_COMMIT" "$install/real-deployment-events.log"
+  printf 'SIRK_CENTRAL_REAL_SIGNED_SELF_UPDATE_ROLLBACK_OK version=%s\n' "$version"
+}
+
+if [[ -n "${SIRK_REAL_CENTRAL_RELEASE_DIR:-}" ]]; then
+  printf '=== real signed stable Central package transaction ===\n'
+  run_real_signed_case success "$SIRK_REAL_CENTRAL_RELEASE_DIR"
+  run_real_signed_case rollback "$SIRK_REAL_CENTRAL_RELEASE_DIR"
+  printf 'SIRK_CENTRAL_REAL_SIGNED_SELF_UPDATE_TRANSACTION_E2E_OK\n'
+fi
