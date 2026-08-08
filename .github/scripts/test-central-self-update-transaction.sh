@@ -213,18 +213,18 @@ JSON
 JSON
 
   cat > "$fake/docker" <<'SH'
-#!/usr/bin/env bash
+#!/usr/bin/bash
 exit 0
 SH
   cat > "$fake/curl" <<'SH'
-#!/usr/bin/env bash
+#!/usr/bin/bash
 set -euo pipefail
 [[ "$1" == "--config" && -f "$2" ]] || exit 64
 out="$(awk -F'"' '/^output = / {print $2; exit}' "$2")"
 cp "$SIRK_TEST_BROKER_RESPONSE" "$out"
 SH
   cat > "$fake/bash" <<'SH'
-#!/usr/bin/env bash
+#!/usr/bin/bash
 set -euo pipefail
 script="${1:-}"
 if [[ "$script" == */deploy/upgrade-dotnet10-vps.sh ]]; then
