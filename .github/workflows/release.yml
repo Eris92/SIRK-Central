@@ -42,6 +42,7 @@ jobs:
           [[ "$SIGNING_KEY_ID" =~ ^[A-Za-z0-9._-]{1,80}$ ]] || { echo 'SIRK_RELEASE_SIGNING_KEY_ID is invalid.' >&2; exit 1; }
           printf '%s' "$SIGNING_PRIVATE_KEY_PEM" > "$RUNNER_TEMP/release-key.pem"
           chmod 0600 "$RUNNER_TEMP/release-key.pem"
+          openssl pkey -in "$RUNNER_TEMP/release-key.pem" -pubout -out "$RUNNER_TEMP/release-public.pem"
       - name: Build signed Central package
         shell: bash
         run: |
@@ -56,6 +57,12 @@ jobs:
           cp -a src/Sirk.Central "$payload/src/"
           cp -a website "$payload/"
           [[ ! -e "$payload/.git" ]]
+          python3 - "$RUNNER_TEMP/release-public.pem" "$SIGNING_KEY_ID" "$release/release-trusted-keys.json" <<'PY'
+          import json,sys
+          pem=open(sys.argv[1],encoding='utf-8').read()
+          with open(sys.argv[3],'w',encoding='utf-8') as f:
+              json.dump({'keys':[{'keyId':sys.argv[2],'publicKeyPem':pem}]},f,separators=(',',':'))
+          PY
           python3 - "$payload" "$VERSION" "$SIGNING_KEY_ID" "$RUNNER_TEMP/release-key.pem" <<'PY'
           import base64,hashlib,json,os,subprocess,sys,tempfile
           root,version,key_id,key_path=sys.argv[1:]
@@ -105,10 +112,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          args=("v$VERSION" "artifacts/release/SIRK-Central-${VERSION}-linux-x64.zip" "artifacts/release/SIRK-Central-${VERSION}-linux-x64.update.json")
+          args=("v$VERSION" "artifacts/release/SIRK-Central-${VERSION}-linux-x64.zip" "artifacts/release/SIRK-Central-${VERSION}-linux-x64.update.json" "artifacts/release/release-trusted-keys.json")
           if [[ "$CHANNEL" == preview ]]; then args+=(--prerelease); fi
           gh release create "${args[@]}" --title "SIRK Central $VERSION" --target "$GITHUB_SHA" --notes "Signed SIRK Central $CHANNEL self-update. Installed updates are consumed from the local Central verified cache."
       - name: Remove private key
         if: always()
         shell: bash
-        run: rm -f "$RUNNER_TEMP/release-key.pem"
+        run: rm -f "$RUNNER_TEMP/release-key.pem" "$RUNNER_TEMP/release-public.pem"
