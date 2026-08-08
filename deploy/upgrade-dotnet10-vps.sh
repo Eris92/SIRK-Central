@@ -266,6 +266,12 @@ services:
     cap_drop:
       - ALL
     pids_limit: 256
+    healthcheck:
+      test: ["CMD", "dotnet", "Sirk.Central.dll", "--health-check", "http://127.0.0.1:8090/healthz"]
+      interval: 20s
+      timeout: 7s
+      start_period: 10s
+      retries: 3
     networks:
       - sirk-edge
       - sirk-demo
