@@ -85,6 +85,32 @@ try
         // Expected: Updater is the transaction executor, not a cached SIRK product payload.
     }
 
+    var emptyCacheRoot = Path.Combine(root, "empty-release-cache");
+    var emptyReleaseToken = Path.Combine(root, "empty-release-token");
+    await File.WriteAllTextAsync(emptyReleaseToken, new string('t', 32));
+    var emptyReleaseCache = new PlatformUpdateCache(
+        new EmptyReleaseHttpClientFactory(),
+        security,
+        new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Sirk:Updates:CacheRoot"] = emptyCacheRoot,
+                ["Sirk:Updates:GitHubTokenFile"] = emptyReleaseToken,
+                ["Sirk:Updates:MetadataTtlSeconds"] = "300"
+            })
+            .Build(),
+        NullLogger<PlatformUpdateCache>.Instance);
+    var noStableRelease = await emptyReleaseCache.GetLatestAsync(
+        "sirk-portal",
+        "win-x64",
+        "stable",
+        CancellationToken.None);
+    Require(noStableRelease is null,
+        "A valid channel with no matching release must return no update instead of a source failure.");
+    var emptyStatus = emptyReleaseCache.Status("sirk-portal", "win-x64", "stable");
+    Require(emptyStatus.LatestVersion is null && emptyStatus.LastError is null,
+        "An empty release channel must be cached as a successful no-update result.");
+
     Console.WriteLine("SIRK_CENTRAL_AGENT_UPDATE_CONTRACT_OK");
 
     if (string.Equals(
@@ -299,4 +325,22 @@ sealed class SingleHttpClientFactory : IHttpClientFactory
     private readonly HttpClient _client = new();
 
     public HttpClient CreateClient(string name) => _client;
+}
+
+sealed class EmptyReleaseHttpClientFactory : IHttpClientFactory
+{
+    private readonly HttpClient _client = new(new EmptyReleaseHandler());
+
+    public HttpClient CreateClient(string name) => _client;
+
+    private sealed class EmptyReleaseHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent("[]", Encoding.UTF8, "application/json")
+            });
+    }
 }

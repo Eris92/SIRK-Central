@@ -226,14 +226,24 @@ internal sealed class PlatformUpdateCache
         using var document = await JsonDocument.ParseAsync(
             stream,
             cancellationToken: cancellationToken);
-        var release = SelectRelease(document.RootElement, definition, runtime, channel)
-                      ?? throw new InvalidDataException(
-                          $"No compatible signed {definition.Product} release was found.");
-        var existing = ReadCached(definition, release.Version, runtime, channel);
+        var release = SelectRelease(document.RootElement, definition, runtime, channel);
+        if (release is null)
+        {
+            WriteState(
+                statePath,
+                new PlatformUpdateSourceState(
+                    response.Headers.ETag?.ToString(),
+                    DateTimeOffset.UtcNow,
+                    null,
+                    null));
+            return null;
+        }
+        var selected = release.Value;
+        var existing = ReadCached(definition, selected.Version, runtime, channel);
         var cached = existing ?? await CacheReleaseAsync(
             definition,
-            release.Release,
-            release.Version,
+            selected.Release,
+            selected.Version,
             runtime,
             channel,
             cancellationToken);
