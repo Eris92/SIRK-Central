@@ -48,3 +48,54 @@ jobs:
       - name: Group-bound Agent EXE installation and online device
         shell: pwsh
         run: .\.github\scripts\Run-CrossProductWindows.ps1
+
+  real-release-cache-e2e:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Verify one public production trust root
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/sirk-real-release"
+          mkdir -p "$root"
+          curl --fail --silent --show-error --location \
+            https://github.com/Eris92/SIRK-Agent/releases/download/v0.1.1.35/release-trusted-keys.json \
+            --output "$root/agent.json"
+          curl --fail --silent --show-error --location \
+            https://github.com/Eris92/SIRK-Portal/releases/download/v0.1.1.2/release-trusted-keys.json \
+            --output "$root/portal.json"
+          curl --fail --silent --show-error --location \
+            https://github.com/Eris92/SIRK-Central/releases/download/v0.1.1.1/release-trusted-keys.json \
+            --output "$root/central.json"
+          python3 - "$root/agent.json" "$root/portal.json" "$root/central.json" <<'PY'
+          import hashlib,json,sys
+          values=[]
+          for path in sys.argv[1:]:
+              doc=json.load(open(path,encoding='utf-8'))
+              keys=doc.get('keys')
+              if not isinstance(keys,list) or len(keys)!=1:
+                  raise SystemExit(f'invalid release trust keyring: {path}')
+              item=keys[0]
+              key_id=item.get('keyId','')
+              pem=item.get('publicKeyPem','').replace('\r\n','\n').strip()+'\n'
+              if not key_id or 'BEGIN PUBLIC KEY' not in pem:
+                  raise SystemExit(f'invalid release public key: {path}')
+              values.append((key_id,pem))
+          if values[1:] != values[:-1]:
+              raise SystemExit('Agent/Portal/Central release trust roots differ')
+          fingerprint=hashlib.sha256(values[0][1].encode()).hexdigest()
+          print('SIRK_RELEASE_TRUST_ROOT_OK keyId=' + values[0][0] + ' sha256=' + fingerprint)
+          PY
+          cp "$root/central.json" "$root/trusted-keys.json"
+      - name: Verify real signed releases through PlatformUpdateCache
+        env:
+          SIRK_REAL_RELEASE_E2E: '1'
+          SIRK_REAL_RELEASE_GITHUB_TOKEN: ${{ github.token }}
+          SIRK_REAL_RELEASE_TRUSTED_KEYS: ${{ runner.temp }}/sirk-real-release/trusted-keys.json
+        run: dotnet run --project tests/Sirk.Central.UpdateTests/Sirk.Central.UpdateTests.csproj --configuration Release
