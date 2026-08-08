@@ -1,4 +1,7 @@
+using System.IO.Compression;
+using System.Net.Http.Headers;
 using System.Text;
+using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -163,6 +166,8 @@ static async Task RunRealReleaseE2EAsync(string root)
             }
             catch (Exception error)
             {
+                if (scope.ApplicationId == "sirk-agent")
+                    await DiagnoseAgentArchiveAsync(token!, realRoot, scope.MinimumVersion);
                 throw new InvalidOperationException(
                     $"real signed release cache verification failed: {scope.ApplicationId}/{scope.Runtime}",
                     error);
@@ -232,6 +237,68 @@ static async Task RunRealReleaseE2EAsync(string root)
     {
         if (File.Exists(tokenPath)) File.Delete(tokenPath);
     }
+}
+
+static async Task DiagnoseAgentArchiveAsync(string token, string root, string version)
+{
+    using var client = new HttpClient();
+    client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("SIRK-Central-UpdateDiagnostic/1");
+    client.DefaultRequestHeaders.TryAddWithoutValidation("X-GitHub-Api-Version", "2022-11-28");
+
+    using var releaseResponse = await client.GetAsync(
+        $"https://api.github.com/repos/Eris92/SIRK-Agent/releases/tags/v{version}");
+    releaseResponse.EnsureSuccessStatusCode();
+    using var release = JsonDocument.Parse(await releaseResponse.Content.ReadAsStreamAsync());
+    var assetName = $"SIRK-Agent-{version}-net10-win-x64-framework-dependent.zip";
+    var assetUrl = release.RootElement.GetProperty("assets")
+        .EnumerateArray()
+        .Single(asset => asset.GetProperty("name").GetString() == assetName)
+        .GetProperty("url")
+        .GetString()!;
+
+    using var packageRequest = new HttpRequestMessage(HttpMethod.Get, assetUrl);
+    packageRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+    packageRequest.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/octet-stream"));
+    packageRequest.Headers.UserAgent.ParseAdd("SIRK-Central-UpdateDiagnostic/1");
+    packageRequest.Headers.TryAddWithoutValidation("X-GitHub-Api-Version", "2022-11-28");
+    using var packageResponse = await client.SendAsync(packageRequest, HttpCompletionOption.ResponseHeadersRead);
+    packageResponse.EnsureSuccessStatusCode();
+    var packagePath = Path.Combine(root, "agent-diagnostic.zip");
+    await using (var output = File.Create(packagePath))
+        await packageResponse.Content.CopyToAsync(output);
+
+    using var archive = ZipFile.OpenRead(packagePath);
+    var entries = archive.Entries.ToDictionary(
+        entry => entry.FullName.Replace('\\', '/'),
+        entry => entry,
+        StringComparer.OrdinalIgnoreCase);
+    var manifestEntry = entries["update-manifest.json"];
+    PlatformPackageManifest manifest;
+    await using (var input = manifestEntry.Open())
+        manifest = (await JsonSerializer.DeserializeAsync<PlatformPackageManifest>(input))!;
+
+    Console.WriteLine($"SIRK_AGENT_ARCHIVE_DIAG entries={entries.Count} manifestFiles={manifest.Files.Count}");
+    foreach (var file in manifest.Files)
+    {
+        var path = file.Path.Replace('\\', '/');
+        if (!entries.TryGetValue(path, out var entry))
+        {
+            Console.WriteLine($"SIRK_AGENT_ARCHIVE_DIAG_MISSING path={path}");
+            return;
+        }
+        if (entry.Length != file.Size)
+        {
+            Console.WriteLine($"SIRK_AGENT_ARCHIVE_DIAG_SIZE path={path} manifest={file.Size} zip={entry.Length}");
+            return;
+        }
+        if (entry.Length > 80L * 1024 * 1024)
+        {
+            Console.WriteLine($"SIRK_AGENT_ARCHIVE_DIAG_OVERSIZE path={path} zip={entry.Length}");
+            return;
+        }
+    }
+    Console.WriteLine("SIRK_AGENT_ARCHIVE_DIAG_NO_PATH_OR_SIZE_MISMATCH");
 }
 
 static void Require(bool condition, string message)
