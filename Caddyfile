@@ -108,6 +108,11 @@ www.{$SIRK_BUSINESS_DOMAIN} {
 {$SIRK_CENTRAL_DOMAIN} {
     encode zstd gzip
 
+    # Host-control API is reachable only through the loopback-published
+    # Central container port and is never exposed by the public Caddy edge.
+    @internalControl path /api/internal/*
+    respond @internalControl 404
+
     # Only browser UI routes fall back to index.html. API, authentication,
     # reverse-tunnel, health endpoints and static assets keep their paths.
     @spaRoutes {
