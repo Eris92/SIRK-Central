@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -14,6 +15,37 @@ internal sealed record TrustedKeyDocument(
 internal sealed record TrustedKeyEntry(
     [property: JsonPropertyName("keyId")] string KeyId,
     [property: JsonPropertyName("publicKeyPem")] string PublicKeyPem);
+
+internal sealed class ReleaseTimestampJsonConverter : JsonConverter<DateTimeOffset>
+{
+    private const string Format = "yyyy-MM-dd'T'HH:mm:ss'Z'";
+
+    public override DateTimeOffset Read(
+        ref Utf8JsonReader reader,
+        Type typeToConvert,
+        JsonSerializerOptions options)
+    {
+        var value = reader.TokenType == JsonTokenType.String
+            ? reader.GetString()
+            : null;
+        if (value is null ||
+            !DateTimeOffset.TryParseExact(
+                value,
+                Format,
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+                out var parsed))
+            throw new JsonException("Release timestamp must use second-aligned UTC RFC3339 with Z.");
+        return parsed;
+    }
+
+    public override void Write(
+        Utf8JsonWriter writer,
+        DateTimeOffset value,
+        JsonSerializerOptions options) =>
+        writer.WriteStringValue(
+            value.ToUniversalTime().ToString(Format, CultureInfo.InvariantCulture));
+}
 
 internal static class JsonDefaults
 {
