@@ -62,6 +62,11 @@ www.{$SIRK_BUSINESS_DOMAIN} {
 {$SIRK_CENTRAL_DOMAIN} {
     encode zstd gzip
 
+    # Host-control API is reachable only through the loopback-published
+    # Central container port and is never exposed by the public Caddy edge.
+    @internalControl path /api/internal/*
+    respond @internalControl 404
+
     # Classic Central UI is canonical. The technical workspace remains
     # available explicitly as /workspace.html from Settings > Advanced.
     # Reverse tunnel routes must reach ASP.NET unchanged.
