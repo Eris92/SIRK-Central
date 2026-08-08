@@ -278,6 +278,8 @@
     for (const portal of state.portals) {
       const status = portal.connectionState || portal.status || (portal.connected ? "online" : "offline");
       const row = document.createElement("tr");
+      row.className = `portal-row${portal.id === select.value ? " selected" : ""}`;
+      row.dataset.portalId = portal.id;
       const cells = [status, portal.id, portal.name, portal.heartbeat?.portalVersion || "", portal.heartbeat?.agentCount ?? "", portal.heartbeat?.receivedAtUtc || ""];
       cells.forEach((value, index) => {
         const cell = document.createElement("td");
@@ -285,7 +287,14 @@
           const badge = document.createElement("span");
           badge.className = `badge ${status}`;
           badge.textContent = status;
-          cell.append(badge);
+          const available = String(portal.heartbeat?.availableVersion || "").trim();
+          const current = String(portal.heartbeat?.portalVersion || "").trim();
+          const updateBadge = document.createElement("span");
+          const outdated = available !== "" && current !== "" && compareVersions(available, current) > 0;
+          updateBadge.className = `badge ${outdated ? "outdated" : "current"}`;
+          updateBadge.textContent = outdated ? "nieaktualny" : "aktualny";
+          cell.className = "portal-status";
+          cell.append(badge, updateBadge);
         } else {
           cell.textContent = String(value);
         }
@@ -295,6 +304,20 @@
     }
     table.append(body);
     $("portalTable").replaceChildren(table);
+  }
+
+  function compareVersions(left, right) {
+    const parts = (value) => String(value).replace(/^v/i, "").split(/[.-]/).map((part) => /^\d+$/.test(part) ? Number(part) : part);
+    const a = parts(left);
+    const b = parts(right);
+    for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
+      const x = a[index] ?? 0;
+      const y = b[index] ?? 0;
+      if (x === y) continue;
+      if (typeof x === "number" && typeof y === "number") return x > y ? 1 : -1;
+      return String(x).localeCompare(String(y), undefined, { numeric: true });
+    }
+    return 0;
   }
 
   async function createPortal(event) {
@@ -321,6 +344,74 @@
     location.assign(value.url);
   }
 
+  async function portalMaintenance(action) {
+    const id = selectedPortalId();
+    const value = await rawRequest(`/connect/${encodeURIComponent(id)}/api/v1/admin/maintenance/${action}`, { method: "POST", body: {} });
+    const remote = value?.value?.remote || value?.remote || value;
+    if (remote?.error) throw new Error(remote.error);
+    return remote;
+  }
+
+  async function updatePortal() {
+    const checked = await portalMaintenance("check");
+    if (checked?.updateAvailable !== true) {
+      alert("Portal jest aktualny.");
+      await loadPortals();
+      return;
+    }
+    if (!confirm(`Zaktualizować Portal do wersji ${checked.availableVersion || "najnowszej"}?`)) return;
+    await portalMaintenance("update");
+    alert("Aktualizacja Portalu została uruchomiona.");
+  }
+
+  async function restartPortal() {
+    if (!confirm("Zrestartować usługę SIRK Portal?")) return;
+    await portalMaintenance("restart");
+    alert("Restart Portalu został uruchomiony.");
+  }
+
+  async function openPortalPermissions(kind) {
+    const portalId = selectedPortalId();
+    setView("identity-access");
+    await loadIdentity();
+    if (kind === "policy") {
+      const value = await rawRequest(`/api/v1/access-control/portals/${encodeURIComponent(portalId)}/policy`);
+      $("identityAction").value = "portal-policy-save";
+      $("identityPayload").value = pretty({ portalId, policy: value?.policy || value || {} });
+    } else {
+      const value = await rawRequest("/api/v1/access-control/teams");
+      const teams = Array.isArray(value) ? value : (value?.teams || []);
+      const team = teams.find((item) => (item.portalIds || []).includes(portalId));
+      $("identityAction").value = "team-save";
+      $("identityPayload").value = pretty(team || { id: "", name: "", description: "", members: [], portalIds: [portalId], profile: {} });
+    }
+    $("identityPayload").focus();
+  }
+
+  function hidePortalContextMenu() {
+    $("portalContextMenu").hidden = true;
+  }
+
+  function selectPortalFromRow(row) {
+    const portalId = row?.dataset?.portalId;
+    if (!portalId) return false;
+    $("portalSelect").value = portalId;
+    for (const candidate of $("portalTable").querySelectorAll(".portal-row")) candidate.classList.toggle("selected", candidate === row);
+    return true;
+  }
+
+  function showPortalContextMenu(event) {
+    const row = event.target.closest(".portal-row");
+    if (!selectPortalFromRow(row)) return;
+    event.preventDefault();
+    const menu = $("portalContextMenu");
+    menu.hidden = false;
+    const width = menu.offsetWidth;
+    const height = menu.offsetHeight;
+    menu.style.left = `${Math.max(8, Math.min(event.clientX, innerWidth - width - 8))}px`;
+    menu.style.top = `${Math.max(8, Math.min(event.clientY, innerHeight - height - 8))}px`;
+  }
+
   async function rotatePortal() {
     const id = selectedPortalId();
     const value = await rawRequest(`/api/v1/admin/portals/${encodeURIComponent(id)}/rotate-token`, { method: "POST", body: {} });
@@ -342,13 +433,17 @@
   }
 
   async function mutateIdentity() {
-    const value = await rawRequest("/api/v2/identity-access/mutation", {
-      method: "POST",
-      body: {
-        action: $("identityAction").value,
-        payload: parseJson($("identityPayload").value)
-      }
-    });
+    const action = $("identityAction").value;
+    const payload = parseJson($("identityPayload").value);
+    let value;
+    if (action === "team-save") {
+      value = await rawRequest("/api/v1/access-control/teams", { method: "PUT", body: payload });
+    } else if (action === "portal-policy-save") {
+      if (!payload.portalId) throw new Error("Payload polityki wymaga portalId.");
+      value = await rawRequest(`/api/v1/access-control/portals/${encodeURIComponent(payload.portalId)}/policy`, { method: "PUT", body: { policy: payload.policy || {} } });
+    } else {
+      value = await rawRequest("/api/v2/identity-access/mutation", { method: "POST", body: { action, payload } });
+    }
     $("identityMutationOutput").textContent = pretty(value);
     await loadIdentity();
   }
@@ -488,8 +583,20 @@
     $("portalsRefresh").addEventListener("click", guard(loadPortals, "portalCredential"));
     $("portalCreate").addEventListener("submit", guard(createPortal, "portalCredential"));
     $("portalConnect").addEventListener("click", guard(connectPortal, "portalCredential"));
+    $("portalUpdate").addEventListener("click", guard(updatePortal, "portalCredential"));
+    $("portalRestart").addEventListener("click", guard(restartPortal, "portalCredential"));
     $("portalRotate").addEventListener("click", guard(rotatePortal, "portalCredential"));
     $("portalDelete").addEventListener("click", guard(deletePortal, "portalCredential"));
+    $("portalTable").addEventListener("click", (event) => selectPortalFromRow(event.target.closest(".portal-row")));
+    $("portalTable").addEventListener("contextmenu", showPortalContextMenu);
+    $("portalContextMenu").addEventListener("click", (event) => {
+      const action = event.target.closest("[data-portal-action]")?.dataset.portalAction;
+      hidePortalContextMenu();
+      const actions = { update: updatePortal, restart: restartPortal, team: () => openPortalPermissions("team"), policy: () => openPortalPermissions("policy") };
+      if (actions[action]) guard(actions[action], "portalCredential")();
+    });
+    document.addEventListener("click", (event) => { if (!event.target.closest("#portalContextMenu")) hidePortalContextMenu(); });
+    window.addEventListener("blur", hidePortalContextMenu);
     $("identityRefresh").addEventListener("click", guard(loadIdentity, "identityOutput"));
     $("identityMutate").addEventListener("click", guard(mutateIdentity, "identityMutationOutput"));
     $("entraRefresh").addEventListener("click", guard(loadEntra, "entraOutput"));

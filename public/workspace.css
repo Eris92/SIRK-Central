@@ -95,6 +95,24 @@ th { color: var(--muted); font-weight: 600; }
 .badge { display: inline-block; border: 1px solid var(--border); border-radius: 999px; padding: .15rem .45rem; font-size: .78rem; }
 .badge.online { color: var(--success); border-color: #246554; background: #123e37; }
 .badge.offline { color: #ff9dad; border-color: #6e3540; background: #3c2630; }
+.badge.current { color: var(--success); border-color: #246554; background: #123e37; }
+.badge.outdated { color: var(--warning); border-color: #7b6227; background: #493a1e; }
+.portal-status { display: flex; gap: .35rem; flex-wrap: wrap; }
+.portal-row { cursor: context-menu; }
+.portal-row:hover, .portal-row.selected { background: #14294b; }
+.context-menu {
+  position: fixed;
+  z-index: 30;
+  min-width: 15rem;
+  padding: .35rem;
+  border: 1px solid #35517a;
+  border-radius: .7rem;
+  background: #09152a;
+  box-shadow: 0 16px 40px #0009;
+}
+.context-menu button { display: block; width: 100%; border: 0; border-radius: .45rem; background: transparent; text-align: left; }
+.context-menu button:hover { background: #19345f; }
+.context-menu-separator { height: 1px; margin: .3rem; background: #29446f; }
 
 @media (max-width: 860px) {
   .layout { grid-template-columns: 1fr; }

@@ -124,72 +124,6 @@
         }
     }
 
-    async function portalMaintenance(portalId, action, button) {
-        const path = `/connect/${encodeURIComponent(portalId)}/api/v1/admin/maintenance/${action}`;
-        const previous = button.textContent;
-        button.disabled = true;
-        button.textContent = label("Wysyłanie…", "Sending…");
-        try {
-            const result = await readJson(path, {
-                method: "POST",
-                headers: { Accept: "application/json", "Content-Type": "application/json" },
-                body: "{}"
-            });
-            return result;
-        } finally {
-            button.disabled = false;
-            button.textContent = previous;
-        }
-    }
-
-    function mountMaintenanceActions(card, portalId, identity, online) {
-        if (card.querySelector("[data-sirk-portal-maintenance]")) return;
-        const role = String(identity?.role || "");
-        if (!online || !["BreakGlass", "Admin", "SecAdmin"].includes(role)) return;
-
-        const actions = document.createElement("div");
-        actions.dataset.sirkPortalMaintenance = "true";
-        actions.className = "form-actions";
-        const update = document.createElement("button");
-        update.type = "button";
-        update.className = "secondary";
-        update.dataset.sirkPortalAction = "update";
-        update.textContent = label("Aktualizuj Portal", "Update Portal");
-        const restart = document.createElement("button");
-        restart.type = "button";
-        restart.className = "secondary";
-        restart.dataset.sirkPortalAction = "restart";
-        restart.textContent = label("Restartuj Portal", "Restart Portal");
-        actions.append(update, restart);
-        card.append(actions);
-
-        update.addEventListener("click", async event => {
-            event.preventDefault(); event.stopPropagation();
-            try {
-                const checked = await portalMaintenance(portalId, "check", update);
-                const remote = checked?.value?.remote || {};
-                if (remote.error) throw new Error(remote.error);
-                if (remote.updateAvailable !== true) {
-                    window.alert(label("Portal jest aktualny.", "Portal is up to date."));
-                    return;
-                }
-                if (!window.confirm(label(
-                    `Zaktualizować Portal do wersji ${remote.availableVersion || "najnowszej"}?`,
-                    `Update Portal to ${remote.availableVersion || "the latest version"}?`))) return;
-                await portalMaintenance(portalId, "update", update);
-                window.alert(label("Aktualizacja Portalu została uruchomiona.", "Portal update started."));
-            } catch (error) { window.alert(error?.message || label("Aktualizacja nie powiodła się.", "Update failed.")); }
-        });
-        restart.addEventListener("click", async event => {
-            event.preventDefault(); event.stopPropagation();
-            if (!window.confirm(label("Zrestartować usługę SIRK Portal?", "Restart the SIRK Portal service?"))) return;
-            try {
-                await portalMaintenance(portalId, "restart", restart);
-                window.alert(label("Restart Portalu został uruchomiony.", "Portal restart started."));
-            } catch (error) { window.alert(error?.message || label("Restart nie powiódł się.", "Restart failed.")); }
-        });
-    }
-
     async function bindCard(card, identity) {
         if (!(card instanceof HTMLElement)) return;
         const portalId = portalIdFromCard(card);
@@ -207,7 +141,6 @@
         if (!online) {
             setButtonState(button, "deny");
             button.textContent = label("Offline", "Offline");
-            mountMaintenanceActions(card, portalId, identity, false);
             return;
         }
 
@@ -219,7 +152,6 @@
                 ? "approval"
                 : "deny";
         setButtonState(button, state);
-        mountMaintenanceActions(card, portalId, identity, true);
 
         const teams = card.querySelector("small.muted");
         if (teams && Array.isArray(effective?.teams)) {
@@ -252,8 +184,6 @@
             ? event.target.closest(".portal-card button")
             : null;
         if (!(button instanceof HTMLButtonElement)) return;
-
-        if (button.dataset.sirkPortalAction) return;
 
         // Capture the click before the legacy app.js listener can run. Cards are
         // rebuilt every five seconds, so relying only on per-button rebinding

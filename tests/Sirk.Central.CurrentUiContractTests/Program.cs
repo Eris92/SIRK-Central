@@ -3,9 +3,9 @@ var endpointRegistration = File.ReadAllText(Path.Combine(root, "src", "Sirk.Cent
 var portalCompatibilityRegistration = File.ReadAllText(Path.Combine(root, "src", "Sirk.Central", "Portals", "PortalConnectionFileEndpoints.cs"));
 var adapter = File.ReadAllText(Path.Combine(root, "src", "Sirk.Central", "Ui", "CurrentUiEndpoints.cs"));
 var bootstrap = File.ReadAllText(Path.Combine(root, "public", "workspace-bootstrap.js"));
+var workspaceHtml = File.ReadAllText(Path.Combine(root, "public", "workspace.html"));
 var workspace = File.ReadAllText(Path.Combine(root, "public", "workspace.js"));
 var csrf = File.ReadAllText(Path.Combine(root, "public", "csrf-bootstrap.js"));
-var tunnelUi = File.ReadAllText(Path.Combine(root, "public", "portal-tunnel-ui.js"));
 var classic = File.ReadAllText(Path.Combine(root, "public", "app.js"));
 
 Require(portalCompatibilityRegistration.Contains("endpoints.MapCurrentUiApi();", StringComparison.Ordinal),
@@ -43,11 +43,18 @@ Require(workspace.Contains("rawRequest(\"/api/portals\")", StringComparison.Ordi
     "The main workspace must list Portals through the RBAC-filtered current-user endpoint.");
 Require(csrf.Contains("path === \"/api/v1/auth/local/login\"", StringComparison.Ordinal),
     "Managed local login must remain an anonymous write in the CSRF bootstrap.");
-Require(tunnelUi.Contains("/api/v1/admin/maintenance/${action}", StringComparison.Ordinal) &&
-        tunnelUi.Contains("dataset.sirkPortalAction", StringComparison.Ordinal) &&
-        tunnelUi.Contains("portalMaintenance(portalId, \"update\"", StringComparison.Ordinal) &&
-        tunnelUi.Contains("portalMaintenance(portalId, \"restart\"", StringComparison.Ordinal),
-    "Portal cards must expose delegated update and restart actions without hijacking connect.");
+Require(workspace.Contains("/api/v1/admin/maintenance/${action}", StringComparison.Ordinal) &&
+        workspace.Contains("showPortalContextMenu", StringComparison.Ordinal) &&
+        workspace.Contains("openPortalPermissions", StringComparison.Ordinal) &&
+        workspace.Contains("portalMaintenance(\"update\"", StringComparison.Ordinal) &&
+        workspace.Contains("portalMaintenance(\"restart\"", StringComparison.Ordinal),
+    "Workspace Portal rows must expose update, restart and permissions actions.");
+Require(workspaceHtml.Contains("id=\"portalUpdate\"", StringComparison.Ordinal) &&
+        workspaceHtml.Contains("id=\"portalRestart\"", StringComparison.Ordinal) &&
+        workspaceHtml.Contains("id=\"portalContextMenu\"", StringComparison.Ordinal) &&
+        workspace.Contains("nieaktualny", StringComparison.Ordinal) &&
+        workspace.Contains("aktualny", StringComparison.Ordinal),
+    "Workspace Portal view must show maintenance controls, update state and a context menu.");
 Require(classic.Contains("api(\"/api/access-control\")", StringComparison.Ordinal) &&
         classic.Contains("method:\"POST\"", StringComparison.Ordinal),
     "The regression contract must continue to cover the currently deployed classic permissions UI shape.");

@@ -74,11 +74,20 @@
             <div class="actions">
               <button id="portalsRefresh">Odśwież</button>
               <button id="portalConnect">Połącz</button>
+              <button id="portalUpdate">Aktualizuj</button>
+              <button id="portalRestart">Restartuj</button>
               <button id="portalRotate">Rotuj token</button>
               <button id="portalDelete" class="danger">Usuń</button>
             </div>
             <label>Wybrany Portal<select id="portalSelect"></select></label>
             <div id="portalTable" class="table-wrap"></div>
+            <div id="portalContextMenu" class="context-menu" role="menu" hidden>
+              <button type="button" role="menuitem" data-portal-action="update">Aktualizuj</button>
+              <button type="button" role="menuitem" data-portal-action="restart">Restartuj</button>
+              <div class="context-menu-separator"></div>
+              <button type="button" role="menuitem" data-portal-action="team">Uprawnienia: przypisany team</button>
+              <button type="button" role="menuitem" data-portal-action="policy">Uprawnienia: polityka</button>
+            </div>
           </article>
           <article class="card">
             <h2>Dodaj Portal</h2>
