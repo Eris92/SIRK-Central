@@ -11,6 +11,7 @@ PREVIOUS_SOURCE_DIR="${INSTALL_ROOT}/source.previous"
 CENTRAL_LOCAL_URL="${SIRK_CENTRAL_LOCAL_URL:-http://127.0.0.1:8080}"
 HOST_TOKEN_FILE="${SIRK_UPDATE_HOST_TOKEN_FILE:-${SECRETS_DIR}/sirk-update-host-token}"
 LOCK_FILE="${INSTALL_ROOT}/update.lock"
+UPDATE_CHANNEL="${SIRK_UPDATE_CHANNEL:-stable}"
 
 log() { printf '[SIRK UPDATE] %s\n' "$*"; }
 die() { printf '[SIRK UPDATE] ERROR: %s\n' "$*" >&2; exit 1; }
@@ -24,6 +25,7 @@ done
 [[ -d "$UPDATE_CACHE_DIR" ]] || die "Central update cache is missing: $UPDATE_CACHE_DIR"
 [[ -x "$SOURCE_DIR/deploy/upgrade-dotnet10-vps.sh" ]] || chmod 0700 "$SOURCE_DIR/deploy/upgrade-dotnet10-vps.sh"
 [[ -s "$SOURCE_DIR/deploy/upgrade-dotnet10-vps.sh" ]] || die "current deployment helper is missing"
+[[ "$UPDATE_CHANNEL" == "stable" || "$UPDATE_CHANNEL" == "preview" ]] || die "unsupported update channel"
 
 exec 9>"$LOCK_FILE"
 flock -n 9 || die "another Central update is already running"
@@ -67,7 +69,7 @@ show-error
 fail
 max-time = 900
 request = "POST"
-url = "${CENTRAL_LOCAL_URL}/api/internal/v1/update/central/prepare"
+url = "${CENTRAL_LOCAL_URL}/api/internal/v1/update/central/prepare?channel=${UPDATE_CHANNEL}"
 header = "Authorization: Bearer ${HOST_TOKEN}"
 header = "Accept: application/json"
 output = "${RESPONSE_FILE}"
@@ -91,7 +93,7 @@ CONTAINER_PACKAGE="$(jq -r '.packagePath // empty' "$RESPONSE_FILE")"
 [[ "$APPLICATION_ID" == "sirk-central" ]] || die "broker returned a different application"
 [[ "$VERSION" =~ ^0\.1\.1\.[0-9]+$ ]] || die "broker returned a non-canonical pre-1.0 version"
 [[ "$RUNTIME" == "linux-x64" ]] || die "broker returned an unsupported runtime"
-[[ "$CHANNEL" == "stable" ]] || die "broker returned an unsupported channel"
+[[ "$CHANNEL" == "$UPDATE_CHANNEL" ]] || die "broker returned an unexpected channel"
 [[ "$SIZE" =~ ^[0-9]+$ && "$SIZE" -gt 0 && "$SIZE" -le 536870912 ]] || die "broker returned an invalid package size"
 [[ "$SHA256" =~ ^[0-9a-f]{64}$ ]] || die "broker returned an invalid SHA256"
 [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || die "broker returned an invalid commit"
@@ -182,6 +184,7 @@ for required in \
     global.json \
     src/Sirk.Central/Sirk.Central.csproj \
     deploy/upgrade-dotnet10-vps.sh \
+    deploy/web-update-worker.sh \
     deploy/dotnet10/Caddyfile \
     website/index.html \
     update-manifest.json; do

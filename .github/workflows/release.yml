@@ -52,7 +52,7 @@ jobs:
           rm -rf "$payload" "$release"
           mkdir -p "$payload/deploy/dotnet10" "$payload/src" "$release"
           cp Dockerfile.dotnet10 Directory.Build.props global.json "$payload/"
-          cp deploy/upgrade-dotnet10-vps.sh "$payload/deploy/"
+          cp deploy/update.sh deploy/upgrade-dotnet10-vps.sh deploy/web-update-worker.sh "$payload/deploy/"
           cp deploy/dotnet10/Caddyfile "$payload/deploy/dotnet10/"
           cp -a src/Sirk.Central "$payload/src/"
           cp -a website "$payload/"

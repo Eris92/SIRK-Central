@@ -15,6 +15,11 @@ try
     Assert(job.State == "queued" && job.DryRun && job.Version == "0.1.1.10", "update queue");
     Expect<InvalidOperationException>(() => store.Queue(new UpdateRequest("0.1.1.11", "stable", true, "UPDATE SIRK CENTRAL"), "tester"));
     store.Complete(job.Id, true, null);
+    var hostJob = store.QueueHostUpdate("preview", "tester");
+    var hostRequest = Path.Combine(root, "host-update", "request.json");
+    Assert(hostJob.Channel == "preview" && File.Exists(hostRequest), "host update signal");
+    Assert(store.ReadHostUpdateStatus().Running, "host update queued status");
+    File.Delete(hostRequest);
     var reopened = new OperationsStore(options);
     Assert(reopened.Jobs().Single().State == "completed", "operations persistence");
 

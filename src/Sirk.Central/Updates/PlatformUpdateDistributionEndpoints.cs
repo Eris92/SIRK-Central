@@ -198,10 +198,17 @@ internal static class PlatformUpdateDistributionEndpoints
         if (!control.Authenticate(context)) return Results.NotFound();
         try
         {
+            var requestedChannel = context.Request.Query["channel"].ToString();
+            var channel = requestedChannel switch
+            {
+                "stable" => "stable",
+                "preview" => "preview",
+                _ => throw new InvalidDataException("Channel must be stable or preview.")
+            };
             var latest = await cache.GetLatestAsync(
                 "sirk-central",
                 "linux-x64",
-                "stable",
+                channel,
                 cancellationToken)
                 ?? throw new InvalidDataException("No SIRK Central update is available.");
             return Results.Ok(new

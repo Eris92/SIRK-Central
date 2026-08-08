@@ -251,6 +251,37 @@ networks:
 EOF
 chmod 0600 "$COMPOSE_FILE"
 
+echo "=== Konfiguracja bezpiecznego web updatera hosta ==="
+install -m 0700 "$SOURCE_DIR/deploy/web-update-worker.sh" /usr/local/sbin/sirk-central-web-update
+cat >/etc/systemd/system/sirk-central-web-update.service <<EOF
+[Unit]
+Description=SIRK Central verified web update worker
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+Environment=INSTALL_ROOT=${INSTALL_ROOT}
+ExecStart=/usr/local/sbin/sirk-central-web-update
+PrivateTmp=true
+ProtectHome=true
+NoNewPrivileges=true
+EOF
+cat >/etc/systemd/system/sirk-central-web-update.path <<EOF
+[Unit]
+Description=Watch for authenticated SIRK Central web update requests
+
+[Path]
+PathExists=${DATA_DIR}/security/host-update/request.json
+Unit=sirk-central-web-update.service
+
+[Install]
+WantedBy=multi-user.target
+EOF
+chmod 0644 /etc/systemd/system/sirk-central-web-update.service /etc/systemd/system/sirk-central-web-update.path
+systemctl daemon-reload
+systemctl enable --now sirk-central-web-update.path
+
 docker compose -f "$COMPOSE_FILE" config >/dev/null
 
 echo "=== Walidacja Caddy ==="

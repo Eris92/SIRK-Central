@@ -71,6 +71,7 @@ builder.Services.AddSingleton<TicketCommandStore>();
 builder.Services.AddSingleton<OrganizationStore>();
 builder.Services.AddSingleton<PortalAssignmentStore>();
 builder.Services.AddSingleton<OperationsMiddleware>();
+builder.Services.AddSingleton<OperationsStore>();
 builder.Services.AddSingleton<PortalTunnelMiddleware>();
 builder.Services.AddSirkWebAuthn(builder.Configuration);
 
@@ -308,6 +309,7 @@ app.MapGet("/api/v1/system/version", () => Results.Ok(new
 app.MapPortalProtocol();
 AgentUpdateDistributionEndpoints.Map(app);
 PlatformUpdateDistributionEndpoints.Map(app);
+HostUpdateEndpoints.Map(app);
 if (securityOptions.Enabled)
 {
     app.MapSirkAuthentication();

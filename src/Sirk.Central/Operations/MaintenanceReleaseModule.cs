@@ -30,6 +30,16 @@ internal sealed record UpdateJob(
     string RequestedBy,
     string? Error);
 
+internal sealed record HostUpdateStatus(
+    string State,
+    bool Running,
+    string? JobId,
+    string? Channel,
+    string? Commit,
+    DateTimeOffset? StartedAtUtc,
+    DateTimeOffset? FinishedAtUtc,
+    string? Message);
+
 internal sealed record OperationsState(
     int Schema,
     MaintenancePolicy Policy,
@@ -41,12 +51,18 @@ internal sealed class OperationsStore
         new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private readonly object _sync = new();
     private readonly string _path;
+    private readonly string _hostUpdateDirectory;
+    private readonly string _hostUpdateRequestPath;
+    private readonly string _hostUpdateStatusPath;
     private OperationsState _state;
 
     public OperationsStore(IOptions<SecurityOptions> options)
     {
         Directory.CreateDirectory(options.Value.DataRoot);
         _path = Path.Combine(options.Value.DataRoot, "operations.net10.json");
+        _hostUpdateDirectory = Path.Combine(options.Value.DataRoot, "host-update");
+        _hostUpdateRequestPath = Path.Combine(_hostUpdateDirectory, "request.json");
+        _hostUpdateStatusPath = Path.Combine(_hostUpdateDirectory, "status.json");
         _state = Load() ?? new OperationsState(
             1,
             new MaintenancePolicy(
@@ -125,6 +141,47 @@ internal sealed class OperationsStore
         }
     }
 
+    public UpdateJob QueueHostUpdate(string channel, string actor)
+    {
+        lock (_sync)
+        {
+            Directory.CreateDirectory(_hostUpdateDirectory);
+            if (File.Exists(_hostUpdateRequestPath) || ReadHostUpdateStatus().Running)
+                throw new InvalidOperationException("Another host update is already active.");
+            var job = new UpdateJob(
+                "upd-" + Guid.NewGuid().ToString("N"), "queued", "latest",
+                NormalizeChannel(channel), false, DateTimeOffset.UtcNow, actor, null);
+            AtomicWrite(_hostUpdateRequestPath, new
+            {
+                schemaVersion = 1,
+                jobId = job.Id,
+                channel = job.Channel,
+                requestedAtUtc = job.CreatedAtUtc,
+                requestedBy = actor
+            });
+            return job;
+        }
+    }
+
+    public HostUpdateStatus ReadHostUpdateStatus()
+    {
+        if (File.Exists(_hostUpdateStatusPath))
+        {
+            try
+            {
+                using var stream = File.OpenRead(_hostUpdateStatusPath);
+                return JsonSerializer.Deserialize<HostUpdateStatus>(stream, JsonOptions)
+                       ?? IdleStatus();
+            }
+            catch (IOException) { }
+            catch (JsonException) { }
+        }
+        if (File.Exists(_hostUpdateRequestPath))
+            return new HostUpdateStatus("queued", true, null, null, null, null, null,
+                "Update request is waiting for the host worker.");
+        return IdleStatus();
+    }
+
     public UpdateJob Complete(string id, bool success, string? error)
     {
         lock (_sync)
@@ -179,6 +236,26 @@ internal sealed class OperationsStore
         }
     }
 
+    private static HostUpdateStatus IdleStatus() =>
+        new("idle", false, null, null, null, null, null, "No update is running.");
+
+    private static void AtomicWrite<T>(string path, T value)
+    {
+        var temporary = $"{path}.tmp-{Environment.ProcessId}-{Guid.NewGuid():N}";
+        try
+        {
+            using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                JsonSerializer.Serialize(stream, value, JsonOptions);
+                stream.Flush(true);
+            }
+            if (!OperatingSystem.IsWindows())
+                File.SetUnixFileMode(temporary, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            File.Move(temporary, path, false);
+        }
+        finally { File.Delete(temporary); }
+    }
+
     private static string NormalizeChannel(string? value) =>
         (value ?? string.Empty).Trim().ToLowerInvariant() switch
         {
@@ -214,10 +291,10 @@ internal sealed class OperationsMiddleware
     private readonly PlatformUpdateCache _updates;
 
     public OperationsMiddleware(
-        IOptions<SecurityOptions> options,
+        OperationsStore store,
         PlatformUpdateCache updates)
     {
-        _store = new OperationsStore(options);
+        _store = store;
         _updates = updates;
     }
 
@@ -244,6 +321,31 @@ internal sealed class OperationsMiddleware
             {
                 await context.Response.WriteAsJsonAsync(
                     new { policy = _store.Policy(), jobs = _store.Jobs() },
+                    context.RequestAborted);
+                return true;
+            }
+
+            if (HttpMethods.IsGet(context.Request.Method) &&
+                remainder == "/updates/status")
+            {
+                await context.Response.WriteAsJsonAsync(
+                    new { status = _store.ReadHostUpdateStatus() }, context.RequestAborted);
+                return true;
+            }
+
+            if (HttpMethods.IsPost(context.Request.Method) &&
+                remainder == "/updates/run")
+            {
+                await ValidateCsrf(context);
+                var confirmation = context.Request.Headers["X-SIRK-Update-Confirm"].ToString();
+                if (!string.Equals(confirmation, "UPDATE SIRK CENTRAL", StringComparison.Ordinal))
+                    throw new InvalidDataException("Update confirmation phrase is invalid.");
+                var channel = context.Request.Query["channel"].ToString();
+                if (string.IsNullOrWhiteSpace(channel)) channel = _store.Policy().Channel;
+                context.Response.StatusCode = StatusCodes.Status202Accepted;
+                var job = _store.QueueHostUpdate(channel, Actor(context));
+                await context.Response.WriteAsJsonAsync(
+                    new { ok = true, jobId = job.Id, startedAtUtc = job.CreatedAtUtc },
                     context.RequestAborted);
                 return true;
             }
