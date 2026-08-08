@@ -11,6 +11,7 @@ SOURCE_DIR="${SOURCE_DIR:-${INSTALL_ROOT}/source}"
 DATA_DIR="${DATA_DIR:-${INSTALL_ROOT}/data}"
 SECRETS_DIR="${SECRETS_DIR:-${INSTALL_ROOT}/secrets}"
 UPDATE_CACHE_DIR="${UPDATE_CACHE_DIR:-${INSTALL_ROOT}/updates}"
+PUBLIC_CONFIG_DIR="${PUBLIC_CONFIG_DIR:-${INSTALL_ROOT}/public-config}"
 COMPOSE_FILE="${COMPOSE_FILE:-${INSTALL_ROOT}/compose.yml}"
 CADDY_FILE="${CADDY_FILE:-${INSTALL_ROOT}/Caddyfile}"
 CADDY_DATA_DIR="${CADDY_DATA_DIR:-${INSTALL_ROOT}/caddy-data}"
@@ -28,11 +29,15 @@ RELEASE_COMMIT="${SIRK_RELEASE_COMMIT:-}"
 IMAGE_NAME="${IMAGE_NAME:-sirk-central:dotnet10}"
 CENTRAL_CONTAINER="${CENTRAL_CONTAINER:-sirk-central-test}"
 CADDY_CONTAINER="${CADDY_CONTAINER:-sirk-central-caddy}"
+DEMO_CONTAINER="${DEMO_CONTAINER:-sirk-demo-orchestrator}"
 
 CENTRAL_HOST="${CENTRAL_HOST:-central.sirkportal.com}"
 WEBSITE_HOST="${WEBSITE_HOST:-sirkportal.com}"
 BUSINESS_HOST="${BUSINESS_HOST:-sir-k.pl}"
 AUTH_HOST="${AUTH_HOST:-auth.sirkportal.com}"
+DEMO_HOST="${DEMO_HOST:-demo.sirkportal.com}"
+PORTAL_DEMO_IMAGE="${PORTAL_DEMO_IMAGE:-ghcr.io/eris92/sirk-portal:0.1.1.7}"
+GITHUB_CONTAINER_USER="${GITHUB_CONTAINER_USER:-Eris92}"
 ACME_EMAIL="${ACME_EMAIL:-admin@sirkportal.com}"
 
 LOG_FILE="/var/log/sirk-central-upgrade-$(date +%Y%m%d-%H%M%S).log"
@@ -66,7 +71,7 @@ fi
 docker compose version >/dev/null 2>&1 || fail "Brak Docker Compose v2."
 systemctl is-active --quiet docker || fail "Docker nie dziala."
 
-for domain in "$CENTRAL_HOST" "$WEBSITE_HOST" "$BUSINESS_HOST" "$AUTH_HOST"; do
+for domain in "$CENTRAL_HOST" "$WEBSITE_HOST" "$BUSINESS_HOST" "$AUTH_HOST" "$DEMO_HOST"; do
     [[ "$domain" =~ ^[A-Za-z0-9.-]+$ ]] || fail "Nieprawidlowa domena: ${domain}"
 done
 
@@ -77,9 +82,13 @@ done
 [[ -s "$SECRETS_DIR/sirk-release-trusted-keys.json" ]] || fail "Brak publicznego release trust keyring."
 [[ -s "$SECRETS_DIR/sirk-updates-github-token" ]] || fail "Brak Central GitHub update token."
 [[ -s "$SECRETS_DIR/sirk-update-host-token" ]] || fail "Brak lokalnego host update control token."
+if [[ ! -s "$SECRETS_DIR/sirk-demo-control-token" ]]; then
+    openssl rand -hex 32 > "$SECRETS_DIR/sirk-demo-control-token"
+fi
 
-mkdir -p "$INSTALL_ROOT" "$UPDATE_CACHE_DIR" "$CADDY_DATA_DIR" "$CADDY_CONFIG_DIR"
+mkdir -p "$INSTALL_ROOT" "$UPDATE_CACHE_DIR" "$PUBLIC_CONFIG_DIR" "$CADDY_DATA_DIR" "$CADDY_CONFIG_DIR"
 chmod 0700 "$INSTALL_ROOT" "$UPDATE_CACHE_DIR" "$CADDY_DATA_DIR" "$CADDY_CONFIG_DIR"
+chmod 0755 "$PUBLIC_CONFIG_DIR"
 
 update_repository() {
     local directory="$1"
@@ -149,14 +158,23 @@ fi
 docker build "${BUILD_ARGS[@]}" "$SOURCE_DIR"
 
 # Keep the current release online until the replacement image has built.
-docker rm -f "$CENTRAL_CONTAINER" "$CADDY_CONTAINER" 2>/dev/null || true
+docker rm -f "$CENTRAL_CONTAINER" "$CADDY_CONTAINER" "$DEMO_CONTAINER" 2>/dev/null || true
+cat "$SECRETS_DIR/sirk-updates-github-token" | docker login ghcr.io --username "$GITHUB_CONTAINER_USER" --password-stdin >/dev/null
+docker pull "$PORTAL_DEMO_IMAGE"
 
 APP_UID="$(docker run --rm --entrypoint /bin/sh "$IMAGE_NAME" -c 'id -u')"
 APP_GID="$(docker run --rm --entrypoint /bin/sh "$IMAGE_NAME" -c 'id -g')"
 [[ "$APP_UID" =~ ^[0-9]+$ && "$APP_GID" =~ ^[0-9]+$ ]] || fail "Nieprawidlowy UID/GID obrazu."
 chown -R "${APP_UID}:${APP_GID}" "$DATA_DIR" "$UPDATE_CACHE_DIR"
+chown -R "${APP_UID}:${APP_GID}" "$PUBLIC_CONFIG_DIR"
 chown -R "${APP_UID}:${APP_GID}" "$SECRETS_DIR"
 chmod 0700 "$DATA_DIR" "$DATA_DIR/security" "$UPDATE_CACHE_DIR" "$SECRETS_DIR"
+if [[ ! -s "$PUBLIC_CONFIG_DIR/sirk-config.json" ]]; then
+    jq -n --arg url "https://${DEMO_HOST}/start" \
+      '{schemaVersion:1,revision:0,generatedAtUtc:(now|todateiso8601),demo:{enabled:true,available:true,ctaUrl:$url},features:{agent:true,portal:true,central:true,contact:true,registration:false},maintenance:{enabled:false,status:"operational",message:null}}' \
+      > "$PUBLIC_CONFIG_DIR/sirk-config.json"
+fi
+chmod 0644 "$PUBLIC_CONFIG_DIR/sirk-config.json"
 
 cat >"$COMPOSE_FILE" <<EOF
 services:
@@ -174,6 +192,11 @@ services:
       AllowedHosts: "${CENTRAL_HOST};localhost;127.0.0.1"
       Sirk__ReverseProxy__TrustAll: "true"
       Sirk__PortalProtocol__DataRoot: /var/lib/sirk-central
+      Sirk__PublicSite__SnapshotPath: /var/lib/sirk-public/sirk-config.json
+      Sirk__PublicSite__PublicDomain: "${WEBSITE_HOST}"
+      Sirk__Demo__OrchestratorUrl: http://demo-orchestrator:8090
+      Sirk__Demo__ControlTokenFile: /run/secrets/sirk-demo-control-token
+      Sirk__Demo__PublicBaseUrl: "https://${DEMO_HOST}"
       Sirk__Security__Enabled: "true"
       Sirk__Security__DataRoot: /var/lib/sirk-central/security
       Sirk__Security__BootstrapSecretFile: /var/lib/sirk-central/security/break-glass-bootstrap.json
@@ -195,6 +218,7 @@ services:
     volumes:
       - ${DATA_DIR}:/var/lib/sirk-central
       - ${UPDATE_CACHE_DIR}:/var/lib/sirk/updates
+      - ${PUBLIC_CONFIG_DIR}:/var/lib/sirk-public
       - ${SECRETS_DIR}:/run/secrets:ro
     read_only: true
     tmpfs:
@@ -210,6 +234,41 @@ services:
     networks:
       - sirk-edge
 
+  demo-orchestrator:
+    image: ${IMAGE_NAME}
+    container_name: ${DEMO_CONTAINER}
+    command: ["--demo-orchestrator"]
+    restart: unless-stopped
+    user: "0:0"
+    expose:
+      - "8090"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      Sirk__Demo__ControlTokenFile: /run/secrets/sirk-demo-control-token
+      Sirk__Demo__PortalImage: "ghcr.io/eris92/sirk-portal"
+      Sirk__Demo__Network: sirk-demo
+      Sirk__Demo__PublicBaseUrl: "https://${DEMO_HOST}"
+      Sirk__Demo__DockerSocket: /var/run/docker.sock
+      Sirk__Demo__Enabled: "true"
+      Sirk__Demo__Version: "0.1.1.7"
+      Sirk__Demo__MaxSessions: "4"
+      Sirk__Demo__IdleTtlMinutes: "20"
+      Sirk__Demo__AbsoluteTtlMinutes: "60"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${SECRETS_DIR}:/run/secrets:ro
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    networks:
+      - sirk-edge
+      - sirk-demo
+
   caddy:
     image: caddy:2.10.0-alpine
     container_name: ${CADDY_CONTAINER}
@@ -217,6 +276,8 @@ services:
     depends_on:
       central:
         condition: service_healthy
+      demo-orchestrator:
+        condition: service_started
     ports:
       - "80:80"
       - "443:443"
@@ -227,9 +288,11 @@ services:
       SIRK_BUSINESS_DOMAIN: "${BUSINESS_HOST}"
       SIRK_CENTRAL_DOMAIN: "${CENTRAL_HOST}"
       SIRK_AUTH_DOMAIN: "${AUTH_HOST}"
+      SIRK_DEMO_DOMAIN: "${DEMO_HOST}"
     volumes:
       - ${CADDY_FILE}:/etc/caddy/Caddyfile:ro
       - ${SOURCE_DIR}/website:/srv/website:ro
+      - ${PUBLIC_CONFIG_DIR}:/srv/public-config:ro
       - ${BUSINESS_DIR}:/srv/sir-k:ro
       - ${CADDY_DATA_DIR}:/data
       - ${CADDY_CONFIG_DIR}:/config
@@ -248,6 +311,10 @@ services:
 networks:
   sirk-edge:
     driver: bridge
+  sirk-demo:
+    name: sirk-demo
+    driver: bridge
+    internal: true
 EOF
 chmod 0600 "$COMPOSE_FILE"
 
@@ -294,6 +361,7 @@ docker run --rm \
     -e "SIRK_BUSINESS_DOMAIN=${BUSINESS_HOST}" \
     -e "SIRK_CENTRAL_DOMAIN=${CENTRAL_HOST}" \
     -e "SIRK_AUTH_DOMAIN=${AUTH_HOST}" \
+    -e "SIRK_DEMO_DOMAIN=${DEMO_HOST}" \
     -v "$CADDY_FILE:/etc/caddy/Caddyfile:ro" \
     caddy:2.10.0-alpine \
     caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile

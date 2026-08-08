@@ -95,7 +95,7 @@ internal static class DemoOrchestratorHost
         private readonly string _imageRepository;
         private readonly string _network;
         private readonly string _publicBase;
-        private DemoRuntimeConfig _config = new(false, "0.1.1.1", 4, 20, 60, false);
+        private DemoRuntimeConfig _config;
 
         public Runtime(IConfiguration configuration, ILogger logger)
         {
@@ -104,6 +104,13 @@ internal static class DemoOrchestratorHost
             _imageRepository = configuration["Sirk:Demo:PortalImage"] ?? "ghcr.io/eris92/sirk-portal";
             _network = configuration["Sirk:Demo:Network"] ?? "sirk-demo";
             _publicBase = (configuration["Sirk:Demo:PublicBaseUrl"] ?? "https://demo.sirkportal.com").TrimEnd('/');
+            _config = new DemoRuntimeConfig(
+                configuration.GetValue("Sirk:Demo:Enabled", false),
+                configuration["Sirk:Demo:Version"] ?? "0.1.1.1",
+                configuration.GetValue("Sirk:Demo:MaxSessions", 4),
+                configuration.GetValue("Sirk:Demo:IdleTtlMinutes", 20),
+                configuration.GetValue("Sirk:Demo:AbsoluteTtlMinutes", 60),
+                configuration.GetValue("Sirk:Demo:Maintenance", false));
             var socketPath = configuration["Sirk:Demo:DockerSocket"] ?? "/var/run/docker.sock";
             var handler = new SocketsHttpHandler
             {

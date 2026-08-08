@@ -9,9 +9,18 @@ www.{$SIRK_WEBSITE_DOMAIN} {
 
 {$SIRK_WEBSITE_DOMAIN} {
     encode zstd gzip
+
+    handle /.well-known/sirk-config.json {
+        root * /srv/public-config
+        rewrite * /sirk-config.json
+        file_server
+    }
+
+    handle {
     root * /srv/website
     try_files {path} {path}/index.html /index.html
     file_server
+    }
 
     header {
         Strict-Transport-Security "max-age=31536000; includeSubDomains"
@@ -28,6 +37,27 @@ www.{$SIRK_WEBSITE_DOMAIN} {
     log {
         output stdout
         format json
+    }
+}
+
+{$SIRK_DEMO_DOMAIN} {
+    encode zstd gzip
+    reverse_proxy demo-orchestrator:8090 {
+        transport http {
+            dial_timeout 5s
+            response_header_timeout 90s
+        }
+    }
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "no-referrer"
+        Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+        Cache-Control "no-store"
+        X-Robots-Tag "noindex, nofollow"
+        -Server
     }
 }
 

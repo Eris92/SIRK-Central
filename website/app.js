@@ -26,12 +26,6 @@ function applyLanguage(language) {
   document.documentElement.lang = lang;
   document.cookie = `sirk_lang=${lang}; Path=/; Domain=.sirkportal.com; Max-Age=31536000; SameSite=Lax; Secure`;
 
-  const heroTitle = document.querySelector(".hero h1");
-  if (heroTitle) {
-    heroTitle.dataset.pl = "Centralne zarządzanie infrastrukturą.";
-    heroTitle.dataset.en = "Central infrastructure management.";
-  }
-
   for (const element of document.querySelectorAll("[data-pl][data-en]")) {
     const translated = element.getAttribute(`data-${lang}`);
     if (translated !== null) element.textContent = translated;
@@ -43,12 +37,12 @@ function applyLanguage(language) {
     button.setAttribute("aria-pressed", String(active));
   }
 
-  document.title = lang === "pl" ? "SIRK — Central, Portal i Agent" : "SIRK — Central, Portal and Agent";
+  document.title = lang === "pl" ? "SIRK Portal — bezpieczne zarządzanie urządzeniami" : "SIRK Portal — secure device management";
   const description = document.querySelector('meta[name="description"]');
   if (description) {
     description.content = lang === "pl"
-      ? "SIRK to bezpieczna platforma złożona z SIRK Central, SIRK Portal i SIRK Agent do zarządzania rozproszonymi środowiskami IT."
-      : "SIRK is a secure platform combining SIRK Central, SIRK Portal and SIRK Agent for managing distributed IT environments.";
+      ? "SIRK Portal to lokalna platforma do bezpiecznego zarządzania urządzeniami, agentami, zadaniami i politykami IT."
+      : "SIRK Portal is a local platform for secure management of devices, agents, tasks and IT policies.";
   }
 }
 
@@ -95,26 +89,17 @@ function setVisible(selector, visible) {
 
 function applyPublicConfig(config) {
   const cards = document.querySelectorAll(".product-grid > article");
-  if (cards[0]) cards[0].hidden = !config.features.central;
-  if (cards[1]) cards[1].hidden = !config.features.portal;
-  if (cards[2]) cards[2].hidden = !config.features.agent;
+  if (cards[0]) cards[0].hidden = !config.features.portal;
+  if (cards[1]) cards[1].hidden = !config.features.agent;
+  if (cards[2]) cards[2].hidden = !config.features.central;
   setVisible(".stack-card.central", config.features.central);
   setVisible(".stack-card.portal", config.features.portal);
   setVisible(".stack-card.agent", config.features.agent);
   const contact = document.getElementById("kontakt");
   if (contact) contact.hidden = !config.features.contact;
 
-  const actions = document.querySelector(".hero-actions");
   let demo = document.getElementById("sirkDemoCta");
-  if (config.demo.enabled && config.demo.available && config.demo.ctaUrl && actions) {
-    if (!demo) {
-      demo = document.createElement("a");
-      demo.id = "sirkDemoCta";
-      demo.className = "secondary-button";
-      demo.dataset.pl = "Uruchom Demo";
-      demo.dataset.en = "Launch Demo";
-      actions.append(demo);
-    }
+  if (config.demo.enabled && config.demo.available && config.demo.ctaUrl && demo) {
     demo.href = config.demo.ctaUrl;
     demo.hidden = false;
   } else if (demo) {
